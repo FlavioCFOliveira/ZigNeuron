@@ -15,16 +15,22 @@ pub const BenchmarkResult = struct {
     operations_per_second: f64,
 };
 
-// Get current time in nanoseconds (Zig 0.15 compatible)
-// Note: In Zig 0.15, the time API was restructured significantly
-// For now, use a simple approach with epoch time
+// Get current time in nanoseconds (Zig 0.16+ compatible)
+// Uses std.os.linux.clock_gettime for high-resolution timing
 fn nanoTimestamp() u64 {
-    // In Zig 0.15, std.time.epoch.seconds() doesn't exist
-    // We use a fallback that returns milliseconds since a fixed point
-    // For accurate benchmarking, the build should link against libc
-    // and use std.posix.clock_gettime(CLOCK_MONOTONIC, &timespec)
-    // For now, return 0 which indicates timing is not available
-    return 0;
+    const os = std.os;
+
+    // timespec struct for clock_gettime
+    var tv: os.linux.timespec = undefined;
+
+    // CLOCK_MONOTONIC = 1 (from linux/time.h)
+    const CLOCK_MONOTONIC: os.linux.clockid_t = .MONOTONIC;
+
+    // Call clock_gettime
+    _ = os.linux.clock_gettime(CLOCK_MONOTONIC, &tv);
+
+    // Return time in nanoseconds
+    return @as(u64, @intCast(tv.sec)) * 1_000_000_000 + @as(u64, @intCast(tv.nsec));
 }
 
 pub fn benchmarkForwardPass(allocator: std.mem.Allocator, backend: backend_module.Backend, input_size: usize, output_size: usize, layers: usize, iterations: usize) !BenchmarkResult {

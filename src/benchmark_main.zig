@@ -19,7 +19,7 @@ pub fn main() !void {
     };
     defer results.deinit(allocator);
 
-    // Benchmark 1: Matrix multiplication (128x128)
+    // Benchmark 1: Matrix multiplication (128x128) - CPU
     std.debug.print("Benchmark 1: Matrix Multiplication (128x128)\n", .{});
     {
         const cpu_result = try benchmark.benchmarkMatrixMul(allocator, cpu_backend, 128, 128, 128, 100);
@@ -28,7 +28,7 @@ pub fn main() !void {
     }
     std.debug.print("\n", .{});
 
-    // Benchmark 2: Matrix multiplication (256x256)
+    // Benchmark 2: Matrix multiplication (256x256) - CPU
     std.debug.print("Benchmark 2: Matrix Multiplication (256x256)\n", .{});
     {
         const cpu_result = try benchmark.benchmarkMatrixMul(allocator, cpu_backend, 256, 256, 256, 100);
@@ -37,7 +37,7 @@ pub fn main() !void {
     }
     std.debug.print("\n", .{});
 
-    // Benchmark 3: Forward pass (small network)
+    // Benchmark 3: Forward pass (small network) - CPU
     std.debug.print("Benchmark 3: Forward Pass (Small Network)\n", .{});
     {
         const cpu_result = try benchmark.benchmarkForwardPass(allocator, cpu_backend, 8, 1, 3, 1000);
@@ -46,7 +46,7 @@ pub fn main() !void {
     }
     std.debug.print("\n", .{});
 
-    // Benchmark 4: Forward pass (larger network)
+    // Benchmark 4: Forward pass (larger network) - CPU
     std.debug.print("Benchmark 4: Forward Pass (Larger Network)\n", .{});
     {
         const cpu_result = try benchmark.benchmarkForwardPass(allocator, cpu_backend, 16, 1, 4, 500);
@@ -55,7 +55,7 @@ pub fn main() !void {
     }
     std.debug.print("\n", .{});
 
-    // Benchmark 5: Training step
+    // Benchmark 5: Training step - CPU
     std.debug.print("Benchmark 5: Training Step (small)\n", .{});
     {
         const cpu_result = try benchmark.benchmarkTraining(allocator, cpu_backend, 4, 1, 3, 10, 50);
@@ -64,7 +64,7 @@ pub fn main() !void {
     }
     std.debug.print("\n", .{});
 
-    // Benchmark 6: Activation functions
+    // Benchmark 6: Activation functions - CPU
     std.debug.print("Benchmark 6: Activation Forward (1024 elements)\n", .{});
     {
         const cpu_result = try benchmark.benchmarkActivationForward(allocator, cpu_backend, .relu, 1024, 1000);
@@ -73,7 +73,7 @@ pub fn main() !void {
     }
     std.debug.print("\n", .{});
 
-    // Benchmark 7: Activation functions - larger size
+    // Benchmark 7: Activation functions - larger size - CPU
     std.debug.print("Benchmark 7: Activation Forward (4096 elements)\n", .{});
     {
         const cpu_result = try benchmark.benchmarkActivationForward(allocator, cpu_backend, .tanh, 4096, 500);

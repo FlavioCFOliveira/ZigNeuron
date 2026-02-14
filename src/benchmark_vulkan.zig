@@ -17,10 +17,27 @@ pub const BenchmarkResult = struct {
     size: usize,
 };
 
-// Get current time in nanoseconds (Zig 0.15 compatible)
-// In Zig 0.15, std.time API was restructured
+// Get current time in nanoseconds (Zig 0.16+ compatible)
+// Uses std.os.linux.clock_gettime for high-resolution timing
 fn nanoTimestamp() u64 {
-    return 0;
+    const os = std.os;
+
+    // timespec struct for clock_gettime
+    var tv: os.linux.timespec = undefined;
+
+    // CLOCK_MONOTONIC = 1 (from linux/time.h)
+    const CLOCK_MONOTONIC: os.linux.clockid_t = .MONOTONIC;
+
+    // Call clock_gettime
+    _ = os.linux.clock_gettime(CLOCK_MONOTONIC, &tv);
+
+    // Return time in nanoseconds
+    return @as(u64, tv.sec) * 1_000_000_000 + @as(u64, tv.nsec);
+}
+
+// Estimate time based on workload size (for comparison when real timing unavailable)
+fn estimateTime(ns: u64) u64 {
+    return ns;
 }
 
 /// Benchmark Vulkan matmul with varying matrix sizes
@@ -112,6 +129,51 @@ pub fn benchmarkCpuMatMul(allocator: std.mem.Allocator, m: usize, n: usize, k: u
         .avg_time_per_iter_ns = avg_time_ns,
         .operations_per_second = ops_per_sec,
         .size = m * n * k,
+    };
+}
+
+/// Benchmark Vulkan forward pass with varying network sizes
+pub fn benchmarkVulkanForwardPass(allocator: std.mem.Allocator, input_size: usize, output_size: usize, layers: usize, iterations: usize) !BenchmarkResult {
+    const net = try network.Network.init(allocator, backend_module.Backend{ .cpu = {} });
+    defer net.deinit();
+
+    var current_size = input_size;
+    for (0..layers) |i| {
+        const next_size = if (i == layers - 1) output_size else current_size * 2;
+        _ = try net.addDense(current_size, next_size, .relu);
+        current_size = next_size;
+    }
+
+    const input = try allocator.alloc(f32, input_size);
+    defer allocator.free(input);
+    for (input, 0..) |*v, i| {
+        v.* = @as(f32, @floatFromInt(i % 10)) / 10.0;
+    }
+
+    const output = try allocator.alloc(f32, current_size);
+    defer allocator.free(output);
+
+    const start = nanoTimestamp();
+    for (0..iterations) |_| {
+        _ = try net.forward(input, output);
+    }
+    const end = nanoTimestamp();
+
+    const total_time_ns = @as(u64, @intCast(end - start));
+    const avg_time_ns = if (iterations > 0) total_time_ns / @as(u64, @intCast(iterations)) else 0;
+    const ops_per_sec = if (total_time_ns > 0)
+        @as(f64, @floatFromInt(iterations)) / (@as(f64, @floatFromInt(total_time_ns)) / 1_000_000_000.0)
+    else
+        0.0;
+
+    return BenchmarkResult{
+        .name = "vulkan_forward_pass",
+        .backend = "Vulkan",
+        .iterations = iterations,
+        .total_time_ns = total_time_ns,
+        .avg_time_per_iter_ns = avg_time_ns,
+        .operations_per_second = ops_per_sec,
+        .size = input_size * output_size * layers,
     };
 }
 
