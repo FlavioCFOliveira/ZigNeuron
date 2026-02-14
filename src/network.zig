@@ -30,7 +30,7 @@ pub const Network = struct {
     pub fn deinit(self: *Network) void {
         const allocator = self.allocator;
         for (self.layers.items) |l| {
-            l.deinit(allocator);
+            l.deinit();
         }
         self.layers.deinit(self.allocator);
         for (self.caches.items) |cache| {
@@ -48,6 +48,20 @@ pub const Network = struct {
         try self.layers.append(self.allocator, l);
         try self.caches.append(self.allocator, null);  // No cache initially
         return l;
+    }
+
+    /// Initialize optimizer for all layers in the network
+    pub fn initOptimizer(self: *Network, opt: *optimizer.Optimizer) !void {
+        for (self.layers.items) |l| {
+            try opt.init(self.allocator, l);
+        }
+    }
+
+    /// Deinitialize optimizer for all layers in the network
+    pub fn deinitOptimizer(self: *Network, opt: *optimizer.Optimizer) void {
+        for (self.layers.items) |l| {
+            opt.deinit(self.allocator, l);
+        }
     }
 
     /// Forward pass with caching for backpropagation
@@ -102,8 +116,16 @@ pub const Network = struct {
         const last_cache = self.caches.items[self.layers.items.len - 1] orelse return error.NoCache;
         const output = last_cache.pre_activation[0..output_size];
 
-        // Compute gradient of loss w.r.t. output
-        var grad: [16]f32 = undefined;
+        // Find max layer size for gradient buffer
+        var max_size = output_size;
+        for (self.layers.items) |l| {
+            if (l.output_size > max_size) max_size = l.output_size;
+            if (l.input_size > max_size) max_size = l.input_size;
+        }
+
+        // Compute gradient of loss w.r.t. output (use max size to handle all layers)
+        var grad = try self.allocator.alloc(f32, max_size);
+        defer self.allocator.free(grad);
         try loss_fn.backward(output, target, grad[0..output_size]);
 
         // Backpropagate through layers in reverse order
@@ -114,9 +136,10 @@ pub const Network = struct {
             const cache = self.caches.items[i] orelse return error.NoCache;
 
             // Compute gradient after activation (dL/dz = dL/da * da/dz)
-            var grad_after_act: [16]f32 = undefined;
-            const layer_output_size = l.output_size;
-            for (0..layer_output_size) |idx| {
+            const grad_after_act = try self.allocator.alloc(f32, l.output_size);
+            defer self.allocator.free(grad_after_act);
+
+            for (0..l.output_size) |idx| {
                 grad_after_act[idx] = l.act.backward(cache.pre_activation[idx], grad[idx]);
             }
 
@@ -136,23 +159,73 @@ pub const Network = struct {
             // Compute gradient for previous layer
             if (i > 0) {
                 const prev_out_size = l.input_size;
-                var prev_grad: [16]f32 = undefined;
-                for (0..prev_out_size) |j| {
-                    var sum: f32 = 0;
-                    for (0..l.output_size) |k| {
-                        const weight_idx = k * l.input_size + j;
-                        sum += grad_after_act[k] * l.weights[weight_idx];
+
+                // Reuse grad buffer if large enough, otherwise allocate new
+                if (prev_out_size <= grad.len) {
+                    @memset(grad[0..prev_out_size], 0);
+                    for (0..prev_out_size) |j| {
+                        var sum: f32 = 0;
+                        for (0..l.output_size) |k| {
+                            const weight_idx = k * l.input_size + j;
+                            sum += grad_after_act[k] * l.weights[weight_idx];
+                        }
+                        grad[j] = sum;
                     }
-                    prev_grad[j] = sum;
+                } else {
+                    const prev_grad = try self.allocator.alloc(f32, prev_out_size);
+                    defer self.allocator.free(prev_grad);
+
+                    for (0..prev_out_size) |j| {
+                        var sum: f32 = 0;
+                        for (0..l.output_size) |k| {
+                            const weight_idx = k * l.input_size + j;
+                            sum += grad_after_act[k] * l.weights[weight_idx];
+                        }
+                        prev_grad[j] = sum;
+                    }
+                    @memcpy(grad[0..prev_out_size], prev_grad);
                 }
-                @memcpy(grad[0..prev_out_size], prev_grad[0..prev_out_size]);
             }
         }
     }
 
-    /// Train the network on a single sample using backpropagation
+    /// Train the network on a single sample using backpropagation with SGD
     /// Returns the loss value
     pub fn trainStep(self: *Network, input: []const f32, target: []const f32, learning_rate: f32, loss_fn: loss.Loss) !f32 {
+        // Clear previous gradients
+        self.clearGradients();
+
+        // Forward pass stores output in the last layer's cache
+        const output_size = self.layers.items[self.layers.items.len - 1].output_size;
+        if (target.len != output_size) return error.OutputSizeMismatch;
+
+        const output = try self.allocator.alloc(f32, output_size);
+        defer self.allocator.free(output);
+
+        _ = try self.forward(input, output);
+
+        // Compute loss
+        const sample_loss = try loss_fn.forward(output, target);
+
+        // Compute gradients
+        try self.computeGradients(target, loss_fn);
+
+        // Update weights using simple gradient descent (SGD)
+        for (self.layers.items) |l| {
+            for (l.weights, l.grad_weights, 0..) |_, grad, i| {
+                l.weights[i] -= learning_rate * grad;
+            }
+            for (l.bias, l.grad_bias, 0..) |_, grad, i| {
+                l.bias[i] -= learning_rate * grad;
+            }
+        }
+
+        return sample_loss;
+    }
+
+    /// Train the network on a single sample using backpropagation with optimizer
+    /// Returns the loss value
+    pub fn trainStepWithOptimizer(self: *Network, input: []const f32, target: []const f32, learning_rate: f32, loss_fn: loss.Loss, opt: *optimizer.Optimizer) !f32 {
         // Forward pass
         const output_size = self.layers.items[self.layers.items.len - 1].output_size;
         if (target.len != output_size) return error.OutputSizeMismatch;
@@ -161,23 +234,20 @@ pub const Network = struct {
         self.clearGradients();
 
         // Forward pass stores output in the last layer's cache
-        var output: [16]f32 = undefined;
-        _ = try self.forward(input, &output);
+        const output = try self.allocator.alloc(f32, output_size);
+        defer self.allocator.free(output);
+
+        _ = try self.forward(input, output);
 
         // Compute loss
-        const sample_loss = try loss_fn.forward(output[0..output_size], target);
+        const sample_loss = try loss_fn.forward(output, target);
 
         // Compute gradients
         try self.computeGradients(target, loss_fn);
 
-        // Update weights using simple gradient descent
+        // Update weights using optimizer
         for (self.layers.items) |l| {
-            for (l.weights, l.grad_weights, 0..) |_, grad, i| {
-                l.weights[i] -= learning_rate * grad;
-            }
-            for (l.bias, l.grad_bias, 0..) |_, grad, i| {
-                l.bias[i] -= learning_rate * grad;
-            }
+            opt.step(l, learning_rate);
         }
 
         return sample_loss;

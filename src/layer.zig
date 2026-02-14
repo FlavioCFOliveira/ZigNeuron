@@ -10,6 +10,7 @@ pub const Dense = struct {
     input_size: usize,
     output_size: usize,
     act: activation.Activation,
+    allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator, input_size: usize, output_size: usize, act: activation.Activation) !*Dense {
         const self = allocator.create(Dense) catch return error.OutOfMemory;
@@ -37,15 +38,17 @@ pub const Dense = struct {
         self.input_size = input_size;
         self.output_size = output_size;
         self.act = act;
+        self.allocator = allocator;
 
         return self;
     }
 
-    pub fn deinit(self: *Dense, allocator: std.mem.Allocator) void {
-        allocator.free(self.weights);
-        allocator.free(self.bias);
-        allocator.free(self.grad_weights);
-        allocator.free(self.grad_bias);
+    pub fn deinit(self: *Dense) void {
+        self.allocator.free(self.weights);
+        self.allocator.free(self.bias);
+        self.allocator.free(self.grad_weights);
+        self.allocator.free(self.grad_bias);
+        self.allocator.destroy(self);
     }
 
     pub fn forward(self: *Dense, input: []const f32, output: []f32) !void {
@@ -63,12 +66,19 @@ pub const Dense = struct {
     }
 
     pub fn backward(self: *Dense, input: []const f32, grad_output: []const f32, grad_input: []f32) !void {
-        _ = input;
         // Compute gradient w.r.t input
+        // grad_input = grad_output * weights (with activation derivative)
         for (0..self.input_size) |j| {
             var sum: f32 = 0;
             for (0..self.output_size) |i| {
-                sum += self.weights[i * self.input_size + j] * grad_output[i];
+                // Apply activation derivative to grad_output
+                // Need to recompute pre-activation for backward pass
+                var pre_act: f32 = self.bias[i];
+                for (0..self.input_size) |k| {
+                    pre_act += input[k] * self.weights[i * self.input_size + k];
+                }
+                const act_grad = self.act.backward(pre_act, grad_output[i]);
+                sum += self.weights[i * self.input_size + j] * act_grad;
             }
             grad_input[j] = sum;
         }

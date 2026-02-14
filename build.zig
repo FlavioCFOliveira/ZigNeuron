@@ -18,6 +18,23 @@ pub fn build(b: *std.Build) void {
 
     b.installArtifact(lib);
 
+    // Create test module with test file
+    const test_module = std.Build.Module.create(b, .{
+        .root_source_file = b.path("src/test_all.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    test_module.addImport("ZigNeuron", lib_module);
+
+    // Test executable
+    const test_exe = b.addTest(.{
+        .root_module = test_module,
+    });
+
+    const run_test_exe = b.addRunArtifact(test_exe);
+    const test_step = b.step("test", "Run unit tests");
+    test_step.dependOn(&run_test_exe.step);
+
     // Examples executable
     const enable_examples = b.option(bool, "examples", "Build examples") orelse false;
 
@@ -57,12 +74,4 @@ pub fn build(b: *std.Build) void {
         const run_step = b.step("run-examples", "Run examples");
         run_step.dependOn(&run_cmd.step);
     }
-
-    const unit_tests = b.addTest(.{
-        .root_module = lib_module,
-    });
-
-    const run_unit_tests = b.addRunArtifact(unit_tests);
-    const test_step = b.step("test", "Run unit tests");
-    test_step.dependOn(&run_unit_tests.step);
 }
