@@ -177,3 +177,97 @@ test "network basic" {
     // Verify layers were added
     if (net.layers.items.len != 2) @panic("Expected 2 layers");
 }
+
+// Memory Usage Tests
+test "memory: Dense layer" {
+    const allocator = testing.allocator;
+
+    const lyr = try layer.Dense.init(allocator, 4, 8, .relu);
+    defer lyr.deinit();
+
+    const input = allocator.alloc(f32, 4) catch unreachable;
+    defer allocator.free(input);
+    const output = allocator.alloc(f32, 8) catch unreachable;
+    defer allocator.free(output);
+
+    try lyr.forward(input, output);
+}
+
+test "memory: Network forward pass" {
+    const allocator = testing.allocator;
+
+    const net = try network.Network.init(allocator);
+    defer net.deinit();
+
+    _ = try net.addDense(4, 8, .relu);
+    _ = try net.addDense(8, 1, .relu);
+
+    const input: []const f32 = &.{ 0.1, 0.2, 0.3, 0.4 };
+    var output: [1]f32 = undefined;
+
+    _ = try net.forward(input, &output);
+}
+
+test "memory: Training step" {
+    const allocator = testing.allocator;
+
+    const net = try network.Network.init(allocator);
+    defer net.deinit();
+
+    _ = try net.addDense(4, 8, .relu);
+    _ = try net.addDense(8, 1, .relu);
+
+    const input: []const f32 = &.{ 0.1, 0.2, 0.3, 0.4 };
+    const target: []const f32 = &.{ 0.5 };
+    const loss_fn = loss.Loss{ .mse = {} };
+
+    const loss_value = try net.trainStep(input, target, 0.01, loss_fn);
+    // Just verify training runs and produces a valid loss (non-negative)
+    try std.testing.expect(loss_value >= 0 and loss_value < 100);
+}
+
+test "memory: Optimizer training" {
+    const allocator = testing.allocator;
+
+    const net = try network.Network.init(allocator);
+    defer net.deinit();
+
+    _ = try net.addDense(4, 8, .relu);
+    _ = try net.addDense(8, 1, .relu);
+
+    var opt = optimizer.Optimizer{ .sgd = optimizer.Sgd{} };
+    try net.initOptimizer(&opt);
+    defer net.deinitOptimizer(&opt);
+
+    const input: []const f32 = &.{ 0.1, 0.2, 0.3, 0.4 };
+    const target: []const f32 = &.{ 0.5 };
+    const loss_fn = loss.Loss{ .mse = {} };
+
+    const loss_value = try net.trainStepWithOptimizer(input, target, 0.01, loss_fn, &opt);
+    // Just verify training runs and produces a valid loss (non-negative)
+    try std.testing.expect(loss_value >= 0 and loss_value < 100);
+}
+
+test "memory: Softmax no extra allocations" {
+    const allocator = testing.allocator;
+
+    const size: usize = 1024;
+    const input = try allocator.alloc(f32, size);
+    defer allocator.free(input);
+    const output = try allocator.alloc(f32, size);
+    defer allocator.free(output);
+
+    for (input, 0..) |*v, i| {
+        v.* = @as(f32, @floatFromInt(i % 100)) / 10.0;
+    }
+
+    const act = activation.Activation{ .softmax = {} };
+    try act.softmaxForward(input, output);
+
+    // Verify output is valid softmax (sums to ~1)
+    var sum: f32 = 0;
+    for (output) |v| {
+        sum += v;
+    }
+    try expectNear(sum, 1.0, 0.01);
+}

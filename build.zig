@@ -74,4 +74,27 @@ pub fn build(b: *std.Build) void {
         const run_step = b.step("run-examples", "Run examples");
         run_step.dependOn(&run_cmd.step);
     }
+
+    // Benchmark executable
+    const enable_benchmarks = b.option(bool, "benchmarks", "Build benchmarks") orelse false;
+
+    if (enable_benchmarks) {
+        const benchmark_module = std.Build.Module.create(b, .{
+            .root_source_file = b.path("src/benchmark_main.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        benchmark_module.addImport("ZigNeuron", lib_module);
+
+        const benchmark_exe = b.addExecutable(.{
+            .name = "benchmarks",
+            .root_module = benchmark_module,
+        });
+
+        b.installArtifact(benchmark_exe);
+
+        const run_benchmarks = b.addRunArtifact(benchmark_exe);
+        const benchmark_step = b.step("benchmarks", "Run benchmarks");
+        benchmark_step.dependOn(&run_benchmarks.step);
+    }
 }
