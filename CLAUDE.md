@@ -195,3 +195,27 @@ The library should degrade gracefully:
 - If Metal device unavailable → try Vulkan
 - If Vulkan unavailable → use CPU
 - If specific kernel unavailable → use fallback CPU implementation
+
+## Documentation Language Policy
+
+**All documentation, comments, and commits must be written in English.**
+
+| Content Type | Language |
+|--------------|----------|
+| Code comments | English |
+| Markdown documentation (all .md files) | English |
+| Commit messages | English |
+| Pull request descriptions | English |
+
+**Reason**: English is the standard language for open-source software projects and ensures consistency, better international collaboration, and easier discoverability.
+
+**Example commit message format**:
+```
+Fix bug in loss function
+
+- Updated BCE gradient formula to (p-t) for correct sigmoid gradient
+- Added log-sum-exp trick for numerical stability
+- Added gradient and weight clipping to prevent explosion
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+```
