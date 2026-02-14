@@ -22,23 +22,36 @@ pub fn build(b: *std.Build) void {
     const enable_examples = b.option(bool, "examples", "Build examples") orelse false;
 
     if (enable_examples) {
-        const exe_module = std.Build.Module.create(b, .{
+        // XOR example using SGD
+        const xor_module = std.Build.Module.create(b, .{
             .root_source_file = b.path("examples/xor.zig"),
             .target = target,
             .optimize = optimize,
         });
+        xor_module.addImport("ZigNeuron", lib_module);
 
-        // Add import for the library
-        exe_module.addImport("ZigNeuron", lib_module);
-
-        const exe = b.addExecutable(.{
-            .name = "ZigNeuronExamples",
-            .root_module = exe_module,
+        const xor_exe = b.addExecutable(.{
+            .name = "xor",
+            .root_module = xor_module,
         });
 
-        b.installArtifact(exe);
+        // XOR test example using custom gradient descent
+        const xor_test_module = std.Build.Module.create(b, .{
+            .root_source_file = b.path("examples/xor_test.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        xor_test_module.addImport("ZigNeuron", lib_module);
 
-        const run_cmd = b.addRunArtifact(exe);
+        const xor_test_exe = b.addExecutable(.{
+            .name = "xor_test",
+            .root_module = xor_test_module,
+        });
+
+        b.installArtifact(xor_exe);
+        b.installArtifact(xor_test_exe);
+
+        const run_cmd = b.addRunArtifact(xor_test_exe);
         run_cmd.step.dependOn(b.getInstallStep());
 
         const run_step = b.step("run-examples", "Run examples");

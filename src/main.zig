@@ -4,6 +4,7 @@ pub const backend = @import("backend.zig");
 pub const layer = @import("layer.zig");
 pub const loss = @import("loss.zig");
 pub const network = @import("network.zig");
+pub const optimizer = @import("optimizer.zig");
 
 pub const ZigNeuron = struct {};
 

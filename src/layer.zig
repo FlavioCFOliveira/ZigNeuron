@@ -5,6 +5,8 @@ const activation = @import("activation.zig");
 pub const Dense = struct {
     weights: []f32,
     bias: []f32,
+    grad_weights: []f32,  // Gradient buffer for weights
+    grad_bias: []f32,     // Gradient buffer for bias
     input_size: usize,
     output_size: usize,
     act: activation.Activation,
@@ -17,6 +19,8 @@ pub const Dense = struct {
         const weight_count = input_size * output_size;
         self.weights = try allocator.alloc(f32, weight_count);
         self.bias = try allocator.alloc(f32, output_size);
+        self.grad_weights = try allocator.alloc(f32, weight_count);
+        self.grad_bias = try allocator.alloc(f32, output_size);
 
         // Simple deterministic initialization - should be replaced with proper RNG
         var seed: u32 = 12345;
@@ -40,6 +44,8 @@ pub const Dense = struct {
     pub fn deinit(self: *Dense, allocator: std.mem.Allocator) void {
         allocator.free(self.weights);
         allocator.free(self.bias);
+        allocator.free(self.grad_weights);
+        allocator.free(self.grad_bias);
     }
 
     pub fn forward(self: *Dense, input: []const f32, output: []f32) !void {

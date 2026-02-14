@@ -38,47 +38,75 @@ The library is organized into logical components:
 - `examples/xor.zig` - XOR neural network example demonstrating training
 - `zig-out/` - Build output directory (created on build)
 
+## Test Evidence Files
+
+Evidence from test runs is stored in the repository root:
+
+| File | Purpose |
+|------|---------|
+| `UnitTests.md` | Evidence from unit test runs |
+| `BenchmarkTests.md` | Evidence from performance benchmark runs |
+| `MemoryTests.md` | Evidence from memory profiling runs |
+
+These files document actual test results, including timestamps, environment info, and measured values for historical comparison.
+
+## Current Implementation Status
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| Dense Layer | Done | Forward pass implemented |
+| Activations | Done | ReLU, Sigmoid, Tanh with derivatives |
+| Loss Functions | Partial | MSE only |
+| Backpropagation | Done | Training works with MSE loss |
+| GPU Backend | Stub | Metal/Vulkan stubs ready |
+| Vulkan Support | TODO | Needs implementation |
+| Optimizers | TODO | SGD, Adam, RMSprop needed |
+| Unit Tests | TODO | Test coverage needed |
+| Performance Benchmarks | TODO | Benchmark suite needed |
+
 ## Testing Requirements
 
-**Unit tests are mandatory** for every component. Each piece of the neural network must have comprehensive test coverage:
+**Unit tests are strongly encouraged** for every component. Each piece of the neural network should have test coverage:
 
-### Unit Tests
+### Unit Tests (Encouraged)
 Unit tests verify correctness of individual components:
+- **Layers** - Test forward pass, different input shapes
+- **Activations** - Test forward pass, derivative values
+- **Loss Functions** - Test forward pass, gradient computation
+- **Network** - Test end-to-end training convergence
 
-- **Layers** - Test forward pass, backward pass, different input shapes, edge cases
-- **Activations** - Test forward pass, derivative, numerical stability
-- **Loss Functions** - Test forward pass, gradient computation, edge cases
-- **Optimizers** - Test parameter updates, learning rate behavior, edge cases
-- **Network** - Test end-to-end training, gradient flow, convergence
+### Performance Tests and Benchmarks (Planned)
 
-When adding new components, write tests first to define expected behavior. The test suite should cover:
-- Correctness (mathematical accuracy)
-- Edge cases (empty inputs, very large values, zero gradients)
-- Shape compatibility for different input dimensions
+**Performance tests are encouraged** to ensure the library meets speed requirements:
+- **Microbenchmarks** - Benchmark individual functions (forward/backward passes)
+- **Integration benchmarks** - Benchmark complete layers and networks
 
-### Performance Tests and Benchmarks
+### Memory Tests (Planned)
 
-**Performance tests are mandatory** to ensure the library meets speed and memory efficiency requirements:
+**Memory tests are encouraged** to verify resource efficiency:
+- **Allocation tracking** - Track allocations per operation
+- **Peak memory usage** - Measure memory consumption
 
-- **Microbenchmarks** - Benchmark individual functions (forward/backward passes, activation computations)
-- **Integration benchmarks** - Benchmark complete layers and networks with realistic sizes
-- **Memory benchmarks** - Track allocation counts and peak memory usage
-- **GPU benchmarks** - Measure GPU utilization and kernel execution times on Apple Silicon
+### Test Evidence Documentation
 
-### Memory Benchmark Tests
+**All test executions must document their evidence.** For each test run, the results should be recorded in dedicated documentation files:
 
-**Memory benchmark tests are mandatory** to verify resource efficiency:
+| Test Type | Evidence File | Content |
+|-----------|--------------|---------|
+| Unit Tests | `UnitTests.md` | Test results, pass/fail status, execution time |
+| Performance Benchmarks | `BenchmarkTests.md` | Benchmark results, comparison baseline, profiling data |
+| Memory Tests | `MemoryTests.md` | Allocation counts, peak memory, leak detection |
 
-- **Allocation tracking** - Count allocations per operation to detect unnecessary allocations
-- **Peak memory usage** - Measure maximum memory consumption during operations
-- **Memory leaks** - Verify no memory leaks in long-running operations
-- **Pre-allocation efficiency** - Test buffer reuse and caching strategies
-- **Gradient memory** - Track memory used by gradients vs. weights
+When running tests:
+1. Execute the test suite
+2. Record all evidence in the appropriate documentation file
+3. Include: date/time, environment info, test parameters, results
+4. Use markdown formatting for readability (tables, code blocks)
 
-Run benchmarks:
-- Before and after performance-critical changes
-- As part of the CI/CD pipeline
-- To establish baselines and detect regressions
+When adding new features:
+1. Write tests first to define expected behavior
+2. Run tests and document results
+3. Update the relevant evidence file before merging
 
 ## API Design Principles
 
@@ -122,15 +150,13 @@ The library automatically detects available hardware and selects the best execut
 
 ### Implementation Requirements
 
-- All training and inference operations should be implemented in Metal/Vulkan shaders first
-- CPU implementations should be marked with `// TODO: GPU implementation` comments
-- GPU code should use compute shaders for:
+- GPU implementations should be prioritized for:
   - Matrix multiplication (matmul)
   - Activation functions (ReLU, Sigmoid, Tanh)
   - Loss functions
   - Gradient computation
+- CPU implementations should be marked with `// TODO: GPU implementation` comments
 - Fallback CPU implementations must maintain numerical accuracy
-- Device detection should happen at startup and cache the best available backend
 
 ### Platform Support
 

@@ -1,12 +1,9 @@
-/// Examples for ZigNeuron library
 const std = @import("std");
 const zn = @import("ZigNeuron");
 
 pub fn main() !void {
     const allocator = std.heap.page_allocator;
 
-    // Training data: XOR problem
-    // Input: [a, b], Output: a XOR b
     const training_data = [_][]const f32{
         &.{0, 0},
         &.{0, 1},
@@ -20,38 +17,36 @@ pub fn main() !void {
         &.{0},
     };
 
-    std.debug.print("XOR Neural Network with Backpropagation Training\n", .{});
-    std.debug.print("=================================================\n\n", .{});
-
-    // Create network: 2 inputs -> 3 hidden -> 1 output
     const network = try zn.network.Network.init(allocator);
     defer network.deinit();
 
     _ = try network.addDense(2, 3, .relu);
     _ = try network.addDense(3, 1, .sigmoid);
 
-    std.debug.print("Network created with 2 inputs, 3 hidden neurons, 1 output\n\n", .{});
-
-    // Train the network using backpropagation with SGD
     const epochs: usize = 1000;
     const learning_rate: f32 = 0.1;
     const loss_fn = zn.loss.Loss{ .mse = {} };
 
-    std.debug.print("Training for {} epochs with learning rate {}...\n\n", .{ epochs, learning_rate });
+    // Train and print loss each epoch
+    for (0..epochs) |epoch| {
+        var total_loss: f32 = 0;
+        for (training_data, training_targets) |sample, target| {
+            const sample_loss = try network.trainStep(sample, target, learning_rate, loss_fn);
+            total_loss += sample_loss;
+        }
+        total_loss /= @as(f32, @floatFromInt(training_data.len));
 
-    try network.train(training_data[0..], training_targets[0..], epochs, learning_rate, loss_fn);
+        if (epoch % 100 == 0) {
+            std.debug.print("Epoch {}: Loss = {d:.6}\n", .{ epoch, total_loss });
+        }
+    }
 
-    std.debug.print("\nTesting after training:\n", .{});
-
-    // Test the network
+    std.debug.print("\nTesting:\n", .{});
     for (training_data, training_targets) |data, target| {
         var output: [1]f32 = undefined;
         _ = try network.forward(data, &output);
         std.debug.print("Input: [{d}, {d}] -> Output: {d:.4} (Expected: {d})\n", .{
-            data[0],
-            data[1],
-            output[0],
-            target[0],
+            data[0], data[1], output[0], target[0],
         });
     }
 }
