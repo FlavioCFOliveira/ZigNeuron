@@ -65,14 +65,33 @@ pub fn build(b: *std.Build) void {
             .root_module = xor_test_module,
         });
 
+        // Comprehensive FNN example
+        const fnn_module = std.Build.Module.create(b, .{
+            .root_source_file = b.path("examples/fnn_comprehensive.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        fnn_module.addImport("ZigNeuron", lib_module);
+
+        const fnn_exe = b.addExecutable(.{
+            .name = "fnn_comprehensive",
+            .root_module = fnn_module,
+        });
+
         b.installArtifact(xor_exe);
         b.installArtifact(xor_test_exe);
+        b.installArtifact(fnn_exe);
 
         const run_cmd = b.addRunArtifact(xor_test_exe);
         run_cmd.step.dependOn(b.getInstallStep());
 
         const run_step = b.step("run-examples", "Run examples");
         run_step.dependOn(&run_cmd.step);
+
+        // FNN example step
+        const run_fnn = b.addRunArtifact(fnn_exe);
+        const fnn_step = b.step("fnn", "Run comprehensive FNN example");
+        fnn_step.dependOn(&run_fnn.step);
     }
 
     // Benchmark executable (CPU only)

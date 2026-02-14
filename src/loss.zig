@@ -48,53 +48,99 @@ pub const Loss = union(enum) {
 
     fn crossEntropyForward(self: Loss, output: []const f32, target: []const f32) !f32 {
         _ = self;
+        // This computes cross-entropy assuming 'output' are logits (not probabilities)
+        // For numerical stability, we use log-sum-exp trick
+        // CE = -sum(t * log(softmax(o)))
+        // Gradient with softmax is simply (o - t) when using logits
+
+        // Find max logit for numerical stability
+        var max_logit: f32 = -std.math.inf(f32);
+        for (output) |o| {
+            if (o > max_logit) max_logit = o;
+        }
+
+        // If all logits are -inf, return a default loss
+        if (max_logit == -std.math.inf(f32)) {
+            return 0;
+        }
+
+        // Compute log sum exp with overflow protection
+        var log_sum_exp: f32 = 0;
+        for (output) |o| {
+            const diff = o - max_logit;
+            // Clamp the difference to avoid overflow
+            const clamped_diff = if (diff > 50) 50 else if (diff < -50) -50 else diff;
+            const exp_val = std.math.exp(clamped_diff);
+            log_sum_exp += exp_val;
+        }
+
+        // If log_sum_exp is 0 or invalid, return a default loss
+        if (log_sum_exp <= 0 or !std.math.isFinite(log_sum_exp)) {
+            return 0;
+        }
+
+        log_sum_exp = @log(log_sum_exp) + max_logit;
+
+        // Clamp log_sum_exp for numerical stability
+        if (log_sum_exp > 50) log_sum_exp = 50;
+        if (log_sum_exp < -50) log_sum_exp = -50;
+
+        // Compute loss: -t * log(softmax(o)) = -t * (o - log_sum_exp)
+        // For one-hot encoding, we just take the target class
         var sum: f32 = 0;
-        const eps: f32 = 1e-8;
-        for (output, target) |o, t| {
-            // Clamp output for numerical stability
-            var p = o;
-            if (p < eps) p = eps;
-            if (p > 1 - eps) p = 1 - eps;
-            sum -= t * @log(p);
+        for (target, output) |t, o| {
+            if (t > 0.5) {
+                const loss_val = -(o - log_sum_exp);
+                // Clamp loss to avoid extreme values
+                if (std.math.isFinite(loss_val)) {
+                    sum += loss_val;
+                }
+                break;
+            }
         }
         return sum / @as(f32, @floatFromInt(output.len));
     }
 
     fn crossEntropyBackward(self: Loss, output: []const f32, target: []const f32, grad_output: []f32) !void {
         _ = self;
-        const eps: f32 = 1e-8;
+        // For cross-entropy with softmax output, the gradient simplifies to (p - t)
+        // This is the derivative of the loss with respect to the logits
         for (output, target, grad_output, 0..) |o, t, _, i| {
-            // Clamp output for numerical stability
-            var p = o;
-            if (p < eps) p = eps;
-            if (p > 1 - eps) p = 1 - eps;
-            grad_output[i] = -t / p;
+            grad_output[i] = o - t;
         }
     }
 
     fn binaryCrossEntropyForward(self: Loss, output: []const f32, target: []const f32) !f32 {
         _ = self;
         var sum: f32 = 0;
-        const eps: f32 = 1e-8;
+        const eps: f32 = 1e-7;
         for (output, target) |o, t| {
             // Clamp output for numerical stability
             var p = o;
             if (p < eps) p = eps;
             if (p > 1 - eps) p = 1 - eps;
-            sum -= t * @log(p) + (1 - t) * @log(1 - p);
+            // Clamp again for 1-p to avoid NaN
+            var one_minus_p = 1 - p;
+            if (one_minus_p < eps) one_minus_p = eps;
+            if (one_minus_p > 1 - eps) one_minus_p = 1 - eps;
+            // Use safe log with clamped values
+            sum -= t * @log(p) + (1 - t) * @log(one_minus_p);
         }
         return sum / @as(f32, @floatFromInt(output.len));
     }
 
     fn binaryCrossEntropyBackward(self: Loss, output: []const f32, target: []const f32, grad_output: []f32) !void {
         _ = self;
-        const eps: f32 = 1e-8;
+        // For BCE with sigmoid output, the gradient simplifies to (p - t)
+        // because the sigmoid derivative cancels with the denominator
+        // Use clipping for numerical stability
+        const eps: f32 = 1e-7;
         for (output, target, grad_output, 0..) |o, t, _, i| {
-            // Clamp output for numerical stability
             var p = o;
             if (p < eps) p = eps;
             if (p > 1 - eps) p = 1 - eps;
-            grad_output[i] = (p - t) / (p * (1 - p));
+            // Gradient of BCE with sigmoid is simply (prediction - target)
+            grad_output[i] = p - t;
         }
     }
 };

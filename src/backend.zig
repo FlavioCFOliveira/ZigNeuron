@@ -388,12 +388,22 @@ pub const Backend = union(enum) {
     }
 
     fn cpuActivationForward(act: activation.Activation, input: []f32, output: []f32) void {
+        // Handle softmax specially - needs the whole vector
+        if (act == .softmax) {
+            act.softmaxForward(input, output) catch unreachable;
+            return;
+        }
         for (0..input.len) |i| {
             output[i] = act.forward(input[i]);
         }
     }
 
     fn cpuActivationBackward(act: activation.Activation, input: []const f32, grad_output: []const f32, grad_input: []f32) void {
+        // Handle softmax specially - needs the whole vector
+        if (act == .softmax) {
+            act.softmaxBackward(input, grad_output, grad_input) catch unreachable;
+            return;
+        }
         for (0..input.len) |i| {
             grad_input[i] = act.backward(input[i], grad_output[i]);
         }

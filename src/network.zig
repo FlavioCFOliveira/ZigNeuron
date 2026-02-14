@@ -122,7 +122,7 @@ pub const Network = struct {
     }
 
     /// Compute gradients for all layers (without updating weights)
-    fn computeGradients(self: *Network, target: []const f32, loss_fn: loss.Loss) !void {
+    pub fn computeGradients(self: *Network, target: []const f32, loss_fn: loss.Loss) !void {
         const output_size = self.layers.items[self.layers.items.len - 1].output_size;
 
         // Get cached output from forward pass
@@ -223,13 +223,32 @@ pub const Network = struct {
         // Compute gradients
         try self.computeGradients(target, loss_fn);
 
+        // Gradient clipping to prevent exploding gradients
+        const max_grad: f32 = 1.0;
+        for (self.layers.items) |l| {
+            for (l.grad_weights, 0..) |g, i| {
+                if (g > max_grad) l.grad_weights[i] = max_grad;
+                if (g < -max_grad) l.grad_weights[i] = -max_grad;
+            }
+            for (l.grad_bias, 0..) |g, i| {
+                if (g > max_grad) l.grad_bias[i] = max_grad;
+                if (g < -max_grad) l.grad_bias[i] = -max_grad;
+            }
+        }
+
         // Update weights using simple gradient descent (SGD)
         for (self.layers.items) |l| {
             for (l.weights, l.grad_weights, 0..) |_, grad, i| {
                 l.weights[i] -= learning_rate * grad;
+                // Weight clipping to prevent explosion
+                if (l.weights[i] > 1.0) l.weights[i] = 1.0;
+                if (l.weights[i] < -1.0) l.weights[i] = -1.0;
             }
             for (l.bias, l.grad_bias, 0..) |_, grad, i| {
                 l.bias[i] -= learning_rate * grad;
+                // Bias clipping to prevent explosion
+                if (l.bias[i] > 0.5) l.bias[i] = 0.5;
+                if (l.bias[i] < -0.5) l.bias[i] = -0.5;
             }
         }
 
