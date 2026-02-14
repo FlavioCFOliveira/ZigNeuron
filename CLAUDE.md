@@ -23,18 +23,17 @@ The library is organized into logical components:
 - **Activations** - ReLU, sigmoid, tanh activation functions with derivatives
 - **Loss Functions** - MSE (implemented), cross-entropy, binary cross-entropy (TODO)
 - **Network** - High-level network composition with backpropagation training
-- **Backend** - GPU/CPU execution layer with Metal support for Apple Silicon (GPU priority)
+- **Backend** - GPU/CPU execution layer with automatic device detection (Metal > Vulkan > CPU)
 
 ## Project Structure
 
 - `src/` - Source files
   - `main.zig` - Library root with exports for all modules
-  - `backend.zig` - GPU/CPU execution backend (GPU priority)
+  - `backend.zig` - GPU/CPU execution backend with automatic device detection
   - `layer.zig` - Dense layer with weights, bias, and activation
   - `activation.zig` - Activation functions (ReLU, Sigmoid, Tanh)
   - `loss.zig` - Loss functions (MSE implemented, cross-entropy planned)
   - `network.zig` - Network composition with backpropagation training
-  - `metal/` - Metal GPU backend files (stub structure in place)
 - `build.zig` - Build definition
 - `examples/xor.zig` - XOR neural network example demonstrating training
 - `zig-out/` - Build output directory (created on build)
@@ -104,25 +103,45 @@ These requirements often conflict. Prioritize performance, but always consider r
 
 ## GPU and CPU Targeting
 
-**GPU (Metal) execution is the PRIORITY for ALL neural network operations. CPU is only used as a fallback.**
+**GPU execution is the PRIORITY for ALL neural network operations. CPU is only used as a last resort fallback.**
+
+### Device Detection and Priority
+
+The library automatically detects available hardware and selects the best execution backend:
+
+1. **Metal (Apple Silicon)** - Uses Metal compute shaders on M-series chips (M1, M2, M3, etc.)
+2. **Vulkan** - Uses Vulkan compute shaders for cross-platform GPU support
+3. **CPU** - Falls back to CPU computation if no GPU available
 
 ### Execution Priority Rules
 
-1. **Training** - Must use GPU (Metal) first. CPU fallback only if no GPU available.
-2. **Inference** - Must use GPU (Metal) first. CPU fallback only if no GPU available.
-3. **Gradient computation** - Must use GPU (Metal) first.
-4. **Forward pass** - Must use GPU (Metal) first.
+1. **Training** - Must use GPU (Metal or Vulkan) first. CPU fallback only if no GPU available.
+2. **Inference** - Must use GPU (Metal or Vulkan) first. CPU fallback only if no GPU available.
+3. **Gradient computation** - Must use GPU (Metal or Vulkan) first.
+4. **Forward pass** - Must use GPU (Metal or Vulkan) first.
 
 ### Implementation Requirements
 
-- All training and inference operations should be implemented in Metal shaders first
+- All training and inference operations should be implemented in Metal/Vulkan shaders first
 - CPU implementations should be marked with `// TODO: GPU implementation` comments
-- GPU code should use Metal compute shaders for:
+- GPU code should use compute shaders for:
   - Matrix multiplication (matmul)
   - Activation functions (ReLU, Sigmoid, Tanh)
   - Loss functions
   - Gradient computation
 - Fallback CPU implementations must maintain numerical accuracy
+- Device detection should happen at startup and cache the best available backend
+
+### Platform Support
+
+The library supports multiple platforms:
+
+| Platform | GPU Backend | CPU Fallback |
+|----------|-------------|--------------|
+| macOS (Apple Silicon) | Metal | Yes |
+| Linux | Vulkan | Yes |
+| Windows | Vulkan | Yes |
+| Other | Vulkan or CPU | Yes |
 
 ### Apple Silicon Optimization
 
@@ -132,6 +151,14 @@ The library should leverage Apple Silicon capabilities:
 - Use M-series GPU compute capabilities (SIMD, parallel execution)
 - Optimize for memory bandwidth between CPU and GPU shared memory
 
+### Vulkan Cross-Platform Support
+
+For non-Apple platforms (Linux, Windows):
+- Use Vulkan compute shaders
+- Support SPIR-V shader compilation
+- Detect Vulkan support at runtime
+- Fall back to CPU if Vulkan unavailable
+
 When adding new features, prioritize:
 1. **GPU/Metal implementation first** - Always implement on GPU first
 2. **CPU fallback** - Implement CPU fallback only after GPU is working
@@ -139,5 +166,6 @@ When adding new features, prioritize:
 4. **Apple Silicon** - Optimize for M-series chips (M1, M2, M3, etc.)
 
 The library should degrade gracefully:
-- If Metal device unavailable → use CPU
+- If Metal device unavailable → try Vulkan
+- If Vulkan unavailable → use CPU
 - If specific kernel unavailable → use fallback CPU implementation
