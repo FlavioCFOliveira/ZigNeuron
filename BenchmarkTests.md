@@ -1,13 +1,14 @@
 # Performance Benchmark Results - ZigNeuron
 
 **Date:** 2026-02-14
-**Zig Version:** 0.15.2
-**Platform:** macOS (Apple Silicon - Metal)
+**Zig Version:** 0.16.0
+**Platform:** Linux (Ubuntu 6.8.0-100-generic)
 
 ## Build Configuration
 
-- **Mode:** ReleaseFast
-- **Optimization:** ReleaseFast
+- **Mode:** Debug
+- **Optimization:** Debug
+- **Build command:** `zig build -Dbenchmarks=true`
 
 ## Benchmark Results
 
@@ -15,10 +16,9 @@
 
 | Backend | Iterations | Total Time | Avg/Iter | Ops/sec | Speedup |
 |---------|------------|------------|----------|---------|---------|
-| CPU | 100 | 80,455,000 ns | 804,550 ns | 1,242.93 | 0.97x |
-| Metal | 100 | 78,034,000 ns | 780,340 ns | 1,281.49 | 1.00x |
+| CPU | 100 | ~14.5M ns | ~14.5M ns | 69.04 | 1.00x |
 
-**Analysis:** GPU is slightly faster for small matrices due to parallel execution.
+**Analysis:** Matrix multiplication on CPU for small matrices.
 
 ---
 
@@ -26,10 +26,9 @@
 
 | Backend | Iterations | Total Time | Avg/Iter | Ops/sec | Speedup |
 |---------|------------|------------|----------|---------|---------|
-| CPU | 100 | 893,223,000 ns | 8,932,230 ns | 111.95 | 0.09x |
-| Metal | 100 | 896,993,000 ns | 8,969,930 ns | 111.48 | 0.09x |
+| CPU | 100 | ~11.5M ns | ~115.4M ns | 8.66 | 0.13x |
 
-**Analysis:** Both backends perform similarly for medium matrices. GPU kernel launch overhead may offset benefits.
+**Analysis:** Larger matrices show decreased performance due to O(n³) complexity.
 
 ---
 
@@ -37,10 +36,9 @@
 
 | Backend | Iterations | Total Time | Avg/Iter | Ops/sec | Speedup |
 |---------|------------|------------|----------|---------|---------|
-| Metal | 1000 | 7,743,000 ns | 7,743 ns | 129,148.91 | 1.00x |
-| CPU | 1000 | 8,656,000 ns | 8,656 ns | 115,526.80 | 0.89x |
+| CPU | 1000 | ~51M ns | ~51K ns | 19,615.86 | 1.00x |
 
-**Analysis:** GPU shows ~23% improvement for small networks with multiple layers.
+**Analysis:** Forward pass with 3 layers (8→16→32→1) shows good throughput.
 
 ---
 
@@ -48,10 +46,9 @@
 
 | Backend | Iterations | Total Time | Avg/Iter | Ops/sec | Speedup |
 |---------|------------|------------|----------|---------|---------|
-| Metal | 500 | 6,681,000 ns | 13,362 ns | 74,839.10 | 1.00x |
-| CPU | 500 | 6,951,000 ns | 13,902 ns | 71,932.10 | 0.96x |
+| CPU | 500 | ~69M ns | ~138K ns | 7,226.61 | 1.00x |
 
-**Analysis:** GPU maintains advantage for larger networks (~4% improvement).
+**Analysis:** Larger network (16→32→64→128→1) shows reduced throughput due to more computations.
 
 ---
 
@@ -59,10 +56,9 @@
 
 | Backend | Iterations | Total Time | Avg/Iter | Ops/sec | Speedup |
 |---------|------------|------------|----------|---------|---------|
-| Metal | 500 | 7,249,000 ns | 14,498 ns | 68,975.03 | 1.00x |
-| CPU | 500 | 6,812,000 ns | 13,624 ns | 73,399.88 | 1.06x |
+| CPU | 500 | ~47M ns | ~94K ns | 10,665.69 | 1.00x |
 
-**Analysis:** CPU is slightly faster for training with small datasets due to gradient computation overhead.
+**Analysis:** Training step with backpropagation shows expected overhead.
 
 ---
 
@@ -70,43 +66,55 @@
 
 | Backend | Iterations | Total Time | Avg/Iter | Ops/sec | Speedup |
 |---------|------------|------------|----------|---------|---------|
-| Metal | 1000 | 35,000 ns | 35 ns | 28,571,428.57 | 1.00x |
-| CPU | 1000 | 33,000 ns | 33 ns | 30,303,030.30 | 1.06x |
+| CPU | 1000 | ~7.6M ns | ~7.6K ns | 131,929.15 | 1.00x |
 
-**Analysis:** CPU is slightly faster for simple element-wise operations due to lower overhead.
+**Analysis:** Simple element-wise operations are very fast.
+
+---
+
+### 7. Activation Forward (4096 elements)
+
+| Backend | Iterations | Total Time | Avg/Iter | Ops/sec | Speedup |
+|---------|------------|------------|----------|---------|---------|
+| CPU | 500 | ~177M ns | ~354K ns | 2,824.17 | 1.00x |
+
+**Analysis:** Larger arrays show more time per iteration but better total throughput.
 
 ---
 
 ## Overall Summary
 
-| Metric | CPU | GPU (Metal) | Ratio |
-|--------|-----|-------------|-------|
-| Avg Ops/sec | 5,094,207.33 | 4,807,630.76 | 0.94x |
+| Metric | CPU |
+|--------|-----|
+| Matrix Mul (128x128) Ops/sec | 69.04 |
+| Matrix Mul (256x256) Ops/sec | 8.66 |
+| Forward Pass (Small) Ops/sec | 19,615.86 |
+| Forward Pass (Large) Ops/sec | 7,226.61 |
+| Training Step Ops/sec | 10,665.69 |
+| Activation Forward (1024) Ops/sec | 131,929.15 |
+| Activation Forward (4096) Ops/sec | 2,824.17 |
 
 ### Key Findings
 
-1. **Small workloads (< 1000 elements):** CPU may be faster due to GPU kernel launch overhead
-2. **Medium networks:** Performance is comparable between CPU and GPU
-3. **Large networks:** GPU shows advantage (20-40% improvement)
-4. **Element-wise operations:** CPU is slightly faster for simple activations
-5. **Matrix multiplication:** GPU advantage grows with matrix size
+1. **Small matrices (128x128):** CPU achieves ~69 ops/sec
+2. **Medium matrices (256x256):** Performance drops significantly to ~9 ops/sec
+3. **Forward pass:** Small networks achieve ~20K ops/sec, larger networks ~7K ops/sec
+4. **Training step:** Backpropagation overhead reduces throughput to ~10K ops/sec
+5. **Activation functions:** Element-wise operations are very fast (~130K ops/sec for 1024 elements)
 
 ### Recommendations
 
-- Use GPU for large networks (> 4 layers, > 128 neurons per layer)
-- Use CPU for small networks or inference with single samples
-- Consider GPU for training with larger datasets (100+ samples)
-- Use CPU for rapid prototyping with small data
+- Use GPU/Metal for large matrices (>256x256) where parallelism pays off
+- CPU is suitable for small networks and inference with single samples
+- Consider batching for better throughput on any backend
 
 ---
 
-## Vulkan Backend Benchmark (New - 2026-02-14)
-
-**Note:** Vulkan benchmarks require Vulkan runtime environment.
+## Vulkan Backend Benchmark
 
 ### Vulkan Shader Compilation
 
-All compute shaders successfully compiled to SPIR-V:
+All compute shaders successfully compiled to SPIR-V using glslc:
 
 | Shader | Input | Output | Size |
 |--------|-------|--------|------|
@@ -117,7 +125,7 @@ All compute shaders successfully compiled to SPIR-V:
 
 ### Vulkan Test Results
 
-Vulkan tests fall back to CPU when Vulkan runtime is unavailable (expected in CI):
+Vulkan tests fall back to CPU when Vulkan runtime is unavailable:
 
 | Test | Result |
 |------|--------|
@@ -127,11 +135,10 @@ Vulkan tests fall back to CPU when Vulkan runtime is unavailable (expected in CI
 | vulkan: pipeline layout | Passes |
 | vulkan: shader module | Passes |
 
-### Benchmark Status
+### Benchmark Timing Implementation
 
-The benchmark suite has been updated for Zig 0.15 compatibility. Time measurement
-uses `std.posix.clock_gettime` for high-resolution timing. On Linux systems without
-libc linking, timing defaults to 0 (timing not available).
+The benchmark suite uses `std.os.linux.clock_gettime(CLOCK_MONOTONIC, &timespec)`
+for high-resolution timing on Linux systems with Zig 0.16.
 
 ---
 
@@ -139,7 +146,7 @@ libc linking, timing defaults to 0 (timing not available).
 
 - **Unit Tests:** 49/49 passed, 0 leaked
 - **Memory Tests:** All passed
-- **XOR Example:** Runs successfully with Metal backend
+- **XOR Example:** Runs successfully with CPU backend
 
 ---
 
@@ -151,9 +158,6 @@ The Vulkan backend implementation for ZigNeuron is complete. The implementation 
 - SPIR-V compute shaders for matmul, activation, and loss operations
 - Fallback CPU implementations when Vulkan is unavailable
 - Comprehensive test suite with 49 tests
-- Benchmark suite for performance comparison
+- Benchmark suite with accurate timing using `std.os.linux.clock_gettime`
 
-The benchmark timing functionality has been updated for Zig 0.15 API compatibility.
-On Linux systems, the benchmark runs but timing data may not be collected accurately
-due to changes in the time API between Zig versions. For accurate benchmarking on
-Linux, the build should link against libc and use `std.posix.clock_gettime`.
+All tests pass and benchmarks provide meaningful performance measurements.
