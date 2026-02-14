@@ -1,0 +1,40 @@
+// Vulkan compute shader for matrix multiplication
+// C = A * B where A is m×k, B is k×n, C is m×n
+
+#version 450
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) readonly buffer BufferA {
+    float a[];
+};
+
+layout(set = 0, binding = 1) readonly buffer BufferB {
+    float b[];
+};
+
+layout(set = 0, binding = 2) writeonly buffer BufferC {
+    float c[];
+};
+
+layout(push_constant) uniform Constants {
+    uint m;
+    uint n;
+    uint k;
+} consts;
+
+void main() {
+    uint global_x = gl_GlobalInvocationID.x;  // row index
+    uint global_y = gl_GlobalInvocationID.y;  // column index
+
+    if (global_x >= consts.m || global_y >= consts.n) {
+        return;
+    }
+
+    float sum = 0.0;
+    for (uint i = 0; i < consts.k; i++) {
+        sum += a[global_x * consts.k + i] * b[i * consts.n + global_y];
+    }
+
+    c[global_x * consts.n + global_y] = sum;
+}

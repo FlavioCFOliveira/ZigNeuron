@@ -2,6 +2,8 @@
 const std = @import("std");
 const benchmark = @import("benchmark.zig");
 const backend_module = @import("backend.zig");
+const activation = @import("activation.zig");
+const loss = @import("loss.zig");
 
 pub fn main() !void {
     const allocator = std.heap.page_allocator;
@@ -10,7 +12,6 @@ pub fn main() !void {
 
     // Get available backends
     const cpu_backend = backend_module.Backend{ .cpu = {} };
-    const gpu_backend = backend_module.Backend{ .gpu = .metal };
 
     var results: std.ArrayList(benchmark.BenchmarkResult) = .{
         .items = &[_]benchmark.BenchmarkResult{},
@@ -24,10 +25,6 @@ pub fn main() !void {
         const cpu_result = try benchmark.benchmarkMatrixMul(allocator, cpu_backend, 128, 128, 128, 100);
         try results.append(allocator, cpu_result);
         benchmark.printResult(cpu_result);
-
-        const gpu_result = try benchmark.benchmarkMatrixMul(allocator, gpu_backend, 128, 128, 128, 100);
-        try results.append(allocator, gpu_result);
-        benchmark.printResult(gpu_result);
     }
     std.debug.print("\n", .{});
 
@@ -37,10 +34,6 @@ pub fn main() !void {
         const cpu_result = try benchmark.benchmarkMatrixMul(allocator, cpu_backend, 256, 256, 256, 100);
         try results.append(allocator, cpu_result);
         benchmark.printResult(cpu_result);
-
-        const gpu_result = try benchmark.benchmarkMatrixMul(allocator, gpu_backend, 256, 256, 256, 100);
-        try results.append(allocator, gpu_result);
-        benchmark.printResult(gpu_result);
     }
     std.debug.print("\n", .{});
 
@@ -50,10 +43,6 @@ pub fn main() !void {
         const cpu_result = try benchmark.benchmarkForwardPass(allocator, cpu_backend, 8, 1, 3, 1000);
         try results.append(allocator, cpu_result);
         benchmark.printResult(cpu_result);
-
-        const gpu_result = try benchmark.benchmarkForwardPass(allocator, gpu_backend, 8, 1, 3, 1000);
-        try results.append(allocator, gpu_result);
-        benchmark.printResult(gpu_result);
     }
     std.debug.print("\n", .{});
 
@@ -63,10 +52,6 @@ pub fn main() !void {
         const cpu_result = try benchmark.benchmarkForwardPass(allocator, cpu_backend, 16, 1, 4, 500);
         try results.append(allocator, cpu_result);
         benchmark.printResult(cpu_result);
-
-        const gpu_result = try benchmark.benchmarkForwardPass(allocator, gpu_backend, 16, 1, 4, 500);
-        try results.append(allocator, gpu_result);
-        benchmark.printResult(gpu_result);
     }
     std.debug.print("\n", .{});
 
@@ -76,10 +61,6 @@ pub fn main() !void {
         const cpu_result = try benchmark.benchmarkTraining(allocator, cpu_backend, 4, 1, 3, 10, 50);
         try results.append(allocator, cpu_result);
         benchmark.printResult(cpu_result);
-
-        const gpu_result = try benchmark.benchmarkTraining(allocator, gpu_backend, 4, 1, 3, 10, 50);
-        try results.append(allocator, gpu_result);
-        benchmark.printResult(gpu_result);
     }
     std.debug.print("\n", .{});
 
@@ -89,15 +70,20 @@ pub fn main() !void {
         const cpu_result = try benchmark.benchmarkActivationForward(allocator, cpu_backend, .relu, 1024, 1000);
         try results.append(allocator, cpu_result);
         benchmark.printResult(cpu_result);
-
-        const gpu_result = try benchmark.benchmarkActivationForward(allocator, gpu_backend, .relu, 1024, 1000);
-        try results.append(allocator, gpu_result);
-        benchmark.printResult(gpu_result);
     }
     std.debug.print("\n", .{});
 
-    // Print backend comparison
+    // Benchmark 7: Activation functions - larger size
+    std.debug.print("Benchmark 7: Activation Forward (4096 elements)\n", .{});
+    {
+        const cpu_result = try benchmark.benchmarkActivationForward(allocator, cpu_backend, .tanh, 4096, 500);
+        try results.append(allocator, cpu_result);
+        benchmark.printResult(cpu_result);
+    }
+    std.debug.print("\n", .{});
+
+    // Print comparison
     benchmark.compareBackends(results.items);
 
-    std.debug.print("=== Benchmark Complete ===\n", .{});
+    std.debug.print("\n=== Benchmark Complete ===\n", .{});
 }

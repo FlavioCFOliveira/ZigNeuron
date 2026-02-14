@@ -97,4 +97,40 @@ pub fn build(b: *std.Build) void {
         const benchmark_step = b.step("benchmarks", "Run benchmarks");
         benchmark_step.dependOn(&run_benchmarks.step);
     }
+
+    // Vulkan shader compilation step
+    const enable_vulkan = b.option(bool, "vulkan", "Build with Vulkan support") orelse true;
+
+    if (enable_vulkan) {
+        const compile_shaders_step = b.step("compile-shaders", "Compile Vulkan shaders to SPIR-V");
+
+        // Define shader files and their output paths
+        const shaders = [_]struct {
+            name: []const u8,
+            input: []const u8,
+            output: []const u8,
+        }{
+            .{ .name = "matmul", .input = "shaders/matmul.comp", .output = "shaders/matmul.comp.spv" },
+            .{ .name = "activation_forward", .input = "shaders/activation_forward.comp", .output = "shaders/activation_forward.comp.spv" },
+            .{ .name = "activation_backward", .input = "shaders/activation_backward.comp", .output = "shaders/activation_backward.comp.spv" },
+            .{ .name = "loss_backward", .input = "shaders/loss_backward.comp", .output = "shaders/loss_backward.comp.spv" },
+        };
+
+        for (shaders) |shader| {
+            const compile_cmd = b.addSystemCommand(&.{
+                "glslc",
+                "-fshader-stage=compute",
+                shader.input,
+                "-o",
+                shader.output,
+            });
+
+            compile_cmd.step.dependOn(b.getInstallStep());
+            compile_shaders_step.dependOn(&compile_cmd.step);
+        }
+
+        // Add a step to run all Vulkan-related checks
+        const vulkan_step = b.step("vulkan", "Check Vulkan compilation");
+        vulkan_step.dependOn(compile_shaders_step);
+    }
 }

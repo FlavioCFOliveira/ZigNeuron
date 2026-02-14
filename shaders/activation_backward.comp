@@ -1,0 +1,42 @@
+// Vulkan compute shader for activation backward pass
+// Computes gradient: grad_input = grad_output * activation_derivative(input)
+
+#version 450
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) readonly buffer InputData {
+    float input_vals[];
+};
+
+layout(set = 0, binding = 1) readonly buffer GradOutputData {
+    float grad_output_vals[];
+};
+
+layout(set = 0, binding = 2) writeonly buffer GradInputData {
+    float grad_input_vals[];
+};
+
+layout(push_constant) uniform Constants {
+    uint size;
+    uint activation_type;  // 0=ReLU, 1=Sigmoid, 2=Tanh
+} consts;
+
+float activation_derivative(float x) {
+    switch (consts.activation_type) {
+        case 0:  // ReLU
+            return x > 0.0 ? 1.0 : 0.0;
+        case 1:  // Sigmoid
+            return x * (1.0 - x);
+        case 2:  // Tanh
+            return 1.0 - x * x;
+        default:
+            return 1.0;
+    }
+}
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= consts.size) return;
+    grad_input_vals[idx] = grad_output_vals[idx] * activation_derivative(input_vals[idx]);
+}

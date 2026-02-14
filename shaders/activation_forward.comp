@@ -1,0 +1,38 @@
+// Vulkan compute shader for activation forward pass
+// Applies activation function element-wise
+
+#version 450
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) readonly buffer InputData {
+    float input_vals[];
+};
+
+layout(set = 0, binding = 1) writeonly buffer OutputData {
+    float output_vals[];
+};
+
+layout(push_constant) uniform Constants {
+    uint size;
+    uint activation_type;  // 0=ReLU, 1=Sigmoid, 2=Tanh
+} consts;
+
+float activation(float x) {
+    switch (consts.activation_type) {
+        case 0:  // ReLU
+            return max(0.0, x);
+        case 1:  // Sigmoid
+            return 1.0 / (1.0 + exp(-x));
+        case 2:  // Tanh
+            return tanh(x);
+        default:
+            return x;
+    }
+}
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= consts.size) return;
+    output_vals[idx] = activation(input_vals[idx]);
+}

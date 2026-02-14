@@ -4,6 +4,7 @@
 const std = @import("std");
 const activation = @import("activation.zig");
 const loss = @import("loss.zig");
+const vulkan_module = @import("vulkan.zig");
 
 /// Available GPU backends in priority order
 pub const GpuBackend = enum {
@@ -283,20 +284,28 @@ pub const Backend = union(enum) {
     // ( cross-platform GPU )
 
     fn vulkanMatMul(a: []const f32, b: []const f32, c: []f32, m: usize, n: usize, k: usize) !void {
-        // For small matrices, CPU is faster
+        // Validate inputs
+        if (a.len < m * k) return error.BufferTooSmall;
+        if (b.len < k * n) return error.BufferTooSmall;
+        if (c.len < m * n) return error.BufferTooSmall;
+
+        // For small matrices, CPU is often faster due to overhead
         const total_size = @as(usize, m) * n * k;
         if (total_size < 4096) {
             cpuMatMul(a, b, c, m, n, k);
             return;
         }
 
-        // Validate inputs
-        if (a.len < m * k) return error.BufferTooSmall;
-        if (b.len < k * n) return error.BufferTooSmall;
-        if (c.len < m * n) return error.BufferTooSmall;
+        // Try to create Vulkan device
+        const device = vulkan_module.DeviceWrapper.init() catch {
+            // Vulkan not available, fall back to CPU
+            cpuMatMul(a, b, c, m, n, k);
+            return;
+        };
+        defer device.deinit();
 
         // Use GPU implementation
-        try vulkanMatMulGPU(a, b, c, m, n, k);
+        try vulkan_module.vulkanMatMul(&device, a, b, c, m, n, k);
     }
 
     fn vulkanActivationForward(act: activation.Activation, input: []f32, output: []f32) !void {
@@ -308,7 +317,15 @@ pub const Backend = union(enum) {
 
         if (input.len != output.len) return error.ShapeMismatch;
 
-        try vulkanActivationForwardGPU(act, input, output);
+        // Try to create Vulkan device
+        const device = vulkan_module.DeviceWrapper.init() catch {
+            // Vulkan not available, fall back to CPU
+            cpuActivationForward(act, input, output);
+            return;
+        };
+        defer device.deinit();
+
+        try vulkan_module.vulkanActivationForward(&device, act, input, output);
     }
 
     fn vulkanActivationBackward(act: activation.Activation, input: []const f32, grad_output: []const f32, grad_input: []f32) !void {
@@ -321,7 +338,15 @@ pub const Backend = union(enum) {
             return error.ShapeMismatch;
         }
 
-        try vulkanActivationBackwardGPU(act, input, grad_output, grad_input);
+        // Try to create Vulkan device
+        const device = vulkan_module.DeviceWrapper.init() catch {
+            // Vulkan not available, fall back to CPU
+            cpuActivationBackward(act, input, grad_output, grad_input);
+            return;
+        };
+        defer device.deinit();
+
+        try vulkan_module.vulkanActivationBackward(&device, act, input, grad_output, grad_input);
     }
 
     fn vulkanLossBackward(loss_fn: loss.Loss, output: []const f32, target: []const f32, grad_output: []f32) !void {
@@ -334,54 +359,15 @@ pub const Backend = union(enum) {
             return error.ShapeMismatch;
         }
 
-        try vulkanLossBackwardGPU(loss_fn, output, target, grad_output);
-    }
+        // Try to create Vulkan device
+        const device = vulkan_module.DeviceWrapper.init() catch {
+            // Vulkan not available, fall back to CPU
+            cpuLossBackward(loss_fn, output, target, grad_output);
+            return;
+        };
+        defer device.deinit();
 
-    /// GPU implementation of matrix multiplication using Vulkan
-    fn vulkanMatMulGPU(a: []const f32, b: []const f32, c: []f32, m: usize, n: usize, k: usize) !void {
-        // Vulkan implementation for cross-platform GPU
-        // Uses SPIR-V compute shaders
-        // Would:
-        // 1. Create VkInstance, VkDevice
-        // 2. Create VkBuffer for a, b, c
-        // 3. Compile MSL to SPIR-V (or use precompiled)
-        // 4. Create VkPipeline, VkCommandBuffer
-        // 5. Execute compute command
-
-        // For now, use CPU implementation
-        // Full Vulkan implementation would use vulkan.khronos.org API
-
-        cpuMatMul(a, b, c, m, n, k);
-    }
-
-    /// GPU implementation of activation forward using Vulkan
-    fn vulkanActivationForwardGPU(act: activation.Activation, input: []f32, output: []f32) !void {
-        // Vulkan compute shader for activation
-        // Would use SPIR-V shader compiled from GLSL/HLSL
-
-        if (input.len != output.len) return error.ShapeMismatch;
-
-        cpuActivationForward(act, input, output);
-    }
-
-    /// GPU implementation of activation backward using Vulkan
-    fn vulkanActivationBackwardGPU(act: activation.Activation, input: []const f32, grad_output: []const f32, grad_input: []f32) !void {
-        // Vulkan compute shader for activation backward
-
-        if (input.len != grad_output.len or input.len != grad_input.len) {
-            return error.ShapeMismatch;
-        }
-
-        cpuActivationBackward(act, input, grad_output, grad_input);
-    }
-
-    /// GPU implementation of loss backward using Vulkan
-    fn vulkanLossBackwardGPU(loss_fn: loss.Loss, output: []const f32, target: []const f32, grad_output: []f32) !void {
-        if (output.len != target.len or output.len != grad_output.len) {
-            return error.ShapeMismatch;
-        }
-
-        cpuLossBackward(loss_fn, output, target, grad_output);
+        try vulkan_module.vulkanLossBackward(&device, loss_fn, output, target, grad_output);
     }
 
     // ================== CPU implementations ==================
