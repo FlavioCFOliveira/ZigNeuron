@@ -75,7 +75,7 @@ pub fn build(b: *std.Build) void {
         run_step.dependOn(&run_cmd.step);
     }
 
-    // Benchmark executable
+    // Benchmark executable (CPU only)
     const enable_benchmarks = b.option(bool, "benchmarks", "Build benchmarks") orelse false;
 
     if (enable_benchmarks) {
@@ -95,6 +95,29 @@ pub fn build(b: *std.Build) void {
 
         const run_benchmarks = b.addRunArtifact(benchmark_exe);
         const benchmark_step = b.step("benchmarks", "Run benchmarks");
+        benchmark_step.dependOn(&run_benchmarks.step);
+    }
+
+    // Vulkan vs CPU comparison benchmark
+    const enable_benchmark_compare = b.option(bool, "benchmark-compare", "Build Vulkan vs CPU comparison benchmark") orelse false;
+
+    if (enable_benchmark_compare) {
+        const benchmark_module = std.Build.Module.create(b, .{
+            .root_source_file = b.path("src/benchmark_compare.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        benchmark_module.addImport("ZigNeuron", lib_module);
+
+        const benchmark_exe = b.addExecutable(.{
+            .name = "benchmark-compare",
+            .root_module = benchmark_module,
+        });
+
+        b.installArtifact(benchmark_exe);
+
+        const run_benchmarks = b.addRunArtifact(benchmark_exe);
+        const benchmark_step = b.step("benchmark-compare", "Run Vulkan vs CPU comparison benchmark");
         benchmark_step.dependOn(&run_benchmarks.step);
     }
 
