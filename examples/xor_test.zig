@@ -4,6 +4,17 @@ const zn = @import("ZigNeuron");
 pub fn main() !void {
     const allocator = std.heap.page_allocator;
 
+    // Get default backend (GPU if available, CPU fallback)
+    const backend = zn.backend.Backend.default();
+    std.debug.print("Using backend: ", .{});
+    switch (backend) {
+        .gpu => |gpu| switch (gpu) {
+            .metal => std.debug.print("Metal (Apple Silicon GPU)\n", .{}),
+            .vulkan => std.debug.print("Vulkan (Cross-platform GPU)\n", .{}),
+        },
+        .cpu => std.debug.print("CPU (fallback)\n", .{}),
+    }
+
     const training_data = [_][]const f32{
         &.{0, 0},
         &.{0, 1},
@@ -17,7 +28,7 @@ pub fn main() !void {
         &.{0},
     };
 
-    const network = try zn.network.Network.init(allocator);
+    const network = try zn.network.Network.init(allocator, backend);
     defer network.deinit();
 
     _ = try network.addDense(2, 3, .relu);

@@ -1,9 +1,20 @@
-/// Examples for ZigNeuron library
+/// Examples for ZigNeuron library - XOR problem with backpropagation
 const std = @import("std");
 const zn = @import("ZigNeuron");
 
 pub fn main() !void {
     const allocator = std.heap.page_allocator;
+
+    // Get default backend (GPU if available, CPU fallback)
+    const backend = zn.backend.Backend.default();
+    std.debug.print("Using backend: ", .{});
+    switch (backend) {
+        .gpu => |gpu| switch (gpu) {
+            .metal => std.debug.print("Metal (Apple Silicon GPU)\n", .{}),
+            .vulkan => std.debug.print("Vulkan (Cross-platform GPU)\n", .{}),
+        },
+        .cpu => std.debug.print("CPU (fallback)\n", .{}),
+    }
 
     // Training data: XOR problem
     // Input: [a, b], Output: a XOR b
@@ -20,11 +31,11 @@ pub fn main() !void {
         &.{0},
     };
 
-    std.debug.print("XOR Neural Network with Backpropagation Training\n", .{});
+    std.debug.print("\nXOR Neural Network with Backpropagation Training\n", .{});
     std.debug.print("=================================================\n\n", .{});
 
     // Create network: 2 inputs -> 3 hidden -> 1 output
-    const network = try zn.network.Network.init(allocator);
+    const network = try zn.network.Network.init(allocator, backend);
     defer network.deinit();
 
     _ = try network.addDense(2, 3, .relu);

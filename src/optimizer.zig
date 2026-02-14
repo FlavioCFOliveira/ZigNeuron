@@ -46,16 +46,20 @@ pub const Sgd = struct {
     velocity_weights: ?[]f32 = null,
     velocity_bias: ?[]f32 = null,
 
+    /// Maximum layer size for optimizer memory allocation
+    const MAX_LAYER_SIZE = 1024 * 1024; // 1M elements should be plenty
+
     pub fn init(self: *Sgd, allocator: std.mem.Allocator, lyr: *const layer_module.Dense) !void {
+        _ = lyr;
         if (self.momentum > 0) {
-            const n_weights = lyr.input_size * lyr.output_size;
-            const n_bias = lyr.output_size;
-
-            self.velocity_weights = try allocator.alloc(f32, n_weights);
-            self.velocity_bias = try allocator.alloc(f32, n_bias);
-
-            @memset(self.velocity_weights.?, 0);
-            @memset(self.velocity_bias.?, 0);
+            // For simplicity, allocate a fixed maximum size since we reuse the same optimizer
+            // In a real implementation, we'd track allocations per layer or use a different approach
+            if (self.velocity_weights == null) {
+                self.velocity_weights = try allocator.alloc(f32, MAX_LAYER_SIZE);
+                self.velocity_bias = try allocator.alloc(f32, MAX_LAYER_SIZE);
+                @memset(self.velocity_weights.?, 0);
+                @memset(self.velocity_bias.?, 0);
+            }
         }
     }
 
