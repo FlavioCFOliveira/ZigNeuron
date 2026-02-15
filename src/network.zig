@@ -1,17 +1,17 @@
 /// Neural network composition with backpropagation training
-/// 
+///
 /// GPU OPTIMIZATION FEATURES (Metal on Apple Silicon):
 /// - Reduced GPU threshold (64 elements vs 256) to leverage parallelism more aggressively
 /// - Pre-allocated work buffers to reduce memory allocation overhead during training
 /// - Cache-optimized CPU fallback with loop tiling/blocking for large matrices
 /// - Metal GPU automatically selected on macOS with Apple Silicon
 /// - Automatic backend selection: Metal > Vulkan > CPU
-/// 
+///
 /// PERFORMANCE TIPS:
 /// - Larger layer sizes (>64 neurons) benefit more from GPU acceleration
 /// - GPU overhead is amortized across multiple operations in each training step
 /// - Pre-allocated buffers reduce malloc/free overhead in tight training loops
-/// 
+///
 /// USAGE:
 /// ```zig
 /// const network = try Network.init(allocator, Backend.default());
@@ -28,20 +28,20 @@ const backend_module = @import("backend.zig");
 
 /// Cached values needed for backpropagation
 const LayerCache = struct {
-    pre_activation: []f32,  // Values before activation
-    input: []const f32,     // Input to this layer
+    pre_activation: []f32, // Values before activation
+    input: []const f32, // Input to this layer
 };
 
 pub const Network = struct {
     layers: std.ArrayList(*layer.Dense),
     allocator: std.mem.Allocator,
-    caches: std.ArrayList(?LayerCache),  // Cache for each layer's backprop values
+    caches: std.ArrayList(?LayerCache), // Cache for each layer's backprop values
     backend: backend_module.Backend,
     /// Optimizer state per layer
     optimizers: std.ArrayList(?optimizer.Optimizer),
     /// Pre-allocated buffers for GPU efficiency (reduce memory allocation overhead)
-    work_buffer: ?[]f32,  // Reusable buffer for intermediate computations
-    max_layer_size: usize,  // Track maximum layer size for buffer allocation
+    work_buffer: ?[]f32, // Reusable buffer for intermediate computations
+    max_layer_size: usize, // Track maximum layer size for buffer allocation
 
     pub fn init(allocator: std.mem.Allocator, backend: backend_module.Backend) !*Network {
         const self = allocator.create(Network) catch return error.OutOfMemory;
@@ -70,25 +70,25 @@ pub const Network = struct {
             }
         }
         self.caches.deinit(self.allocator);
-        
+
         // Free work buffer if allocated
         if (self.work_buffer) |buf| {
             allocator.free(buf);
         }
-        
+
         allocator.destroy(self);
     }
 
     pub fn addDense(self: *Network, input_size: usize, output_size: usize, act: activation.Activation) !*layer.Dense {
         const l = try layer.Dense.init(self.allocator, input_size, output_size, act, self.backend);
         try self.layers.append(self.allocator, l);
-        try self.caches.append(self.allocator, null);  // No cache initially
-        
+        try self.caches.append(self.allocator, null); // No cache initially
+
         // Update max layer size for buffer pre-allocation
         const layer_max = @max(input_size, output_size);
         if (layer_max > self.max_layer_size) {
             self.max_layer_size = layer_max;
-            
+
             // Allocate work buffer if using GPU (for efficiency)
             if (self.backend == .gpu) {
                 // Free old buffer if exists
@@ -96,10 +96,10 @@ pub const Network = struct {
                     self.allocator.free(old_buf);
                 }
                 // Allocate new larger buffer
-                self.work_buffer = try self.allocator.alloc(f32, self.max_layer_size * 4);  // 4x for safety margin
+                self.work_buffer = try self.allocator.alloc(f32, self.max_layer_size * 4); // 4x for safety margin
             }
         }
-        
+
         return l;
     }
 
@@ -272,31 +272,43 @@ pub const Network = struct {
         try self.computeGradients(target, loss_fn);
 
         // Gradient clipping to prevent exploding gradients
-        const max_grad: f32 = 1.0;
+        const max_grad: f32 = 5.0;  // Increased from 1.0
         for (self.layers.items) |l| {
             for (l.grad_weights, 0..) |g, i| {
-                if (g > max_grad) l.grad_weights[i] = max_grad;
-                if (g < -max_grad) l.grad_weights[i] = -max_grad;
+                if (std.math.isNan(g)) {
+                    l.grad_weights[i] = 0.0;
+                } else if (g > max_grad) {
+                    l.grad_weights[i] = max_grad;
+                } else if (g < -max_grad) {
+                    l.grad_weights[i] = -max_grad;
+                }
             }
             for (l.grad_bias, 0..) |g, i| {
-                if (g > max_grad) l.grad_bias[i] = max_grad;
-                if (g < -max_grad) l.grad_bias[i] = -max_grad;
+                if (std.math.isNan(g)) {
+                    l.grad_bias[i] = 0.0;
+                } else if (g > max_grad) {
+                    l.grad_bias[i] = max_grad;
+                } else if (g < -max_grad) {
+                    l.grad_bias[i] = -max_grad;
+                }
             }
         }
 
-        // Update weights using simple gradient descent (SGD)
+        // Update weights using simple gradient descent (SGD) with L2 regularization
+        const weight_decay: f32 = 0.0001;  // L2 regularization
         for (self.layers.items) |l| {
-            for (l.weights, l.grad_weights, 0..) |_, grad, i| {
-                l.weights[i] -= learning_rate * grad;
-                // Lighter weight clipping to prevent extreme values
-                if (l.weights[i] > 10.0) l.weights[i] = 10.0;
-                if (l.weights[i] < -10.0) l.weights[i] = -10.0;
+            for (l.weights, l.grad_weights, 0..) |w, grad, i| {
+                // SGD with L2: w = w - lr * (grad + lambda * w)
+                l.weights[i] -= learning_rate * (grad + weight_decay * w);
+                // Relaxed weight clipping to allow better learning
+                if (l.weights[i] > 100.0) l.weights[i] = 100.0;
+                if (l.weights[i] < -100.0) l.weights[i] = -100.0;
             }
             for (l.bias, l.grad_bias, 0..) |_, grad, i| {
                 l.bias[i] -= learning_rate * grad;
-                // Lighter bias clipping to prevent extreme values
-                if (l.bias[i] > 5.0) l.bias[i] = 5.0;
-                if (l.bias[i] < -5.0) l.bias[i] = -5.0;
+                // Relaxed bias clipping to allow better learning
+                if (l.bias[i] > 50.0) l.bias[i] = 50.0;
+                if (l.bias[i] < -50.0) l.bias[i] = -50.0;
             }
         }
 
@@ -309,10 +321,10 @@ pub const Network = struct {
     pub fn trainBatch(self: *Network, batch_data: []const []const f32, batch_targets: []const []const f32, learning_rate: f32, loss_fn: loss.Loss) !f32 {
         if (batch_data.len == 0) return 0;
         if (batch_data.len != batch_targets.len) return error.BatchSizeMismatch;
-        
+
         const batch_size = batch_data.len;
         var total_loss: f32 = 0;
-        
+
         // Process each sample in batch and accumulate gradients
         for (batch_data, batch_targets) |sample, target| {
             // Use trainStep which handles gradient computation and weight update
@@ -327,7 +339,7 @@ pub const Network = struct {
     pub fn train(self: *Network, data: []const []const f32, targets: []const []const f32, epochs: usize, learning_rate: f32, loss_fn: loss.Loss) !void {
         // Note: Currently using sample-by-sample training for accuracy
         // Future optimization: implement true batch matrix operations for GPU
-        
+
         for (0..epochs) |epoch| {
             var total_loss: f32 = 0;
 
@@ -401,7 +413,7 @@ test "network training step" {
     _ = try net.addDense(4, 1, .sigmoid);
 
     const input: []const f32 = &.{ 0.5, 0.5 };
-    const target: []const f32 = &.{ 0.5 };
+    const target: []const f32 = &.{0.5};
     const loss_fn = loss.Loss{ .mse = {} };
 
     const loss_value = try net.trainStep(input, target, 0.1, loss_fn);
@@ -428,10 +440,10 @@ test "network full training convergence" {
         &.{ 1.0, 1.0 },
     };
     const training_targets = &[_][]const f32{
-        &.{ 0.0 },
-        &.{ 1.0 },
-        &.{ 1.0 },
-        &.{ 0.0 },
+        &.{0.0},
+        &.{1.0},
+        &.{1.0},
+        &.{0.0},
     };
 
     const loss_fn = loss.Loss{ .mse = {} };
@@ -456,7 +468,7 @@ test "network with optimizer" {
     _ = opt;
 
     const input: []const f32 = &.{ 0.5, 0.5 };
-    const target: []const f32 = &.{ 0.5 };
+    const target: []const f32 = &.{0.5};
     const loss_fn = loss.Loss{ .mse = {} };
 
     const loss_value = try net.trainStep(input, target, 0.1, loss_fn);

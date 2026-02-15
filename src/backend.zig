@@ -129,7 +129,7 @@ pub const Backend = union(enum) {
         // Lower threshold for GPU usage to leverage Metal parallelism more
         // Metal is highly optimized for Apple Silicon, so use it more aggressively
         const total_size = @as(usize, m) * n * k;
-        if (total_size < 512) {  // Reduced from 4096
+        if (total_size < 512) { // Reduced from 4096
             cpuMatMul(a, b, c, m, n, k);
             return;
         }
@@ -145,7 +145,7 @@ pub const Backend = union(enum) {
 
     fn metalActivationForward(act: activation.Activation, input: []f32, output: []f32) !void {
         // Lower threshold to leverage Metal GPU parallelism more aggressively
-        if (input.len < 64) {  // Reduced from 256
+        if (input.len < 64) { // Reduced from 256
             cpuActivationForward(act, input, output);
             return;
         }
@@ -157,7 +157,7 @@ pub const Backend = union(enum) {
 
     fn metalActivationBackward(act: activation.Activation, input: []const f32, grad_output: []const f32, grad_input: []f32) !void {
         // Lower threshold to leverage Metal GPU parallelism more aggressively
-        if (input.len < 64) {  // Reduced from 256
+        if (input.len < 64) { // Reduced from 256
             cpuActivationBackward(act, input, grad_output, grad_input);
             return;
         }
@@ -171,7 +171,7 @@ pub const Backend = union(enum) {
 
     fn metalLossBackward(loss_fn: loss.Loss, output: []const f32, target: []const f32, grad_output: []f32) !void {
         // Lower threshold to leverage Metal GPU parallelism more aggressively
-        if (output.len < 64) {  // Reduced from 256
+        if (output.len < 64) { // Reduced from 256
             cpuLossBackward(loss_fn, output, target, grad_output);
             return;
         }
@@ -277,12 +277,12 @@ pub const Backend = union(enum) {
                 for (output[1..]) |o| {
                     if (o > max_logit) max_logit = o;
                 }
-                
+
                 var sum_exp: f32 = 0;
                 for (output) |o| {
                     sum_exp += std.math.exp(o - max_logit);
                 }
-                
+
                 for (0..output.len) |i| {
                     const prob = std.math.exp(output[i] - max_logit) / sum_exp;
                     grad_output[i] = prob - target[i];
@@ -396,13 +396,13 @@ pub const Backend = union(enum) {
     fn cpuMatMul(a: []const f32, b: []const f32, c: []f32, m: usize, n: usize, k: usize) void {
         // Optimized matrix multiplication with cache-friendly access pattern
         // C = A * B where A is m×k, B is k×n, C is m×n
-        
+
         // Initialize output to zero
         @memset(c, 0);
-        
+
         // Use tiling/blocking for better cache utilization on larger matrices
         const block_size: usize = 32;
-        
+
         if (m >= block_size and n >= block_size and k >= block_size) {
             // Blocked matrix multiplication for large matrices
             var ii: usize = 0;
@@ -415,7 +415,7 @@ pub const Backend = union(enum) {
                         const i_end = @min(ii + block_size, m);
                         const j_end = @min(jj + block_size, n);
                         const k_end = @min(kk + block_size, k);
-                        
+
                         for (ii..i_end) |i| {
                             for (kk..k_end) |p| {
                                 const a_val = a[i * k + p];
@@ -485,12 +485,12 @@ pub const Backend = union(enum) {
                 for (output[1..]) |o| {
                     if (o > max_logit) max_logit = o;
                 }
-                
+
                 var sum_exp: f32 = 0;
                 for (output) |o| {
                     sum_exp += std.math.exp(o - max_logit);
                 }
-                
+
                 for (0..output.len) |i| {
                     const prob = std.math.exp(output[i] - max_logit) / sum_exp;
                     grad_output[i] = prob - target[i];

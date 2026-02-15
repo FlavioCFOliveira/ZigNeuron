@@ -6,8 +6,8 @@ const backend_module = @import("backend.zig");
 pub const Dense = struct {
     weights: []f32,
     bias: []f32,
-    grad_weights: []f32,  // Gradient buffer for weights
-    grad_bias: []f32,     // Gradient buffer for bias
+    grad_weights: []f32, // Gradient buffer for weights
+    grad_bias: []f32, // Gradient buffer for bias
     input_size: usize,
     output_size: usize,
     act: activation.Activation,
@@ -29,13 +29,13 @@ pub const Dense = struct {
         // He initialization for ReLU: std = sqrt(2/fan_in)
         // Xavier initialization for others: std = sqrt(2/(fan_in + fan_out))
         var seed: u32 = 12345;
-        
+
         const scale = switch (act) {
             .relu => @sqrt(2.0 / @as(f32, @floatFromInt(input_size))),
             .sigmoid, .tanh, .softmax => @sqrt(2.0 / @as(f32, @floatFromInt(input_size + output_size))),
             .linear => @sqrt(1.0 / @as(f32, @floatFromInt(input_size))),
         };
-        
+
         for (self.weights, 0..) |*w, i| {
             _ = i;
             // Simple LCG random with overflow handled using wrap-around addition
@@ -180,7 +180,7 @@ test "layer dense forward with backend" {
     lyr.weights[1] = 1.0;
     lyr.bias[0] = 0.0;
 
-    var input: [2]f32 = .{1.0, 1.0};
+    var input: [2]f32 = .{ 1.0, 1.0 };
     var output: [1]f32 = undefined;
     try lyr.forward(&input, &output);
 
@@ -198,7 +198,7 @@ test "layer dense backward with backend" {
     lyr.weights[1] = 1.0;
     lyr.bias[0] = 0.0;
 
-    var input: [2]f32 = .{1.0, 1.0};
+    var input: [2]f32 = .{ 1.0, 1.0 };
     var grad_output: [1]f32 = .{1.0};
     var grad_input: [2]f32 = undefined;
 
@@ -217,7 +217,7 @@ test "layer dense initialization" {
     var lyr = try Dense.init(allocator, 4, 8, .sigmoid, backend);
     defer lyr.deinit();
 
-    try std.testing.expect(lyr.weights.len == 32);  // 4 * 8
+    try std.testing.expect(lyr.weights.len == 32); // 4 * 8
     try std.testing.expect(lyr.bias.len == 8);
     try std.testing.expect(lyr.grad_weights.len == 32);
     try std.testing.expect(lyr.grad_bias.len == 8);

@@ -410,19 +410,19 @@ pub fn cpuLossBackward(loss_fn: anytype, output: []const f32, target: []const f3
         for (output[1..]) |o| {
             if (o > max_logit) max_logit = o;
         }
-        
+
         var sum_exp: f32 = 0;
         for (output) |o| {
             sum_exp += std.math.exp(o - max_logit);
         }
-        
+
         for (0..output.len) |i| {
             const prob = std.math.exp(output[i] - max_logit) / sum_exp;
             grad_output[i] = prob - target[i];
         }
         return;
     }
-    
+
     // Element-wise losses
     for (0..output.len) |i| {
         switch (loss_fn) {
@@ -438,7 +438,7 @@ pub fn cpuLossBackward(loss_fn: anytype, output: []const f32, target: []const f3
                 if (p > 1 - eps) p = 1 - eps;
                 grad_output[i] = -target[i] / p;
             },
-            .cross_entropy_logits => unreachable,  // Handled above
+            .cross_entropy_logits => unreachable, // Handled above
             .binary_cross_entropy => |loss| {
                 _ = loss;
                 const eps: f32 = 1e-8;
