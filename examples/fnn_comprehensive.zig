@@ -271,26 +271,32 @@ fn part3MulticlassClassification(allocator: std.mem.Allocator, backend: zn.backe
         const class_id = i / num_samples_per_class;
         const sample_in_class = i % num_samples_per_class;
 
-        // Generate features based on class
+        // Generate features based on class with better separation
+        // Using different base values for each class to make them more separable
         const base_features = [_]f32{
-            5.0 + @as(f32, @floatFromInt(class_id)) * 1.0,  // sepal length
-            3.0 + @as(f32, @floatFromInt(class_id)) * 0.5,  // sepal width
-            3.5 + @as(f32, @floatFromInt(class_id)) * 1.2,  // petal length
-            1.0 + @as(f32, @floatFromInt(class_id)) * 0.8,  // petal width
+            4.5 + @as(f32, @floatFromInt(class_id)) * 1.5,  // sepal length: 4.5-7.5
+            2.8 + @as(f32, @floatFromInt(class_id)) * 0.7,  // sepal width: 2.8-4.2
+            2.5 + @as(f32, @floatFromInt(class_id)) * 2.0,  // petal length: 2.5-6.5
+            0.8 + @as(f32, @floatFromInt(class_id)) * 1.2,  // petal width: 0.8-3.2
         };
 
-        // Normalize features to [0, 1] range
-        const normalized = [_]f32{
-            (base_features[0] - 5.0) / 2.0,   // Normalize to ~[0, 1]
-            (base_features[1] - 3.0) / 1.5,   // Normalize to ~[0, 1]
-            (base_features[2] - 3.5) / 3.0,   // Normalize to ~[0, 1]
-            (base_features[3] - 1.0) / 2.0,   // Normalize to ~[0, 1]
-        };
-
-        // Add noise
-        const noise = std.math.sin(@as(f32, @floatFromInt(sample_in_class))) * 0.2;
+        // Add structured noise based on sample index for variety
+        const noise1 = std.math.sin(@as(f32, @floatFromInt(sample_in_class)) * 0.1) * 0.3;
+        const noise2 = std.math.cos(@as(f32, @floatFromInt(sample_in_class)) * 0.15) * 0.3;
+        
+        // Normalize to [0, 1] range for better training stability
+        const feature_ranges = [_]f32{ 3.0, 1.4, 4.0, 2.4 };  // Approximate ranges
+        const feature_mins = [_]f32{ 4.5, 2.8, 2.5, 0.8 };
+        
         for (0..4) |j| {
-            sample[j] = normalized[j] + noise * 0.05;
+            // Add alternating noise to create variation within class
+            const noise = if (j % 2 == 0) noise1 else noise2;
+            const raw_value = base_features[j] + noise;
+            // Normalize to [0, 1]
+            sample[j] = (raw_value - feature_mins[j]) / feature_ranges[j];
+            // Clamp to valid range
+            if (sample[j] < 0) sample[j] = 0;
+            if (sample[j] > 1) sample[j] = 1;
         }
 
         // One-hot encoding
@@ -301,26 +307,43 @@ fn part3MulticlassClassification(allocator: std.mem.Allocator, backend: zn.backe
         targets[i] = target;
     }
 
-    // Create network: 4 -> 20 -> 10 -> 3 with softmax output
+    // Create network: 4 -> 20 -> 10 -> 3
+    // Important: Last layer uses LINEAR activation for logits (like PyTorch/TensorFlow)
     const network = try zn.network.Network.init(allocator, backend);
     defer network.deinit();
 
-    _ = try network.addDense(4, 10, .relu);
-    _ = try network.addDense(10, 5, .relu);
-    _ = try network.addDense(5, 3, .relu);  // Use ReLU for logits, apply softmax only during inference
+    _ = try network.addDense(4, 20, .relu);
+    _ = try network.addDense(20, 10, .relu);
+    _ = try network.addDense(10, 3, .linear);  // Linear output for logits
 
-    std.debug.print("Network architecture: 4 -> 10 -> 5 -> 3 (logits output)\n", .{});
-    std.debug.print("Loss function: Cross-Entropy\n\n", .{});
+    std.debug.print("Network architecture: 4 -> 20 -> 10 -> 3 (linear output for logits)\n", .{});
+    std.debug.print("Loss function: Cross-Entropy with Logits (softmax+CE combined)\n\n", .{});
 
     const softmax = zn.activation.Activation{ .softmax = {} };
 
-    // Training
-    const epochs: usize = 500;
-    const learning_rate: f32 = 0.005;
+    // Training - increase epochs for better convergence
+    const epochs: usize = 1000;
+    const learning_rate: f32 = 0.01;  // Increased from 0.005 for better convergence
 
-    const loss_fn = zn.loss.Loss{ .cross_entropy = {} };
+    // Use cross_entropy_logits which combines softmax + cross-entropy
+    // This is numerically stable and matches PyTorch's nn.CrossEntropyLoss
+    const loss_fn = zn.loss.Loss{ .cross_entropy_logits = {} };
 
     std.debug.print("Training for {} epochs...\n\n", .{epochs});
+
+    // Simple shuffle using deterministic swaps for better training
+    var seed: u32 = 42;
+    for (0..total_samples) |i| {
+        seed = seed +% 1664525 +% 1013904223;
+        const j = @as(usize, seed) % total_samples;
+        // Swap data[i] with data[j]
+        const temp_data = data[i];
+        const temp_target = targets[i];
+        data[i] = data[j];
+        targets[i] = targets[j];
+        data[j] = temp_data;
+        targets[j] = temp_target;
+    }
 
     // Train using manual loop to apply softmax for accuracy calculation
     for (0..epochs) |epoch| {
@@ -331,20 +354,16 @@ fn part3MulticlassClassification(allocator: std.mem.Allocator, backend: zn.backe
             const sample_loss = try network.trainStep(sample, target, learning_rate, loss_fn);
             total_loss += sample_loss;
 
-            // Calculate accuracy
+            // Calculate accuracy (only for display, not used in training)
             var output: [3]f32 = undefined;
             _ = try network.forward(sample, &output);
 
-            // Apply softmax for probability interpretation
-            var probs: [3]f32 = undefined;
-            try softmax.softmaxForward(&output, &probs);
-
-            // Find predicted class (argmax)
+            // Find predicted class (argmax of logits)
             var predicted_class: usize = 0;
-            var max_prob = probs[0];
-            for (probs, 0..) |p, j| {
-                if (p > max_prob) {
-                    max_prob = p;
+            var max_logit = output[0];
+            for (output, 0..) |o, j| {
+                if (o > max_logit) {
+                    max_logit = o;
                     predicted_class = j;
                 }
             }
@@ -366,17 +385,50 @@ fn part3MulticlassClassification(allocator: std.mem.Allocator, backend: zn.backe
         const avg_loss = total_loss / @as(f32, @floatFromInt(data.len));
         const accuracy = @as(f32, @floatFromInt(correct)) / @as(f32, @floatFromInt(data.len));
 
-        if (epoch % 100 == 0) {
+        if (epoch % 200 == 0) {
             std.debug.print("Epoch {}: Loss = {d:.4}, Accuracy = {d:.2}%\n", .{ epoch, avg_loss, accuracy * 100 });
         }
     }
 
     // Final evaluation with softmax probabilities
     std.debug.print("\nFinal Results with Softmax Probabilities:\n", .{});
-
-    for (0..5) |i| {
+    
+    // Calculate overall accuracy
+    var total_correct: usize = 0;
+    for (data, targets) |sample, target| {
         var output: [3]f32 = undefined;
-        _ = try network.forward(data[i], &output);
+        _ = try network.forward(sample, &output);
+        
+        var predicted_class: usize = 0;
+        var max_logit = output[0];
+        for (output, 0..) |o, j| {
+            if (o > max_logit) {
+                max_logit = o;
+                predicted_class = j;
+            }
+        }
+        
+        var true_class: usize = 0;
+        for (target, 0..) |t, j| {
+            if (t > 0.5) {
+                true_class = j;
+                break;
+            }
+        }
+        
+        if (predicted_class == true_class) {
+            total_correct += 1;
+        }
+    }
+    
+    const final_accuracy = @as(f32, @floatFromInt(total_correct)) / @as(f32, @floatFromInt(total_samples));
+    std.debug.print("Overall Test Accuracy: {d:.2}% ({}/{})\n\n", .{ final_accuracy * 100, total_correct, total_samples });
+
+    // Show examples from each class (samples at positions 0, 50, 100)
+    const sample_indices = [_]usize{ 0, 50, 100, 25, 75 };
+    for (sample_indices, 0..) |idx, i| {
+        var output: [3]f32 = undefined;
+        _ = try network.forward(data[idx], &output);
 
         // Apply softmax for probabilities
         var probs: [3]f32 = undefined;
@@ -394,7 +446,7 @@ fn part3MulticlassClassification(allocator: std.mem.Allocator, backend: zn.backe
 
         // Find true class
         var true_class: usize = 0;
-        for (targets[i], 0..) |t, j| {
+        for (targets[idx], 0..) |t, j| {
             if (t > 0.5) {
                 true_class = j;
                 break;
@@ -402,13 +454,14 @@ fn part3MulticlassClassification(allocator: std.mem.Allocator, backend: zn.backe
         }
 
         std.debug.print("  Sample {}: True class = {}\n", .{ i, true_class });
+        std.debug.print("    Features: [{d:.2}, {d:.2}, {d:.2}, {d:.2}]\n", .{ data[idx][0], data[idx][1], data[idx][2], data[idx][3] });
         std.debug.print("    Probabilities: [{d:.4}, {d:.4}, {d:.4}]\n", .{ probs[0], probs[1], probs[2] });
         std.debug.print("    Predicted class: {} (confidence: {d:.2}%)\n", .{ predicted_class, max_prob * 100 });
 
         if (predicted_class == true_class) {
-            std.debug.print("    Result: CORRECT\n", .{});
+            std.debug.print("    Result: ✓ CORRECT\n", .{});
         } else {
-            std.debug.print("    Result: WRONG\n", .{});
+            std.debug.print("    Result: ✗ WRONG\n", .{});
         }
     }
 }

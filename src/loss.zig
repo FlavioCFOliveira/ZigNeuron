@@ -3,7 +3,8 @@ const std = @import("std");
 
 pub const Loss = union(enum) {
     mse,  // Mean Squared Error
-    cross_entropy,
+    cross_entropy,  // Cross-entropy (expects pre-computed probabilities)
+    cross_entropy_logits,  // Cross-entropy with logits (combined softmax + cross-entropy)
     binary_cross_entropy,
 
     /// Compute loss value
@@ -13,6 +14,7 @@ pub const Loss = union(enum) {
         return switch (self) {
             .mse => self.mseForward(output, target),
             .cross_entropy => self.crossEntropyForward(output, target),
+            .cross_entropy_logits => self.crossEntropyLogitsForward(output, target),
             .binary_cross_entropy => self.binaryCrossEntropyForward(output, target),
         };
     }
@@ -25,6 +27,7 @@ pub const Loss = union(enum) {
         switch (self) {
             .mse => try self.mseBackward(output, target, grad_output),
             .cross_entropy => try self.crossEntropyBackward(output, target, grad_output),
+            .cross_entropy_logits => try self.crossEntropyLogitsBackward(output, target, grad_output),
             .binary_cross_entropy => try self.binaryCrossEntropyBackward(output, target, grad_output),
         }
     }
@@ -107,6 +110,61 @@ pub const Loss = union(enum) {
         // This is the derivative of the loss with respect to the logits
         for (output, target, grad_output, 0..) |o, t, _, i| {
             grad_output[i] = o - t;
+        }
+    }
+
+    /// Cross-entropy loss with logits (numerically stable)
+    /// This combines softmax + cross-entropy for numerical stability
+    /// Like PyTorch's nn.CrossEntropyLoss or TensorFlow's softmax_cross_entropy_with_logits
+    fn crossEntropyLogitsForward(self: Loss, logits: []const f32, target: []const f32) !f32 {
+        _ = self;
+        
+        // Find max logit for numerical stability (log-sum-exp trick)
+        var max_logit: f32 = logits[0];
+        for (logits[1..]) |logit| {
+            if (logit > max_logit) max_logit = logit;
+        }
+
+        // Compute log-sum-exp: log(sum(exp(logits - max)))
+        var sum_exp: f32 = 0;
+        for (logits) |logit| {
+            sum_exp += std.math.exp(logit - max_logit);
+        }
+        const log_sum_exp = @log(sum_exp) + max_logit;
+
+        // Compute cross-entropy: -sum(target * (logit - log_sum_exp))
+        // For one-hot targets, only the true class contributes
+        var loss: f32 = 0;
+        for (target, logits) |t, logit| {
+            if (t > 0.5) {  // One-hot encoding check
+                loss = -(logit - log_sum_exp);
+                break;
+            }
+        }
+
+        return loss;
+    }
+
+    /// Gradient of cross-entropy with logits
+    /// The beautiful property: d(softmax_cross_entropy)/d(logits) = softmax(logits) - target
+    fn crossEntropyLogitsBackward(self: Loss, logits: []const f32, target: []const f32, grad_output: []f32) !void {
+        _ = self;
+        
+        // Compute softmax(logits)
+        var max_logit: f32 = logits[0];
+        for (logits[1..]) |logit| {
+            if (logit > max_logit) max_logit = logit;
+        }
+
+        var sum_exp: f32 = 0;
+        for (logits) |logit| {
+            sum_exp += std.math.exp(logit - max_logit);
+        }
+
+        // Gradient is: softmax(logits) - target
+        for (logits, target, grad_output, 0..) |logit, t, _, i| {
+            const prob = std.math.exp(logit - max_logit) / sum_exp;
+            grad_output[i] = prob - t;
         }
     }
 

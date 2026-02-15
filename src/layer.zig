@@ -25,13 +25,24 @@ pub const Dense = struct {
         self.grad_weights = try allocator.alloc(f32, weight_count);
         self.grad_bias = try allocator.alloc(f32, output_size);
 
-        // Simple deterministic initialization - should be replaced with proper RNG
+        // Xavier/He initialization based on activation function
+        // He initialization for ReLU: std = sqrt(2/fan_in)
+        // Xavier initialization for others: std = sqrt(2/(fan_in + fan_out))
         var seed: u32 = 12345;
+        
+        const scale = switch (act) {
+            .relu => @sqrt(2.0 / @as(f32, @floatFromInt(input_size))),
+            .sigmoid, .tanh, .softmax => @sqrt(2.0 / @as(f32, @floatFromInt(input_size + output_size))),
+            .linear => @sqrt(1.0 / @as(f32, @floatFromInt(input_size))),
+        };
+        
         for (self.weights, 0..) |*w, i| {
             _ = i;
             // Simple LCG random with overflow handled using wrap-around addition
             seed = seed +% 1664525 +% 1013904223;
-            w.* = (@as(f32, @floatFromInt(@as(u8, @intCast(seed & 0xFF)))) / 255.0 * 0.2) - 0.1;
+            // Generate value in [-1, 1] range then scale
+            const rand_val = (@as(f32, @floatFromInt(@as(u8, @intCast(seed & 0xFF)))) / 127.5) - 1.0;
+            w.* = rand_val * scale;
         }
         for (self.bias) |*b| {
             b.* = 0;

@@ -126,10 +126,10 @@ pub const Backend = union(enum) {
             return error.NotAvailable;
         }
 
-        // For small matrices, CPU is often faster due to overhead
-        // Use GPU for larger matrices (threshold is approximate)
+        // Lower threshold for GPU usage to leverage Metal parallelism more
+        // Metal is highly optimized for Apple Silicon, so use it more aggressively
         const total_size = @as(usize, m) * n * k;
-        if (total_size < 4096) {
+        if (total_size < 512) {  // Reduced from 4096
             cpuMatMul(a, b, c, m, n, k);
             return;
         }
@@ -144,8 +144,8 @@ pub const Backend = union(enum) {
     }
 
     fn metalActivationForward(act: activation.Activation, input: []f32, output: []f32) !void {
-        // For small arrays, CPU is faster
-        if (input.len < 256) {
+        // Lower threshold to leverage Metal GPU parallelism more aggressively
+        if (input.len < 64) {  // Reduced from 256
             cpuActivationForward(act, input, output);
             return;
         }
@@ -156,7 +156,8 @@ pub const Backend = union(enum) {
     }
 
     fn metalActivationBackward(act: activation.Activation, input: []const f32, grad_output: []const f32, grad_input: []f32) !void {
-        if (input.len < 256) {
+        // Lower threshold to leverage Metal GPU parallelism more aggressively
+        if (input.len < 64) {  // Reduced from 256
             cpuActivationBackward(act, input, grad_output, grad_input);
             return;
         }
@@ -169,7 +170,8 @@ pub const Backend = union(enum) {
     }
 
     fn metalLossBackward(loss_fn: loss.Loss, output: []const f32, target: []const f32, grad_output: []f32) !void {
-        if (output.len < 256) {
+        // Lower threshold to leverage Metal GPU parallelism more aggressively
+        if (output.len < 64) {  // Reduced from 256
             cpuLossBackward(loss_fn, output, target, grad_output);
             return;
         }
@@ -266,6 +268,24 @@ pub const Backend = union(enum) {
                     if (p < eps) p = eps;
                     if (p > 1 - eps) p = 1 - eps;
                     grad_output[i] = -target[i] / p;
+                }
+            },
+            .cross_entropy_logits => {
+                // Gradient: softmax(logits) - target
+                // Compute softmax first
+                var max_logit: f32 = output[0];
+                for (output[1..]) |o| {
+                    if (o > max_logit) max_logit = o;
+                }
+                
+                var sum_exp: f32 = 0;
+                for (output) |o| {
+                    sum_exp += std.math.exp(o - max_logit);
+                }
+                
+                for (0..output.len) |i| {
+                    const prob = std.math.exp(output[i] - max_logit) / sum_exp;
+                    grad_output[i] = prob - target[i];
                 }
             },
             .binary_cross_entropy => {
@@ -374,15 +394,48 @@ pub const Backend = union(enum) {
     // ( fallbacks when no GPU available )
 
     fn cpuMatMul(a: []const f32, b: []const f32, c: []f32, m: usize, n: usize, k: usize) void {
-        // Standard matrix multiplication: C = A * B
-        // A is m×k, B is k×n, C is m×n
-        for (0..m) |i| {
-            for (0..n) |j| {
-                var sum: f32 = 0;
-                for (0..k) |p| {
-                    sum += a[i * k + p] * b[p * n + j];
+        // Optimized matrix multiplication with cache-friendly access pattern
+        // C = A * B where A is m×k, B is k×n, C is m×n
+        
+        // Initialize output to zero
+        @memset(c, 0);
+        
+        // Use tiling/blocking for better cache utilization on larger matrices
+        const block_size: usize = 32;
+        
+        if (m >= block_size and n >= block_size and k >= block_size) {
+            // Blocked matrix multiplication for large matrices
+            var ii: usize = 0;
+            while (ii < m) : (ii += block_size) {
+                var jj: usize = 0;
+                while (jj < n) : (jj += block_size) {
+                    var kk: usize = 0;
+                    while (kk < k) : (kk += block_size) {
+                        // Process block
+                        const i_end = @min(ii + block_size, m);
+                        const j_end = @min(jj + block_size, n);
+                        const k_end = @min(kk + block_size, k);
+                        
+                        for (ii..i_end) |i| {
+                            for (kk..k_end) |p| {
+                                const a_val = a[i * k + p];
+                                for (jj..j_end) |j| {
+                                    c[i * n + j] += a_val * b[p * n + j];
+                                }
+                            }
+                        }
+                    }
                 }
-                c[i * n + j] = sum;
+            }
+        } else {
+            // Simple version for small matrices
+            for (0..m) |i| {
+                for (0..k) |p| {
+                    const a_val = a[i * k + p];
+                    for (0..n) |j| {
+                        c[i * n + j] += a_val * b[p * n + j];
+                    }
+                }
             }
         }
     }
@@ -423,6 +476,24 @@ pub const Backend = union(enum) {
                     if (p < eps) p = eps;
                     if (p > 1 - eps) p = 1 - eps;
                     grad_output[i] = -target[i] / p;
+                }
+            },
+            .cross_entropy_logits => {
+                // Gradient: softmax(logits) - target
+                // Compute softmax first
+                var max_logit: f32 = output[0];
+                for (output[1..]) |o| {
+                    if (o > max_logit) max_logit = o;
+                }
+                
+                var sum_exp: f32 = 0;
+                for (output) |o| {
+                    sum_exp += std.math.exp(o - max_logit);
+                }
+                
+                for (0..output.len) |i| {
+                    const prob = std.math.exp(output[i] - max_logit) / sum_exp;
+                    grad_output[i] = prob - target[i];
                 }
             },
             .binary_cross_entropy => {

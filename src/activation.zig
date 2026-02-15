@@ -6,6 +6,7 @@ pub const Activation = union(enum) {
     sigmoid,
     tanh,
     softmax,
+    linear,  // Identity activation (no transformation)
 
     pub fn forward(self: Activation, x: f32) f32 {
         return switch (self) {
@@ -13,6 +14,7 @@ pub const Activation = union(enum) {
             .sigmoid => sigmoidForward(x),
             .tanh => tanhForward(x),
             .softmax => @panic("softmax forward not implemented for single value"),
+            .linear => x,  // Identity: f(x) = x
         };
     }
 
@@ -22,6 +24,7 @@ pub const Activation = union(enum) {
             .sigmoid => sigmoidBackward(x) * grad,
             .tanh => tanhBackward(x) * grad,
             .softmax => @panic("softmax backward not implemented for single value"),
+            .linear => grad,  // Derivative of identity is 1
         };
     }
 
