@@ -79,7 +79,7 @@ fn part1SinewaveRegression(allocator: std.mem.Allocator, backend: zn.backend.Bac
 
     _ = try network.addDense(1, 16, .tanh);
     _ = try network.addDense(16, 16, .tanh);
-    _ = try network.addDense(16, 1, .linear);  // Linear output for regression
+    _ = try network.addDense(16, 1, .linear); // Linear output for regression
 
     std.debug.print("Network architecture: 1 -> 16 -> 16 -> 1\n", .{});
     std.debug.print("Loss function: MSE\n", .{});
@@ -87,7 +87,7 @@ fn part1SinewaveRegression(allocator: std.mem.Allocator, backend: zn.backend.Bac
 
     // Training with SGD
     const epochs: usize = 1000;
-    const learning_rate: f32 = 0.01;  // Reduced from 0.1 to improve stability
+    const learning_rate: f32 = 0.01; // Reduced from 0.1 to improve stability
 
     std.debug.print("Training for {} epochs with learning rate {}...\n\n", .{ epochs, learning_rate });
 
@@ -118,7 +118,7 @@ fn part1SinewaveRegression(allocator: std.mem.Allocator, backend: zn.backend.Bac
 
     // Demonstrate single sample inference
     std.debug.print("\nSingle sample inference test:\n", .{});
-    const test_input: []const f32 = &.{ 0.5 };
+    const test_input: []const f32 = &.{0.5};
     var test_output: [1]f32 = undefined;
     _ = try network.forward(test_input, &test_output);
     std.debug.print("  Input: 0.5 -> Output: {d:.4}\n", .{test_output[0]});
@@ -126,7 +126,7 @@ fn part1SinewaveRegression(allocator: std.mem.Allocator, backend: zn.backend.Bac
     // Demonstrate batch inference
     std.debug.print("\nBatch inference test (5 samples):\n", .{});
     const batch_inputs = [_][]const f32{
-        &.{ 0.0 }, &.{ 0.25 }, &.{ 0.5 }, &.{ 0.75 }, &.{ 1.0 },
+        &.{0.0}, &.{0.25}, &.{0.5}, &.{0.75}, &.{1.0},
     };
     var batch_outputs: [5][1]f32 = undefined;
 
@@ -200,7 +200,7 @@ fn part2BinaryClassification(allocator: std.mem.Allocator, backend: zn.backend.B
     const network = try zn.network.Network.init(allocator, backend);
     defer network.deinit();
 
-    _ = try network.addDense(2, 16, .tanh);  // Tanh for better gradient flow
+    _ = try network.addDense(2, 16, .tanh); // Tanh for better gradient flow
     _ = try network.addDense(16, 1, .sigmoid);
 
     std.debug.print("Network architecture: 2 -> 16 -> 1 (sigmoid output)\n", .{});
@@ -209,7 +209,7 @@ fn part2BinaryClassification(allocator: std.mem.Allocator, backend: zn.backend.B
 
     // Training with SGD
     const epochs: usize = 500;
-    const learning_rate: f32 = 0.01;  // Increased from 0.0001
+    const learning_rate: f32 = 0.01; // Increased from 0.0001
 
     const loss_fn = zn.loss.Loss{ .binary_cross_entropy = {} };
 
@@ -265,7 +265,7 @@ fn part3MulticlassClassification(allocator: std.mem.Allocator, backend: zn.backe
 
     for (0..total_samples) |i| {
         const sample = try allocator.alloc(f32, 4);
-        const target = try allocator.alloc(f32, 3);  // One-hot encoding
+        const target = try allocator.alloc(f32, 3); // One-hot encoding
 
         const class_id = i / num_samples_per_class;
         const sample_in_class = i % num_samples_per_class;
@@ -273,20 +273,20 @@ fn part3MulticlassClassification(allocator: std.mem.Allocator, backend: zn.backe
         // Generate features based on class with better separation
         // Using different base values for each class to make them more separable
         const base_features = [_]f32{
-            4.5 + @as(f32, @floatFromInt(class_id)) * 1.5,  // sepal length: 4.5-7.5
-            2.8 + @as(f32, @floatFromInt(class_id)) * 0.7,  // sepal width: 2.8-4.2
-            2.5 + @as(f32, @floatFromInt(class_id)) * 2.0,  // petal length: 2.5-6.5
-            0.8 + @as(f32, @floatFromInt(class_id)) * 1.2,  // petal width: 0.8-3.2
+            4.5 + @as(f32, @floatFromInt(class_id)) * 1.5, // sepal length: 4.5-7.5
+            2.8 + @as(f32, @floatFromInt(class_id)) * 0.7, // sepal width: 2.8-4.2
+            2.5 + @as(f32, @floatFromInt(class_id)) * 2.0, // petal length: 2.5-6.5
+            0.8 + @as(f32, @floatFromInt(class_id)) * 1.2, // petal width: 0.8-3.2
         };
 
         // Add structured noise based on sample index for variety
         const noise1 = std.math.sin(@as(f32, @floatFromInt(sample_in_class)) * 0.1) * 0.3;
         const noise2 = std.math.cos(@as(f32, @floatFromInt(sample_in_class)) * 0.15) * 0.3;
-        
+
         // Normalize to [0, 1] range for better training stability
-        const feature_ranges = [_]f32{ 3.0, 1.4, 4.0, 2.4 };  // Approximate ranges
+        const feature_ranges = [_]f32{ 3.0, 1.4, 4.0, 2.4 }; // Approximate ranges
         const feature_mins = [_]f32{ 4.5, 2.8, 2.5, 0.8 };
-        
+
         for (0..4) |j| {
             // Add alternating noise to create variation within class
             const noise = if (j % 2 == 0) noise1 else noise2;
@@ -311,8 +311,8 @@ fn part3MulticlassClassification(allocator: std.mem.Allocator, backend: zn.backe
     const network = try zn.network.Network.init(allocator, backend);
     defer network.deinit();
 
-    _ = try network.addDense(4, 8, .tanh);  // Tanh for bounded activations
-    _ = try network.addDense(8, 3, .linear);  // Linear output for logits
+    _ = try network.addDense(4, 8, .tanh); // Tanh for bounded activations
+    _ = try network.addDense(8, 3, .linear); // Linear output for logits
 
     std.debug.print("Network architecture: 4 -> 8 -> 3 (linear output for logits)\n", .{});
     std.debug.print("Loss function: Cross-Entropy with Logits\n\n", .{});
@@ -320,9 +320,9 @@ fn part3MulticlassClassification(allocator: std.mem.Allocator, backend: zn.backe
     const softmax = zn.activation.Activation{ .softmax = {} };
 
     // Split data into train (80%) and test (20%)
-    const train_size = (total_samples * 80) / 100;  // 120 samples
-    const test_size = total_samples - train_size;    // 30 samples
-    
+    const train_size = (total_samples * 80) / 100; // 120 samples
+    const test_size = total_samples - train_size; // 30 samples
+
     // Shuffle before splitting
     var seed: u32 = 42;
     for (0..total_samples) |i| {
@@ -335,18 +335,18 @@ fn part3MulticlassClassification(allocator: std.mem.Allocator, backend: zn.backe
         data[j] = temp_data;
         targets[j] = temp_target;
     }
-    
+
     // Create separate slices for train and test
     const train_data = data[0..train_size];
     const train_targets = targets[0..train_size];
     const test_data = data[train_size..];
     const test_targets = targets[train_size..];
-    
-    std.debug.print("Train set: {} samples | Test set: {} samples\n", .{train_size, test_size});
 
-    // Training with increased epochs for better convergence  
+    std.debug.print("Train set: {} samples | Test set: {} samples\n", .{ train_size, test_size });
+
+    // Training with increased epochs for better convergence
     const epochs: usize = 2000;
-    const learning_rate: f32 = 0.001;  // Very small for stability
+    const learning_rate: f32 = 0.001; // Very small for stability
 
     const loss_fn = zn.loss.Loss{ .cross_entropy_logits = {} };
 
@@ -356,7 +356,7 @@ fn part3MulticlassClassification(allocator: std.mem.Allocator, backend: zn.backe
     var best_test_acc: f32 = 0;
     var patience_counter: usize = 0;
     const patience: usize = 200;
-    
+
     for (0..epochs) |epoch| {
         var total_loss: f32 = 0;
         var correct: usize = 0;
@@ -401,7 +401,7 @@ fn part3MulticlassClassification(allocator: std.mem.Allocator, backend: zn.backe
             for (test_data, test_targets) |sample, target| {
                 var output: [3]f32 = undefined;
                 _ = try network.forward(sample, &output);
-                
+
                 var predicted_class: usize = 0;
                 var max_logit = output[0];
                 for (output, 0..) |o, j| {
@@ -410,21 +410,21 @@ fn part3MulticlassClassification(allocator: std.mem.Allocator, backend: zn.backe
                         predicted_class = j;
                     }
                 }
-                
+
                 var true_class: usize = 0;
                 for (target, 0..) |t, j| {
                     if (t > 0.5) {
                         true_class = j;
-                    break;
+                        break;
+                    }
                 }
-                }
-                
+
                 if (predicted_class == true_class) {
                     test_correct += 1;
                 }
             }
             const test_accuracy = @as(f32, @floatFromInt(test_correct)) / @as(f32, @floatFromInt(test_data.len));
-            
+
             // Early stopping check
             if (test_accuracy > best_test_acc) {
                 best_test_acc = test_accuracy;
@@ -432,22 +432,22 @@ fn part3MulticlassClassification(allocator: std.mem.Allocator, backend: zn.backe
             } else {
                 patience_counter += 100;
             }
-            
+
             std.debug.print("Epoch {}: Loss = {d:.4}, Train Acc = {d:.2}%, Test Acc = {d:.2}%\n", .{ epoch, avg_loss, train_accuracy * 100, test_accuracy * 100 });
-            
+
             if (patience_counter >= patience) {
                 std.debug.print("\nEarly stopping at epoch {}! Best test accuracy: {d:.2}%\n", .{ epoch, best_test_acc * 100 });
                 break;
             }
         }
-    }    // Final evaluation on train set
+    } // Final evaluation on train set
     std.debug.print("\nFinal Training Set Results:\n", .{});
-    
+
     var train_correct: usize = 0;
     for (train_data, train_targets) |sample, target| {
         var output: [3]f32 = undefined;
         _ = try network.forward(sample, &output);
-        
+
         var predicted_class: usize = 0;
         var max_logit = output[0];
         for (output, 0..) |o, j| {
@@ -456,7 +456,7 @@ fn part3MulticlassClassification(allocator: std.mem.Allocator, backend: zn.backe
                 predicted_class = j;
             }
         }
-        
+
         var true_class: usize = 0;
         for (target, 0..) |t, j| {
             if (t > 0.5) {
@@ -464,23 +464,23 @@ fn part3MulticlassClassification(allocator: std.mem.Allocator, backend: zn.backe
                 break;
             }
         }
-        
+
         if (predicted_class == true_class) {
             train_correct += 1;
         }
     }
-    
+
     const train_final_accuracy = @as(f32, @floatFromInt(train_correct)) / @as(f32, @floatFromInt(train_size));
     std.debug.print("Training Set Accuracy: {d:.2}% ({}/{})\n", .{ train_final_accuracy * 100, train_correct, train_size });
 
     // Final evaluation on test set
     std.debug.print("\nFinal Test Set Results:\n", .{});
-    
+
     var test_correct: usize = 0;
     for (test_data, test_targets) |sample, target| {
         var output: [3]f32 = undefined;
         _ = try network.forward(sample, &output);
-        
+
         var predicted_class: usize = 0;
         var max_logit = output[0];
         for (output, 0..) |o, j| {
@@ -489,7 +489,7 @@ fn part3MulticlassClassification(allocator: std.mem.Allocator, backend: zn.backe
                 predicted_class = j;
             }
         }
-        
+
         var true_class: usize = 0;
         for (target, 0..) |t, j| {
             if (t > 0.5) {
@@ -497,12 +497,12 @@ fn part3MulticlassClassification(allocator: std.mem.Allocator, backend: zn.backe
                 break;
             }
         }
-        
+
         if (predicted_class == true_class) {
             test_correct += 1;
         }
     }
-    
+
     const test_final_accuracy = @as(f32, @floatFromInt(test_correct)) / @as(f32, @floatFromInt(test_size));
     std.debug.print("Test Set Accuracy: {d:.2}% ({}/{})\n\n", .{ test_final_accuracy * 100, test_correct, test_size });
 

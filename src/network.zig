@@ -272,7 +272,7 @@ pub const Network = struct {
         try self.computeGradients(target, loss_fn);
 
         // Gradient clipping to prevent exploding gradients
-        const max_grad: f32 = 5.0;  // Increased from 1.0
+        const max_grad: f32 = 5.0; // Increased from 1.0
         for (self.layers.items) |l| {
             for (l.grad_weights, 0..) |g, i| {
                 if (std.math.isNan(g)) {
@@ -295,7 +295,7 @@ pub const Network = struct {
         }
 
         // Update weights using simple gradient descent (SGD) with L2 regularization
-        const weight_decay: f32 = 0.0001;  // L2 regularization
+        const weight_decay: f32 = 0.0001; // L2 regularization
         for (self.layers.items) |l| {
             for (l.weights, l.grad_weights, 0..) |w, grad, i| {
                 // SGD with L2: w = w - lr * (grad + lambda * w)
