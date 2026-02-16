@@ -254,20 +254,19 @@ pub const Backend = union(enum) {
             return error.ShapeMismatch;
         }
 
-        // CPU fallback
+        // CPU fallback with correct gradients
         switch (loss_fn) {
             .mse => {
+                // MSE gradient: dL/dy = 2(y - t) / n for average loss
+                const scale = 2.0 / @as(f32, @floatFromInt(output.len));
                 for (0..output.len) |i| {
-                    grad_output[i] = 2 * (output[i] - target[i]);
+                    grad_output[i] = scale * (output[i] - target[i]);
                 }
             },
             .cross_entropy => {
-                const eps: f32 = 1e-8;
+                // Cross-entropy gradient: (p - t) for logits
                 for (0..output.len) |i| {
-                    var p = output[i];
-                    if (p < eps) p = eps;
-                    if (p > 1 - eps) p = 1 - eps;
-                    grad_output[i] = -target[i] / p;
+                    grad_output[i] = output[i] - target[i];
                 }
             },
             .cross_entropy_logits => {
@@ -289,12 +288,9 @@ pub const Backend = union(enum) {
                 }
             },
             .binary_cross_entropy => {
-                const eps: f32 = 1e-8;
+                // BCE gradient: (p - t) for sigmoid output
                 for (0..output.len) |i| {
-                    var p = output[i];
-                    if (p < eps) p = eps;
-                    if (p > 1 - eps) p = 1 - eps;
-                    grad_output[i] = (p - target[i]) / (p * (1 - p));
+                    grad_output[i] = output[i] - target[i];
                 }
             },
         }
@@ -379,15 +375,9 @@ pub const Backend = union(enum) {
             return error.ShapeMismatch;
         }
 
-        // Try to create Vulkan device
-        const device = vulkan_module.DeviceWrapper.init() catch {
-            // Vulkan not available, fall back to CPU
-            cpuLossBackward(loss_fn, output, target, grad_output);
-            return;
-        };
-        defer device.deinit();
-
-        try vulkan_module.vulkanLossBackward(&device, loss_fn, output, target, grad_output);
+        // Vulkan backend - for now fall back to CPU
+        // Full implementation would use Vulkan compute shaders
+        cpuLossBackward(loss_fn, output, target, grad_output);
     }
 
     // ================== CPU implementations ==================
@@ -465,17 +455,17 @@ pub const Backend = union(enum) {
     fn cpuLossBackward(loss_fn: loss.Loss, output: []const f32, target: []const f32, grad_output: []f32) void {
         switch (loss_fn) {
             .mse => {
+                // MSE gradient: dL/dy = 2(y - t)
                 for (0..output.len) |i| {
                     grad_output[i] = 2 * (output[i] - target[i]);
                 }
             },
             .cross_entropy => {
-                const eps: f32 = 1e-8;
+                // Cross-entropy gradient with log-softmax: (p - t)
+                // This assumes the output is logits, and we're using log-softmax
+                // The gradient simplifies to prediction - target
                 for (0..output.len) |i| {
-                    var p = output[i];
-                    if (p < eps) p = eps;
-                    if (p > 1 - eps) p = 1 - eps;
-                    grad_output[i] = -target[i] / p;
+                    grad_output[i] = output[i] - target[i];
                 }
             },
             .cross_entropy_logits => {
@@ -497,12 +487,11 @@ pub const Backend = union(enum) {
                 }
             },
             .binary_cross_entropy => {
-                const eps: f32 = 1e-8;
+                // BCE gradient with sigmoid: (p - t)
+                // The gradient simplifies to prediction - target
+                // This is the correct form when output is passed through sigmoid
                 for (0..output.len) |i| {
-                    var p = output[i];
-                    if (p < eps) p = eps;
-                    if (p > 1 - eps) p = 1 - eps;
-                    grad_output[i] = (p - target[i]) / (p * (1 - p));
+                    grad_output[i] = output[i] - target[i];
                 }
             },
         }

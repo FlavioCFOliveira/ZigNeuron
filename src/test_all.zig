@@ -2,19 +2,48 @@
 const std = @import("std");
 const testing = std.testing;
 
-const activation = @import("activation.zig");
-const loss = @import("loss.zig");
-const layer = @import("layer.zig");
-const network = @import("network.zig");
-const optimizer = @import("optimizer.zig");
-const backend = @import("backend.zig");
+const zn = @import("ZigNeuron");
+const activation = zn.activation;
+const loss = zn.loss;
+const layer = zn.layer;
+const network = zn.network;
+const backend = zn.backend;
+const optimizer = zn.optimizer;
+const vulkan = zn.vulkan;
+
+// Test modules from src/test/
+const unit_activation = @import("test/unit/activation.zig");
+const unit_loss = @import("test/unit/loss.zig");
+const unit_layer = @import("test/unit/layer.zig");
+const unit_optimizer = @import("test/unit/optimizer.zig");
+const unit_backend = @import("test/unit/backend.zig");
+
+const arch_perceptron = @import("test/architecture/perceptron.zig");
+const arch_deep_fnn = @import("test/architecture/deep_fnn.zig");
+const arch_classification = @import("test/architecture/classification.zig");
+const arch_regression = @import("test/architecture/regression.zig");
+
+const conv_xor = @import("test/convergence/xor.zig");
+const conv_linear = @import("test/convergence/linear.zig");
+const conv_quadratic = @import("test/convergence/quadratic.zig");
+const conv_sin = @import("test/convergence/sinusoidal.zig");
+const conv_functions = @import("test/convergence/functions.zig");
+
+const opt_sgd = @import("test/optimizer/sgd.zig");
+const opt_adam = @import("test/optimizer/adam.zig");
+const opt_rmsprop = @import("test/optimizer/rmsprop.zig");
+
+const num_stability = @import("test/numerical/stability.zig");
+const num_precision = @import("test/numerical/precision.zig");
+
+const mem_leak = @import("test/memory/leak.zig");
 
 fn expectNear(actual: f32, expected: f32, tolerance: f32) !void {
     const diff = if (actual > expected) actual - expected else expected - actual;
     if (diff > tolerance) return error.ApproximationFailed;
 }
 
-// Activation Tests
+// Activation Tests - existing tests from src/
 test "activation relu forward" {
     const act = activation.Activation{ .relu = {} };
     try expectNear(act.forward(1.0), 1.0, 0.0001);
@@ -75,10 +104,12 @@ test "activation softmax backward" {
     var grad_input: [2]f32 = undefined;
 
     try act.softmaxBackward(&input, &grad_output, &grad_input);
-    try expectNear(grad_input[0] + grad_input[1], 0.0, 0.0001);
+    var grad_sum: f32 = 0;
+    for (grad_input) |g| grad_sum += g;
+    try expectNear(grad_sum, 0.0, 0.0001);
 }
 
-// Loss Tests
+// Loss Tests - existing tests from src/
 test "loss mse forward" {
     const loss_fn = loss.Loss{ .mse = {} };
     var output: [3]f32 = .{1.0, 2.0, 3.0};
@@ -116,7 +147,7 @@ test "loss binary cross entropy forward" {
     _ = result;
 }
 
-// Layer Tests
+// Layer Tests - existing tests from src/
 test "layer dense forward" {
     const allocator = testing.allocator;
     var lyr = try layer.Dense.init(allocator, 2, 1, .relu, backend.Backend{ .cpu = {} });
@@ -239,8 +270,8 @@ test "memory: Optimizer training" {
     _ = try net.addDense(8, 1, .relu);
 
     // Create optimizer - this is the basic test for optimizer functionality
-    const opt = optimizer.Optimizer{ .sgd = optimizer.Sgd{} };
-    _ = opt;
+    const optz = optimizer.Optimizer{ .sgd = optimizer.Sgd{} };
+    _ = optz;
 
     const input: []const f32 = &.{ 0.1, 0.2, 0.3, 0.4 };
     const target: []const f32 = &.{ 0.5 };
@@ -277,10 +308,10 @@ test "memory: Softmax no extra allocations" {
 
 // ================== Vulkan Backend Tests ==================
 
+const vkmod = vulkan;
+
 // Test Vulkan device initialization
 test "vulkan: device init" {
-    const vkmod = @import("vulkan.zig");
-
     // Try to create Vulkan device
     // If Vulkan is not available, this test should still pass (fails gracefully)
     const device = vkmod.DeviceWrapper.init() catch return;
@@ -288,16 +319,12 @@ test "vulkan: device init" {
 }
 
 test "vulkan: device cleanup" {
-    const vkmod = @import("vulkan.zig");
-
     const device = vkmod.DeviceWrapper.init() catch return;
     // Deinit should not panic
     device.deinit();
 }
 
 test "vulkan: buffer creation" {
-    const vkmod = @import("vulkan.zig");
-
     const device = vkmod.DeviceWrapper.init() catch return;
     defer device.deinit();
 
@@ -307,8 +334,6 @@ test "vulkan: buffer creation" {
 }
 
 test "vulkan: buffer write and read" {
-    const vkmod = @import("vulkan.zig");
-
     const device = vkmod.DeviceWrapper.init() catch return;
     defer device.deinit();
 
@@ -321,8 +346,6 @@ test "vulkan: buffer write and read" {
 }
 
 test "vulkan: descriptor set layout" {
-    const vkmod = @import("vulkan.zig");
-
     const device = vkmod.DeviceWrapper.init() catch return;
     defer device.deinit();
 
@@ -331,8 +354,6 @@ test "vulkan: descriptor set layout" {
 }
 
 test "vulkan: pipeline layout" {
-    const vkmod = @import("vulkan.zig");
-
     const device = vkmod.DeviceWrapper.init() catch return;
     defer device.deinit();
 
@@ -344,8 +365,6 @@ test "vulkan: pipeline layout" {
 }
 
 test "vulkan: shader module" {
-    const vkmod = @import("vulkan.zig");
-
     const device = vkmod.DeviceWrapper.init() catch return;
     defer device.deinit();
 
@@ -503,3 +522,7 @@ test "vulkan: precision comparison CPU vs expected" {
     // Loss should decrease (network is learning) - or NaN if invalid
     try std.testing.expect(loss2 < loss1 or std.math.isNan(loss2));
 }
+
+// ================== Run all imported test modules ==================
+
+// Test modules are automatically discovered by Zig - no need to call .run()
