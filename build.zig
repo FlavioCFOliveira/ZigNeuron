@@ -175,4 +175,23 @@ pub fn build(b: *std.Build) void {
         const vulkan_step = b.step("vulkan", "Check Vulkan compilation");
         vulkan_step.dependOn(compile_shaders_step);
     }
+
+    // Performance test executable
+    const perf_test_module = std.Build.Module.create(b, .{
+        .root_source_file = b.path("src/test_performance.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    perf_test_module.addImport("ZigNeuron", lib_module);
+
+    const perf_exe = b.addExecutable(.{
+        .name = "test_performance",
+        .root_module = perf_test_module,
+    });
+
+    b.installArtifact(perf_exe);
+
+    const run_perf = b.addRunArtifact(perf_exe);
+    const perf_step = b.step("test-performance", "Run performance comparison tests");
+    perf_step.dependOn(&run_perf.step);
 }
