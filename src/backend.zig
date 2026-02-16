@@ -218,6 +218,21 @@ pub const Backend = union(enum) {
         try metalLossBackwardGPU(loss_fn, output, target, grad_output);
     }
 
+    /// GPU implementation of batched matrix multiplication using Metal
+    fn metalMatMulBatchGPU(a: []const f32, b: []const f32, c: []f32, batch_size: usize, n: usize, k: usize) !void {
+        // Metal implementation for batched operations
+        // Batched operations are highly efficient on GPU
+
+        // Validate matrix dimensions
+        if (a.len < batch_size * k) return error.BufferTooSmall;
+        if (b.len < k * n) return error.BufferTooSmall;
+        if (c.len < batch_size * n) return error.BufferTooSmall;
+
+        // For now, use optimized CPU implementation
+        // In production, this would use Metal compute shaders with batch dimension
+        cpuMatMulBatch(a, b, c, batch_size, n, k);
+    }
+
     /// GPU implementation of matrix multiplication using Metal
     fn metalMatMulGPU(a: []const f32, b: []const f32, c: []f32, m: usize, n: usize, k: usize) !void {
         // Metal implementation for Apple Silicon
@@ -442,57 +457,6 @@ pub const Backend = union(enum) {
 
     // ================== CPU implementations ==================
     // ( fallbacks when no GPU available )
-
-    fn cpuMatMulBatch(a: []const f32, b: []const f32, c: []f32, batch_size: usize, n: usize, k: usize) void {
-        // Optimized batched matrix multiplication
-        // Each batch element: a[batch] (1xk) * b (kxn) = c[batch] (1xn)
-
-        // Use tiling/blocking for better cache utilization
-        const block_size: usize = 64;
-
-        if (batch_size >= block_size and n >= block_size and k >= block_size) {
-            // Blocked batched multiplication
-            var bb: usize = 0;
-            while (bb < batch_size) : (bb += block_size) {
-                var jj: usize = 0;
-                while (jj < n) : (jj += block_size) {
-                    var kk: usize = 0;
-                    while (kk < k) : (kk += block_size) {
-                        const b_end = @min(bb + block_size, batch_size);
-                        const j_end = @min(jj + block_size, n);
-                        const k_end = @min(kk + block_size, k);
-
-                        for (bb..b_end) |batch_idx| {
-                            const a_offset = batch_idx * k;
-                            const c_offset = batch_idx * n;
-
-                            for (jj..j_end) |j| {
-                                var sum: f32 = 0.0;
-                                for (kk..k_end) |p| {
-                                    sum += a[a_offset + p] * b[p * n + j];
-                                }
-                                c[c_offset + j] = sum;
-                            }
-                        }
-                    }
-                }
-            }
-        } else {
-            // Simple batched multiplication
-            for (0..batch_size) |batch_idx| {
-                const a_offset = batch_idx * k;
-                const c_offset = batch_idx * n;
-
-                for (0..n) |j| {
-                    var sum: f32 = 0.0;
-                    for (0..k) |p| {
-                        sum += a[a_offset + p] * b[p * n + j];
-                    }
-                    c[c_offset + j] = sum;
-                }
-            }
-        }
-    }
 
     fn cpuMatMul(a: []const f32, b: []const f32, c: []f32, m: usize, n: usize, k: usize) void {
         // Optimized matrix multiplication with cache-friendly access pattern
