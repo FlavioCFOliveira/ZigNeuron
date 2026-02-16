@@ -12,7 +12,7 @@ const loss = zn.loss;
 const optimizer = zn.optimizer;
 
 test "optimizer rmsprop: basic structure" {
-    var rmsprop: optimizer.Rmsprop = .{};
+    const rmsprop: optimizer.Rmsprop = .{};
 
     try testing.expect(rmsprop.rho == 0.9);
     try testing.expect(rmsprop.eps == 1e-8);

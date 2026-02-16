@@ -12,7 +12,7 @@ const loss = zn.loss;
 const optimizer = zn.optimizer;
 
 test "optimizer sgd: basic structure" {
-    var sgd: optimizer.Sgd = .{};
+    const sgd: optimizer.Sgd = .{};
 
     try testing.expect(sgd.momentum == 0.0);
     try testing.expect(sgd.velocity_weights == null);

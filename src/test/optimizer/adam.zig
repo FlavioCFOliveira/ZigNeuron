@@ -12,7 +12,7 @@ const loss = zn.loss;
 const optimizer = zn.optimizer;
 
 test "optimizer adam: basic structure" {
-    var adam: optimizer.Adam = .{};
+    const adam: optimizer.Adam = .{};
 
     try testing.expect(adam.beta1 == 0.9);
     try testing.expect(adam.beta2 == 0.999);
