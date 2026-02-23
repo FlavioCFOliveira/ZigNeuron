@@ -11,6 +11,7 @@ pub const MetalContext = struct {
     library: *anyopaque,
     active_command_buffer: ?metal.MTLCommandBuffer = null,
     temp_resources: std.ArrayListUnmanaged(metal.MTLBuffer),
+    buffer_pool: std.AutoHashMap(usize, std.ArrayListUnmanaged(metal.MTLBuffer)),
 
     pub fn init(allocator: std.mem.Allocator) !*MetalContext {
         const self = try allocator.create(MetalContext);
@@ -26,12 +27,23 @@ pub const MetalContext = struct {
         self.temp_resources = .{};
         errdefer self.temp_resources.deinit(self.allocator);
 
+        self.buffer_pool = std.AutoHashMap(usize, std.ArrayListUnmanaged(metal.MTLBuffer)).init(allocator);
+        errdefer {
+            var it = self.buffer_pool.valueIterator();
+            while (it.next()) |list| {
+                for (list.items) |buf| buf.release();
+                list.deinit(self.allocator);
+            }
+            self.buffer_pool.deinit();
+        }
+
         // Load Metal shaders from source (runtime compilation)
         const shader_paths = [_][]const u8{
             "shaders/metal/matmul.metal",
             "shaders/metal/activation.metal",
             "shaders/metal/loss.metal",
             "shaders/metal/optimizer.metal",
+            "shaders/metal/recurrent.metal",
         };
 
         var sources = [_][]const u8{""} ** shader_paths.len;
@@ -84,11 +96,37 @@ pub const MetalContext = struct {
         try self.registerPipeline("mse_backward");
         try self.registerPipeline("cross_entropy_backward");
         try self.registerPipeline("binary_cross_entropy_backward");
+        try self.registerPipeline("kl_divergence_backward");
 
         // Optimizer kernels
         try self.registerPipeline("sgd_update");
         try self.registerPipeline("sgd_update_bias");
         try self.registerPipeline("accumulate_bias");
+
+        // Recurrent kernels
+        try self.registerPipeline("lstm_forward_step");
+        try self.registerPipeline("gru_forward_step");
+        try self.registerPipeline("lstm_backward_step");
+        try self.registerPipeline("gru_backward_step");
+        try self.registerPipeline("rnn_forward_step");
+        try self.registerPipeline("rnn_backward_step");
+
+        // Map kernels
+        try self.registerPipeline("map_exp");
+        try self.registerPipeline("map_log");
+        try self.registerPipeline("map_sqrt");
+        try self.registerPipeline("map_abs");
+        try self.registerPipeline("map_square");
+        try self.registerPipeline("map_inv");
+
+        // Element-wise kernels
+        try self.registerPipeline("ew_add");
+        try self.registerPipeline("ew_sub");
+        try self.registerPipeline("ew_mul");
+        try self.registerPipeline("ew_div");
+
+        // Random kernels
+        try self.registerPipeline("fill_random_normal");
 
         return self;
     }
@@ -96,6 +134,13 @@ pub const MetalContext = struct {
     pub fn deinit(self: *MetalContext) void {
         for (self.temp_resources.items) |res| res.release();
         self.temp_resources.deinit(self.allocator);
+
+        var pool_it = self.buffer_pool.valueIterator();
+        while (pool_it.next()) |list| {
+            for (list.items) |buf| buf.release();
+            list.deinit(self.allocator);
+        }
+        self.buffer_pool.deinit();
 
         var it = self.pipelines.valueIterator();
         while (it.next()) |p| p.release();
@@ -120,14 +165,73 @@ pub const MetalContext = struct {
         return self.pipelines.getPtr(name);
     }
 
+    pub fn getPipelineConfig(self: *const MetalContext, name: []const u8) !struct { threadsPerThreadgroup: metal.MTLSize, executionWidth: usize } {
+        const pipeline = self.getPipeline(name) orelse return error.PipelineNotFound;
+        const max_threads = pipeline.maxTotalThreadsPerThreadgroup();
+        const width = pipeline.threadExecutionWidth();
+        return .{
+            .threadsPerThreadgroup = metal.MTLSize.make(max_threads, 1, 1),
+            .executionWidth = width,
+        };
+    }
+
+    pub fn getBuffer(self: *MetalContext, length: usize) !metal.MTLBuffer {
+        if (self.buffer_pool.getPtr(length)) |list| {
+            if (list.popOrNull()) |buf| {
+                return buf;
+            }
+        }
+        return try self.device.newBufferWithLength(length, .StorageModeShared);
+    }
+
+    pub fn returnBuffer(self: *MetalContext, buffer: metal.MTLBuffer) !void {
+        const length = buffer.length();
+        const res = try self.buffer_pool.getOrPut(length);
+        if (!res.found_existing) {
+            res.value_ptr.* = std.ArrayList(metal.MTLBuffer).init(self.allocator);
+        }
+        try res.value_ptr.append(buffer);
+    }
+
     pub fn registerTempResource(self: *MetalContext, resource: metal.MTLBuffer) !void {
         try self.temp_resources.append(self.allocator, resource);
     }
 
     pub fn clearTempResources(self: *MetalContext) void {
         for (self.temp_resources.items) |res| {
-            res.release();
+            self.freeBuffer(res);
         }
         self.temp_resources.clearRetainingCapacity();
+    }
+
+    pub fn allocBuffer(self: *MetalContext, length: usize, options: metal.MTLResourceOptions) !metal.MTLBuffer {
+        // Only pool shared buffers for now (common case)
+        if (options.storage_mode == 0) {
+            if (self.buffer_pool.getPtr(length)) |list| {
+                if (list.pop()) |buf| {
+                    return buf;
+                }
+            }
+        }
+        return try self.device.newBufferWithLength(length, options);
+    }
+
+    pub fn freeBuffer(self: *MetalContext, buffer: metal.MTLBuffer) void {
+        const length = buffer.length();
+        if (self.buffer_pool.getPtr(length)) |list| {
+            list.append(self.allocator, buffer) catch {
+                buffer.release();
+            };
+        } else {
+            var list = std.ArrayListUnmanaged(metal.MTLBuffer){};
+            list.append(self.allocator, buffer) catch {
+                buffer.release();
+                return;
+            };
+            self.buffer_pool.put(length, list) catch {
+                list.deinit(self.allocator);
+                buffer.release();
+            };
+        }
     }
 };

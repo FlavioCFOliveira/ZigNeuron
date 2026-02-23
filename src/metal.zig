@@ -426,6 +426,15 @@ pub const MTLComputePipelineState = struct {
         }
         return 0;
     }
+
+    /// Get thread execution width (SIMD size)
+    pub fn threadExecutionWidth(self: *const MTLComputePipelineState) usize {
+        const sel = objc.sel("threadExecutionWidth");
+        if (sel) |s| {
+            return @as(usize, @intFromPtr(objc.msgSend(self.pipeline, s)));
+        }
+        return 0;
+    }
 };
 
 /// MTLResourceOptions - Resource options
