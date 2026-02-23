@@ -7,9 +7,10 @@ pub fn main() !void {
     const allocator = std.heap.page_allocator;
 
     // Get default backend (GPU if available, CPU fallback)
-    const backend = zn.backend.Backend.default();
+    var backend = try zn.backend.Backend.init(allocator);
+    errdefer backend.deinit();
     std.debug.print("Using backend: ", .{});
-    switch (backend) {
+    switch (backend.type) {
         .gpu => |gpu| switch (gpu) {
             .metal => std.debug.print("Metal (Apple Silicon GPU)\n", .{}),
             .vulkan => std.debug.print("Vulkan (Cross-platform GPU)\n", .{}),

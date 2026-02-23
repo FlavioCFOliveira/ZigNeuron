@@ -23,7 +23,7 @@ test "numerical precision: float32 precision" {
 
 test "numerical precision: near-zero values" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -55,7 +55,7 @@ test "numerical precision: near-zero values" {
 
 test "numerical precision: machine epsilon" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -89,7 +89,7 @@ test "numerical precision: machine epsilon" {
 
 test "numerical precision: relative error" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -124,7 +124,7 @@ test "numerical precision: relative error" {
 
 test "numerical precision: absolute vs relative tolerance" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -158,7 +158,7 @@ test "numerical precision: absolute vs relative tolerance" {
 
 test "numerical precision: gradient precision" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -175,7 +175,7 @@ test "numerical precision: gradient precision" {
     // Check that gradients are non-zero and finite
     for (net.layers.items) |lyr| {
         var has_significant_grad = false;
-        for (lyr.grad_weights) |g| {
+        for (lyr.grad_weights.slice) |g| {
             try testing.expect(std.math.isFinite(g));
             if (@abs(g) > 1e-10) {
                 has_significant_grad = true;
@@ -187,7 +187,7 @@ test "numerical precision: gradient precision" {
 
 test "numerical precision: weight update precision" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -197,7 +197,7 @@ test "numerical precision: weight update precision" {
 
     // Set initial weight to a precise value
     const initial_weight: f32 = 1.2345678;
-    net.layers.items[0].weights[0] = initial_weight;
+    net.layers.items[0].weights.slice[0] = initial_weight;
 
     const input: []const f32 = &.{ 1.0 };
     const target: []const f32 = &.{ 1.0 };
@@ -207,7 +207,7 @@ test "numerical precision: weight update precision" {
     _ = try net.trainStep(input, target, 0.01, loss_fn);
 
     // Weight should have changed
-    const final_weight = net.layers.items[0].weights[0];
+    const final_weight = net.layers.items[0].weights.slice[0];
     try testing.expect(final_weight != initial_weight);
 
     // Should still be finite
@@ -216,7 +216,7 @@ test "numerical precision: weight update precision" {
 
 test "numerical precision: small learning rate" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -248,7 +248,7 @@ test "numerical precision: small learning rate" {
 
 test "numerical precision: large learning rate" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -280,7 +280,7 @@ test "numerical precision: large learning rate" {
 test "numerical precision: comparison with expected values" {
     // Test that forward pass produces expected values
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -290,15 +290,15 @@ test "numerical precision: comparison with expected values" {
     _ = try net.addDense(2, 2, .linear);
 
     // Set weights to identity
-    net.layers.items[0].weights[0] = 1.0;  // [0][0]
-    net.layers.items[0].weights[1] = 0.0;  // [0][1]
-    net.layers.items[0].weights[2] = 0.0;  // [1][0]
-    net.layers.items[0].weights[3] = 1.0;  // [1][1]
+    net.layers.items[0].weights.slice[0] = 1.0;  // [0][0]
+    net.layers.items[0].weights.slice[1] = 0.0;  // [0][1]
+    net.layers.items[0].weights.slice[2] = 0.0;  // [1][0]
+    net.layers.items[0].weights.slice[3] = 1.0;  // [1][1]
 
-    net.layers.items[1].weights[0] = 1.0;
-    net.layers.items[1].weights[1] = 0.0;
-    net.layers.items[1].weights[2] = 0.0;
-    net.layers.items[1].weights[3] = 1.0;
+    net.layers.items[1].weights.slice[0] = 1.0;
+    net.layers.items[1].weights.slice[1] = 0.0;
+    net.layers.items[1].weights.slice[2] = 0.0;
+    net.layers.items[1].weights.slice[3] = 1.0;
 
     const input: []const f32 = &.{ 0.5, 0.5 };
     var output: [2]f32 = undefined;
@@ -312,7 +312,7 @@ test "numerical precision: comparison with expected values" {
 
 test "numerical precision: convergence tolerance" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -348,7 +348,7 @@ test "numerical precision: convergence tolerance" {
 
 test "numerical precision: loss value precision" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -392,7 +392,7 @@ test "numerical precision: double precision verification" {
 
 test "numerical precision: underflow handling" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -424,7 +424,7 @@ test "numerical precision: underflow handling" {
 
 test "numerical precision: overflow handling" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -456,7 +456,7 @@ test "numerical precision: overflow handling" {
 
 test "numerical precision: precision in deep network" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -513,7 +513,7 @@ test "numerical precision: activation function precision" {
 
 test "numerical precision: gradient precision check" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -539,7 +539,7 @@ test "numerical precision: gradient precision check" {
 
 test "numerical precision: precision with different initializations" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     // Test with different random initializations
     for (0..5) |_| {
@@ -571,7 +571,7 @@ test "numerical precision: precision with different initializations" {
 
 test "numerical precision: precision in backward pass" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -616,7 +616,7 @@ test "numerical precision: loss gradient precision" {
 
 test "numerical precision: precision under saturation" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -647,7 +647,7 @@ test "numerical precision: precision under saturation" {
 
 test "numerical precision: comparison across epochs" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -688,7 +688,7 @@ test "numerical precision: comparison across epochs" {
 
 test "numerical precision: numerical vs analytical gradient" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -709,7 +709,7 @@ test "numerical precision: numerical vs analytical gradient" {
 
     // Compute gradient analytically
     _ = try net.trainStep(input, target, 0, loss_fn);
-    const analytical_grad = net.layers.items[0].grad_weights[0];
+    const analytical_grad = net.layers.items[0].grad_weights.slice[0];
 
     // They should be similar
     try testing.expect(std.math.isFinite(analytical_grad));

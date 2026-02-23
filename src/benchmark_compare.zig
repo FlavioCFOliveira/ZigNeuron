@@ -17,7 +17,7 @@ pub fn main() !void {
     defer results.deinit(allocator);
 
     // Get backends
-    const cpu_backend = backend_module.Backend{ .cpu = {} };
+    const cpu_backend = backend_module.Backend{ .type = .cpu, .metal_ctx = null };
     const vulkan_backend = backend_module.Backend{ .gpu = .vulkan };
 
     std.debug.print("Running benchmarks on both backends...\n\n", .{});

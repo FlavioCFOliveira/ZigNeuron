@@ -78,32 +78,32 @@ pub const Sgd = struct {
         if (self.momentum > 0) {
             if (self.velocity_weights) |vel_w| {
                 // SGD with momentum
-                for (lyr.weights, 0..) |_, i| {
-                    const grad = lyr.grad_weights[i];
+                for (lyr.weights.slice, 0..) |_, i| {
+                    const grad = lyr.grad_weights.slice[i];
                     const v_old = vel_w[i];
                     const v_new = self.momentum * v_old + grad;
                     vel_w[i] = v_new;
-                    lyr.weights[i] -= learning_rate * v_new;
+                    lyr.weights.slice[i] -= learning_rate * v_new;
                 }
 
-                for (lyr.bias, 0..) |_, i| {
-                    const grad = lyr.grad_bias[i];
+                for (lyr.bias.slice, 0..) |_, i| {
+                    const grad = lyr.grad_bias.slice[i];
                     const v_old = self.velocity_bias.?[i];
                     const v_new = self.momentum * v_old + grad;
                     self.velocity_bias.?[i] = v_new;
-                    lyr.bias[i] -= learning_rate * v_new;
+                    lyr.bias.slice[i] -= learning_rate * v_new;
                 }
                 return;
             }
         }
 
         // Basic SGD
-        for (lyr.weights, 0..) |_, i| {
-            lyr.weights[i] -= learning_rate * lyr.grad_weights[i];
+        for (lyr.weights.slice, 0..) |_, i| {
+            lyr.weights.slice[i] -= learning_rate * lyr.grad_weights.slice[i];
         }
 
-        for (lyr.bias, 0..) |_, i| {
-            lyr.bias[i] -= learning_rate * lyr.grad_bias[i];
+        for (lyr.bias.slice, 0..) |_, i| {
+            lyr.bias.slice[i] -= learning_rate * lyr.grad_bias.slice[i];
         }
     }
 };
@@ -165,7 +165,7 @@ pub const Adam = struct {
         const m_b = self.m_bias.?;
         const v_b = self.v_bias.?;
 
-        for (lyr.weights, lyr.grad_weights, 0..) |_, grad, i| {
+        for (lyr.weights.slice, lyr.grad_weights.slice, 0..) |_, grad, i| {
             // Update biased first moment estimate
             m_w[i] = self.beta1 * m_w[i] + (1 - self.beta1) * grad;
 
@@ -179,10 +179,10 @@ pub const Adam = struct {
             const v_hat = v_w[i] / bias_corr2;
 
             // Update weights
-            lyr.weights[i] -= learning_rate * m_hat / (std.math.sqrt(v_hat) + self.eps);
+            lyr.weights.slice[i] -= learning_rate * m_hat / (std.math.sqrt(v_hat) + self.eps);
         }
 
-        for (lyr.bias, lyr.grad_bias, 0..) |_, grad, i| {
+        for (lyr.bias.slice, lyr.grad_bias.slice, 0..) |_, grad, i| {
             // Update biased first moment estimate
             m_b[i] = self.beta1 * m_b[i] + (1 - self.beta1) * grad;
 
@@ -196,7 +196,7 @@ pub const Adam = struct {
             const v_hat = v_b[i] / bias_corr2;
 
             // Update bias
-            lyr.bias[i] -= learning_rate * m_hat / (std.math.sqrt(v_hat) + self.eps);
+            lyr.bias.slice[i] -= learning_rate * m_hat / (std.math.sqrt(v_hat) + self.eps);
         }
     }
 };
@@ -231,20 +231,20 @@ pub const Rmsprop = struct {
 
     /// Main step function
     pub fn step(self: *Rmsprop, lyr: *layer_module.Dense, learning_rate: f32) void {
-        for (lyr.weights, lyr.grad_weights, 0..) |_, grad, i| {
+        for (lyr.weights.slice, lyr.grad_weights.slice, 0..) |_, grad, i| {
             // Update moving average of squared gradients
             self.g_weights[i] = self.rho * self.g_weights[i] + (1 - self.rho) * grad * grad;
 
             // Update weights
-            lyr.weights[i] -= learning_rate * grad / (std.math.sqrt(self.g_weights[i]) + self.eps);
+            lyr.weights.slice[i] -= learning_rate * grad / (std.math.sqrt(self.g_weights[i]) + self.eps);
         }
 
-        for (lyr.bias, lyr.grad_bias, 0..) |_, grad, i| {
+        for (lyr.bias.slice, lyr.grad_bias.slice, 0..) |_, grad, i| {
             // Update moving average of squared gradients
             self.g_bias[i] = self.rho * self.g_bias[i] + (1 - self.rho) * grad * grad;
 
             // Update bias
-            lyr.bias[i] -= learning_rate * grad / (std.math.sqrt(self.g_bias[i]) + self.eps);
+            lyr.bias.slice[i] -= learning_rate * grad / (std.math.sqrt(self.g_bias[i]) + self.eps);
         }
     }
 };

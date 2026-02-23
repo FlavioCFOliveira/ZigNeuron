@@ -8,7 +8,7 @@ pub fn main() !void {
     std.debug.print("=== FNN Performance Test: CPU Backend Only ===\n\n", .{});
 
     // Force CPU backend
-    const backend = zn.backend.Backend{ .cpu = {} };
+    const backend = zn.backend.Backend{ .type = .cpu, .metal_ctx = null };
     std.debug.print("Using backend: CPU (forced)\n", .{});
 
     // Create network: 4 -> 8 -> 4 -> 2

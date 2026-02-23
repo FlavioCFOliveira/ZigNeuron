@@ -17,7 +17,7 @@ fn expectNear(actual: f32, expected: f32, tolerance: f32) !void {
 
 test "classification: binary classification with sigmoid" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -36,7 +36,7 @@ test "classification: binary classification with sigmoid" {
 
 test "classification: class prediction from logits" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -56,7 +56,7 @@ test "classification: class prediction from logits" {
 
 test "classification: multi-class with softmax" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -80,7 +80,7 @@ test "classification: multi-class with softmax" {
 
 test "classification: learn simple linearly separable data" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -114,7 +114,7 @@ test "classification: learn simple linearly separable data" {
 
 test "classification: decision boundary" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -151,7 +151,7 @@ test "classification: decision boundary" {
 
 test "classification: confidence calibration" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -170,7 +170,7 @@ test "classification: confidence calibration" {
 
 test "classification: class imbalance handling" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -201,7 +201,7 @@ test "classification: class imbalance handling" {
 
 test "classification: overfitting detection" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -230,7 +230,7 @@ test "classification: overfitting detection" {
 
 test "classification: numerical precision" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -250,7 +250,7 @@ test "classification: numerical precision" {
 
 test "classification: gradient clipping effect" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -267,7 +267,7 @@ test "classification: gradient clipping effect" {
     try testing.expect(std.math.isFinite(loss_val));
 
     for (net.layers.items) |lyr| {
-        for (lyr.weights) |w| {
+        for (lyr.weights.slice) |w| {
             try testing.expect(std.math.isFinite(w));
         }
     }
@@ -275,7 +275,7 @@ test "classification: gradient clipping effect" {
 
 test "classification: batch inference" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -301,7 +301,7 @@ test "classification: batch inference" {
 
 test "classification: gradient vanishing check" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();

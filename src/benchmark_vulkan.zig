@@ -134,7 +134,7 @@ pub fn benchmarkCpuMatMul(allocator: std.mem.Allocator, m: usize, n: usize, k: u
 
 /// Benchmark Vulkan forward pass with varying network sizes
 pub fn benchmarkVulkanForwardPass(allocator: std.mem.Allocator, input_size: usize, output_size: usize, layers: usize, iterations: usize) !BenchmarkResult {
-    const net = try network.Network.init(allocator, backend_module.Backend{ .cpu = {} });
+    const net = try network.Network.init(allocator, backend_module.Backend{ .type = .cpu, .metal_ctx = null });
     defer net.deinit();
 
     var current_size = input_size;

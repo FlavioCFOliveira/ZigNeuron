@@ -30,6 +30,13 @@ pub fn build(b: *std.Build) void {
     const test_exe = b.addTest(.{
         .root_module = test_module,
     });
+    if (target.result.os.tag == .macos) {
+        test_exe.linkLibC();
+        test_exe.linkSystemLibrary("objc");
+        test_exe.linkFramework("Metal");
+        test_exe.linkFramework("Foundation");
+        test_exe.linkFramework("QuartzCore");
+    }
 
     const run_test_exe = b.addRunArtifact(test_exe);
     const test_step = b.step("test", "Run unit tests");
@@ -51,6 +58,13 @@ pub fn build(b: *std.Build) void {
             .name = "xor",
             .root_module = xor_module,
         });
+        if (target.result.os.tag == .macos) {
+            xor_exe.linkLibC();
+            xor_exe.linkSystemLibrary("objc");
+            xor_exe.linkFramework("Metal");
+            xor_exe.linkFramework("Foundation");
+            xor_exe.linkFramework("QuartzCore");
+        }
 
         // XOR test example using custom gradient descent
         const xor_test_module = std.Build.Module.create(b, .{
@@ -64,6 +78,13 @@ pub fn build(b: *std.Build) void {
             .name = "xor_test",
             .root_module = xor_test_module,
         });
+        if (target.result.os.tag == .macos) {
+            xor_test_exe.linkLibC();
+            xor_test_exe.linkSystemLibrary("objc");
+            xor_test_exe.linkFramework("Metal");
+            xor_test_exe.linkFramework("Foundation");
+            xor_test_exe.linkFramework("QuartzCore");
+        }
 
         // Comprehensive FNN example
         const fnn_module = std.Build.Module.create(b, .{
@@ -77,6 +98,13 @@ pub fn build(b: *std.Build) void {
             .name = "fnn_comprehensive",
             .root_module = fnn_module,
         });
+        if (target.result.os.tag == .macos) {
+            fnn_exe.linkLibC();
+            fnn_exe.linkSystemLibrary("objc");
+            fnn_exe.linkFramework("Metal");
+            fnn_exe.linkFramework("Foundation");
+            fnn_exe.linkFramework("QuartzCore");
+        }
 
         b.installArtifact(xor_exe);
         b.installArtifact(xor_test_exe);
@@ -109,6 +137,13 @@ pub fn build(b: *std.Build) void {
             .name = "benchmarks",
             .root_module = benchmark_module,
         });
+        if (target.result.os.tag == .macos) {
+            benchmark_exe.linkLibC();
+            benchmark_exe.linkSystemLibrary("objc");
+            benchmark_exe.linkFramework("Metal");
+            benchmark_exe.linkFramework("Foundation");
+            benchmark_exe.linkFramework("QuartzCore");
+        }
 
         b.installArtifact(benchmark_exe);
 
@@ -132,6 +167,13 @@ pub fn build(b: *std.Build) void {
             .name = "benchmark-compare",
             .root_module = benchmark_module,
         });
+        if (target.result.os.tag == .macos) {
+            benchmark_exe.linkLibC();
+            benchmark_exe.linkSystemLibrary("objc");
+            benchmark_exe.linkFramework("Metal");
+            benchmark_exe.linkFramework("Foundation");
+            benchmark_exe.linkFramework("QuartzCore");
+        }
 
         b.installArtifact(benchmark_exe);
 
@@ -176,6 +218,51 @@ pub fn build(b: *std.Build) void {
         vulkan_step.dependOn(compile_shaders_step);
     }
 
+    // Metal shader compilation (macOS only)
+    const enable_metal = b.option(bool, "metal", "Build with Metal support") orelse (target.result.os.tag == .macos);
+
+    if (enable_metal) {
+        const compile_metal_step = b.step("compile-metal", "Compile Metal shaders to metallib");
+
+        // Define Metal shader files
+        const metal_shaders = [_][]const u8{
+            "shaders/metal/matmul.metal",
+            "shaders/metal/activation.metal",
+            "shaders/metal/loss.metal",
+        };
+
+        var air_files: std.ArrayListUnmanaged([]const u8) = .{};
+        defer air_files.deinit(b.allocator);
+
+        // Compile each shader to .air
+        for (metal_shaders) |shader| {
+            const shader_name = std.fs.path.basename(shader);
+            const air_file = b.pathJoin(&.{ b.cache_root.path.?, b.fmt("{s}.air", .{shader_name}) });
+            air_files.append(b.allocator, air_file) catch @panic("Out of memory");
+
+            const compile_cmd = b.addSystemCommand(&.{
+                "xcrun", "-sdk", "macosx", "metal",
+                "-c", shader,
+                "-o", air_file,
+            });
+            compile_cmd.step.dependOn(b.getInstallStep());
+            compile_metal_step.dependOn(&compile_cmd.step);
+        }
+
+        // Link all .air files to .metallib
+        const metallib_file = "shaders/metal/default.metallib";
+        const link_cmd = b.addSystemCommand(&.{
+            "xcrun", "-sdk", "macosx", "metallib",
+            "-o", metallib_file,
+        });
+        link_cmd.addArgs(air_files.items);
+        link_cmd.step.dependOn(compile_metal_step);
+
+        // Add Metal compilation step
+        const metal_step = b.step("metal", "Compile Metal shaders");
+        metal_step.dependOn(&link_cmd.step);
+    }
+
     // Performance test executable
     const perf_test_module = std.Build.Module.create(b, .{
         .root_source_file = b.path("src/test_performance.zig"),
@@ -189,9 +276,44 @@ pub fn build(b: *std.Build) void {
         .root_module = perf_test_module,
     });
 
+    // Link Objective-C runtime for Metal
+    if (target.result.os.tag == .macos) {
+        perf_exe.linkLibC();
+        perf_exe.linkSystemLibrary("objc");
+        perf_exe.linkFramework("Metal");
+        perf_exe.linkFramework("Foundation");
+        perf_exe.linkFramework("QuartzCore");
+    }
+
     b.installArtifact(perf_exe);
 
     const run_perf = b.addRunArtifact(perf_exe);
     const perf_step = b.step("test-performance", "Run performance comparison tests");
     perf_step.dependOn(&run_perf.step);
+
+    // Multi-backend test executable
+    const all_backends_module = std.Build.Module.create(b, .{
+        .root_source_file = b.path("src/test_all_backends.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    all_backends_module.addImport("ZigNeuron", lib_module);
+
+    const all_backends_exe = b.addExecutable(.{
+        .name = "test_all_backends",
+        .root_module = all_backends_module,
+    });
+    if (target.result.os.tag == .macos) {
+        all_backends_exe.linkLibC();
+        all_backends_exe.linkSystemLibrary("objc");
+        all_backends_exe.linkFramework("Metal");
+        all_backends_exe.linkFramework("Foundation");
+        all_backends_exe.linkFramework("QuartzCore");
+    }
+
+    b.installArtifact(all_backends_exe);
+
+    const run_all_backends = b.addRunArtifact(all_backends_exe);
+    const all_backends_step = b.step("test-backends", "Run comprehensive backend comparison tests");
+    all_backends_step.dependOn(&run_all_backends.step);
 }

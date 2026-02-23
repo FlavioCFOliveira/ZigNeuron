@@ -35,7 +35,9 @@ test "backend matmul cpu" {
         v.* = @as(f32, @floatCast((i + 1) % 10)) / 10.0;
     }
 
-    const cpu_backend = backend.Backend{ .cpu = {} };
+    var cpu_backend = try backend.Backend.init(allocator);
+    cpu_backend.type = .cpu;
+    defer cpu_backend.deinit();
     try cpu_backend.matMul(a, b, c, m, n, k);
 
     var expected: f32 = 0;
@@ -49,7 +51,9 @@ test "backend matmul cpu" {
 }
 
 test "backend activation forward relu" {
-    const cpu_backend = backend.Backend{ .cpu = {} };
+    var cpu_backend = try backend.Backend.init(testing.allocator);
+    cpu_backend.type = .cpu;
+    defer cpu_backend.deinit();
     const act = activation.Activation{ .relu = {} };
 
     const allocator = testing.allocator;
@@ -71,7 +75,9 @@ test "backend activation forward relu" {
 }
 
 test "backend activation forward sigmoid" {
-    const cpu_backend = backend.Backend{ .cpu = {} };
+    var cpu_backend = try backend.Backend.init(testing.allocator);
+    cpu_backend.type = .cpu;
+    defer cpu_backend.deinit();
     const act = activation.Activation{ .sigmoid = {} };
 
     const allocator = testing.allocator;
@@ -95,7 +101,9 @@ test "backend activation forward sigmoid" {
 }
 
 test "backend activation backward" {
-    const cpu_backend = backend.Backend{ .cpu = {} };
+    var cpu_backend = try backend.Backend.init(testing.allocator);
+    cpu_backend.type = .cpu;
+    defer cpu_backend.deinit();
     const act = activation.Activation{ .sigmoid = {} };
 
     const allocator = testing.allocator;
@@ -121,7 +129,9 @@ test "backend activation backward" {
 }
 
 test "backend loss backward mse" {
-    const cpu_backend = backend.Backend{ .cpu = {} };
+    var cpu_backend = try backend.Backend.init(testing.allocator);
+    cpu_backend.type = .cpu;
+    defer cpu_backend.deinit();
     const loss_fn = loss.Loss{ .mse = {} };
 
     const allocator = testing.allocator;
@@ -148,7 +158,9 @@ test "backend loss backward mse" {
 }
 
 test "backend loss backward cross_entropy" {
-    const cpu_backend = backend.Backend{ .cpu = {} };
+    var cpu_backend = try backend.Backend.init(testing.allocator);
+    cpu_backend.type = .cpu;
+    defer cpu_backend.deinit();
     const loss_fn = loss.Loss{ .cross_entropy = {} };
 
     const allocator = testing.allocator;
@@ -178,7 +190,9 @@ test "backend default detection" {
 }
 
 test "backend matmul correctness" {
-    const cpu_backend = backend.Backend{ .cpu = {} };
+    var cpu_backend = try backend.Backend.init(testing.allocator);
+    cpu_backend.type = .cpu;
+    defer cpu_backend.deinit();
 
     const a_data = [_]f32{
         1, 2, 3,
@@ -207,7 +221,9 @@ test "backend matmul correctness" {
 }
 
 test "backend matmul large matrix" {
-    const cpu_backend = backend.Backend{ .cpu = {} };
+    var cpu_backend = try backend.Backend.init(testing.allocator);
+    cpu_backend.type = .cpu;
+    defer cpu_backend.deinit();
 
     const allocator = testing.allocator;
 
@@ -230,7 +246,9 @@ test "backend matmul large matrix" {
 }
 
 test "backend activation forward batch" {
-    const cpu_backend = backend.Backend{ .cpu = {} };
+    var cpu_backend = try backend.Backend.init(testing.allocator);
+    cpu_backend.type = .cpu;
+    defer cpu_backend.deinit();
     const act = activation.Activation{ .relu = {} };
 
     const allocator = testing.allocator;
@@ -252,7 +270,9 @@ test "backend activation forward batch" {
 }
 
 test "backend numerical stability" {
-    const cpu_backend = backend.Backend{ .cpu = {} };
+    var cpu_backend = try backend.Backend.init(testing.allocator);
+    cpu_backend.type = .cpu;
+    defer cpu_backend.deinit();
     const act = activation.Activation{ .sigmoid = {} };
 
     const allocator = testing.allocator;

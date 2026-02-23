@@ -17,7 +17,7 @@ fn expectNear(actual: f32, expected: f32, tolerance: f32) !void {
 
 test "convergence functions: polynomial approximation" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -49,7 +49,7 @@ test "convergence functions: polynomial approximation" {
 
 test "convergence functions: exponential decay" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -81,7 +81,7 @@ test "convergence functions: exponential decay" {
 
 test "convergence functions: logarithmic" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -115,7 +115,7 @@ test "convergence functions: logarithmic" {
 
 test "convergence functions: rational function" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -149,7 +149,7 @@ test "convergence functions: rational function" {
 
 test "convergence functions: ReLU-like function" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -184,7 +184,7 @@ test "convergence functions: ReLU-like function" {
 
 test "convergence functions: piecewise constant" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -221,7 +221,7 @@ test "convergence functions: piecewise constant" {
 
 test "convergence functions: multi-peak function" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -255,7 +255,7 @@ test "convergence functions: multi-peak function" {
 
 test "convergence functions: spiral function" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -290,7 +290,7 @@ test "convergence functions: spiral function" {
 
 test "convergence functions: discontinuous function" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -327,7 +327,7 @@ test "convergence functions: discontinuous function" {
 
 test "convergence functions: sigmoid-like approximation" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -365,7 +365,7 @@ test "convergence functions: sigmoid-like approximation" {
 
 test "convergence functions: linear combination" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -397,7 +397,7 @@ test "convergence functions: linear combination" {
 
 test "convergence functions: network capacity test" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     for ([_]usize{ 4, 8, 16, 32 }) |hidden_size| {
         const net = try network.Network.init(allocator, be);
@@ -428,7 +428,7 @@ test "convergence functions: network capacity test" {
 
 test "convergence functions: output range verification" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -465,7 +465,7 @@ test "convergence functions: output range verification" {
 
 test "convergence functions: weight initialization test" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     var success_count: usize = 0;
 
@@ -503,7 +503,7 @@ test "convergence functions: weight initialization test" {
 
 test "convergence functions: gradient verification" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -522,7 +522,7 @@ test "convergence functions: gradient verification" {
 
     for (net.layers.items) |*l| {
         var has_nonzero_grad = false;
-        for (l.grad_weights) |g| {
+        for (l.grad_weights.slice) |g| {
             if (@abs(g) > 1e-10) {
                 has_nonzero_grad = true;
                 break;
@@ -534,7 +534,7 @@ test "convergence functions: gradient verification" {
 
 test "convergence functions: batch vs sequential" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net1 = try network.Network.init(allocator, be);
     defer net1.deinit();

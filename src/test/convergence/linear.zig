@@ -17,7 +17,7 @@ fn expectNear(actual: f32, expected: f32, tolerance: f32) !void {
 
 test "convergence linear: y = 2x" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -54,7 +54,7 @@ test "convergence linear: y = 2x" {
 
 test "convergence linear: y = -3x + 5" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -86,7 +86,7 @@ test "convergence linear: y = -3x + 5" {
 
 test "convergence linear: learning rate comparison" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     // High learning rate
     const net1 = try network.Network.init(allocator, be);
@@ -128,7 +128,7 @@ test "convergence linear: learning rate comparison" {
 
 test "convergence linear: convergence speed" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -172,7 +172,7 @@ test "convergence linear: convergence speed" {
 
 test "convergence linear: multiple inputs" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -205,7 +205,7 @@ test "convergence linear: multiple inputs" {
 
 test "convergence linear: negative slope" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -238,7 +238,7 @@ test "convergence linear: negative slope" {
 
 test "convergence linear: with bias" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -271,7 +271,7 @@ test "convergence linear: with bias" {
 
 test "convergence linear: extrapolation" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -309,7 +309,7 @@ test "convergence linear: extrapolation" {
 
 test "convergence linear: gradient flow" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -327,7 +327,7 @@ test "convergence linear: gradient flow" {
     // Check that gradients exist
     for (net.layers.items) |lyr| {
         var has_nonzero_grad = false;
-        for (lyr.grad_weights) |g| {
+        for (lyr.grad_weights.slice) |g| {
             if (@abs(g) > 1e-6) {
                 has_nonzero_grad = true;
                 break;
@@ -339,7 +339,7 @@ test "convergence linear: gradient flow" {
 
 test "convergence linear: weight updates" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -350,7 +350,7 @@ test "convergence linear: weight updates" {
     // Store initial weights
     const layer0 = net.layers.items[0];
     var initial_weights: [4]f32 = undefined;
-    @memcpy(&initial_weights, layer0.weights[0..4]);
+    @memcpy(&initial_weights, layer0.weights.slice[0..4]);
 
     const input: []const f32 = &.{ 1.0 };
     const target: []const f32 = &.{ 1.0 };
@@ -372,7 +372,7 @@ test "convergence linear: weight updates" {
 
 test "convergence linear: numerical stability" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -403,7 +403,7 @@ test "convergence linear: numerical stability" {
 
 test "convergence linear: convergence with noise" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -437,7 +437,7 @@ test "convergence linear: convergence with noise" {
 
 test "convergence linear: multiple epochs" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -468,7 +468,7 @@ test "convergence linear: multiple epochs" {
 
 test "convergence linear: deep network" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -501,7 +501,7 @@ test "convergence linear: deep network" {
 
 test "convergence linear: network state persistence" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -535,7 +535,7 @@ test "convergence linear: network state persistence" {
 
 test "convergence linear: learning curve" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -581,7 +581,7 @@ test "convergence linear: learning curve" {
 
 test "convergence linear: different initializations" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     // Test multiple initializations
     for (0..3) |_| {
@@ -612,7 +612,7 @@ test "convergence linear: different initializations" {
 
 test "convergence linear: loss function" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();

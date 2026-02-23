@@ -17,7 +17,7 @@ fn expectNear(actual: f32, expected: f32, tolerance: f32) !void {
 
 test "convergence sinusoidal: y = sin(x) basic" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -61,7 +61,7 @@ test "convergence sinusoidal: y = sin(x) basic" {
 
 test "convergence sinusoidal: y = 2*sin(x) + 1" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -96,7 +96,7 @@ test "convergence sinusoidal: y = 2*sin(x) + 1" {
 
 test "convergence sinusoidal: y = sin(2x)" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -133,7 +133,7 @@ test "convergence sinusoidal: y = sin(2x)" {
 
 test "convergence sinusoidal: shallow network" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -164,7 +164,7 @@ test "convergence sinusoidal: shallow network" {
 
 test "convergence sinusoidal: deep network" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -206,7 +206,7 @@ test "convergence sinusoidal: deep network" {
 
 test "convergence sinusoidal: phase shift" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -241,7 +241,7 @@ test "convergence sinusoidal: phase shift" {
 
 test "convergence sinusoidal: amplitude learning" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -283,7 +283,7 @@ test "convergence sinusoidal: amplitude learning" {
 
 test "convergence sinusoidal: multiple periods" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -328,7 +328,7 @@ test "convergence sinusoidal: multiple periods" {
 
 test "convergence sinusoidal: loss convergence" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -366,7 +366,7 @@ test "convergence sinusoidal: loss convergence" {
 
 test "convergence sinusoidal: gradient bounds" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -390,10 +390,10 @@ test "convergence sinusoidal: gradient bounds" {
 
     // Check gradients are reasonable
     for (net.layers.items) |lyr| {
-        for (lyr.grad_weights) |g| {
+        for (lyr.grad_weights.slice) |g| {
             try testing.expect(std.math.isFinite(g));
         }
-        for (lyr.grad_bias) |g| {
+        for (lyr.grad_bias.slice) |g| {
             try testing.expect(std.math.isFinite(g));
         }
     }
@@ -401,7 +401,7 @@ test "convergence sinusoidal: gradient bounds" {
 
 test "convergence sinusoidal: network consistency" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();

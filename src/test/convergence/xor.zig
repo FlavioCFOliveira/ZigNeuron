@@ -17,7 +17,7 @@ fn expectNear(actual: f32, expected: f32, tolerance: f32) !void {
 
 test "convergence xor: simple 2-4-1 network" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -58,7 +58,7 @@ test "convergence xor: simple 2-4-1 network" {
 
 test "convergence xor: 2-8-4-1 network" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -94,7 +94,7 @@ test "convergence xor: 2-8-4-1 network" {
 
 test "convergence xor: multiple random initializations" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     var success_count: usize = 0;
 
@@ -144,7 +144,7 @@ test "convergence xor: multiple random initializations" {
 
 test "convergence xor: batch vs sequential" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net1 = try network.Network.init(allocator, be);
     defer net1.deinit();
@@ -174,7 +174,7 @@ test "convergence xor: batch vs sequential" {
 
 test "convergence xor: learning rate comparison" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net1 = try network.Network.init(allocator, be);
     defer net1.deinit();
@@ -216,7 +216,7 @@ test "convergence xor: learning rate comparison" {
 
 test "convergence xor: convergence speed" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -249,7 +249,7 @@ test "convergence xor: convergence speed" {
 
 test "convergence xor: test with different activations" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -280,7 +280,7 @@ test "convergence xor: test with different activations" {
 
 test "convergence xor: validation on unseen data" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -318,7 +318,7 @@ test "convergence xor: validation on unseen data" {
 
 test "convergence xor: early convergence detection" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -350,7 +350,7 @@ test "convergence xor: early convergence detection" {
 
 test "convergence xor: network capacity" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     for ([_]usize{ 2, 4, 8, 16 }) |hidden_size| {
         const net = try network.Network.init(allocator, be);
@@ -383,7 +383,7 @@ test "convergence xor: network capacity" {
 
 test "convergence xor: gradient flow verification" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -399,7 +399,7 @@ test "convergence xor: gradient flow verification" {
 
     for (net.layers.items) |lyr| {
         var has_nonzero_grad = false;
-        for (lyr.grad_weights) |g| {
+        for (lyr.grad_weights.slice) |g| {
             if (@abs(g) > 1e-6) {
                 has_nonzero_grad = true;
                 break;
@@ -411,7 +411,7 @@ test "convergence xor: gradient flow verification" {
 
 test "convergence xor: weight updates" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -421,7 +421,7 @@ test "convergence xor: weight updates" {
 
     const layer0 = net.layers.items[0];
     var initial_weights: [8]f32 = undefined;
-    @memcpy(&initial_weights, layer0.weights[0..8]);
+    @memcpy(&initial_weights, layer0.weights.slice[0..8]);
 
     const input: []const f32 = &.{ 0.5, 0.5 };
     const target: []const f32 = &.{ 1.0 };
@@ -430,7 +430,7 @@ test "convergence xor: weight updates" {
     _ = try net.trainStep(input, target, 0.1, loss_fn);
 
     var changed = false;
-    for (layer0.weights, 0..) |w, i| {
+    for (layer0.weights.slice, 0..) |w, i| {
         if (w != initial_weights[i]) {
             changed = true;
             break;
@@ -441,7 +441,7 @@ test "convergence xor: weight updates" {
 
 test "convergence xor: stability after training" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -476,7 +476,7 @@ test "convergence xor: stability after training" {
 
 test "convergence xor: momentum effect" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -507,7 +507,7 @@ test "convergence xor: momentum effect" {
 
 test "convergence xor: learning rate sensitivity" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net1 = try network.Network.init(allocator, be);
     defer net1.deinit();
@@ -557,7 +557,7 @@ test "convergence xor: learning rate sensitivity" {
 
 test "convergence xor: architecture ablation" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -588,7 +588,7 @@ test "convergence xor: architecture ablation" {
 
 test "convergence xor: convergence visualization data" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -628,7 +628,7 @@ test "convergence xor: convergence visualization data" {
 
 test "convergence xor: layerwise learning" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -655,7 +655,7 @@ test "convergence xor: layerwise learning" {
 
     for (net.layers.items) |lyr| {
         var has_nonzero_grad = false;
-        for (lyr.grad_weights) |g| {
+        for (lyr.grad_weights.slice) |g| {
             if (@abs(g) > 1e-6) {
                 has_nonzero_grad = true;
                 break;

@@ -17,7 +17,7 @@ fn expectNear(actual: f32, expected: f32, tolerance: f32) !void {
 
 test "numerical stability: very small inputs" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -46,7 +46,7 @@ test "numerical stability: very small inputs" {
 
 test "numerical stability: very large inputs" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -75,7 +75,7 @@ test "numerical stability: very large inputs" {
 
 test "numerical stability: extreme learning rates" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     // Very high learning rate
     const net1 = try network.Network.init(allocator, be);
@@ -163,7 +163,7 @@ test "numerical stability: MSE loss at extremes" {
 
 test "numerical stability: gradient at extremes" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -181,7 +181,7 @@ test "numerical stability: gradient at extremes" {
 
     // Check gradients are finite
     for (net.layers.items) |lyr| {
-        for (lyr.grad_weights) |g| {
+        for (lyr.grad_weights.slice) |g| {
             try testing.expect(std.math.isFinite(g));
         }
     }
@@ -189,7 +189,7 @@ test "numerical stability: gradient at extremes" {
 
 test "numerical stability: weight initialization range" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     // Test with various weight scales
     for ([_]f32{ 1e-6, 1e-3, 1.0, 1e3, 1e6 }) |scale| {
@@ -201,7 +201,7 @@ test "numerical stability: weight initialization range" {
 
         // Scale the initial weights
         for (net.layers.items) |lyr| {
-            for (lyr.weights) |*w| {
+            for (lyr.weights.slice) |*w| {
                 w.* *= scale;
             }
         }
@@ -226,7 +226,7 @@ test "numerical stability: weight initialization range" {
 
 test "numerical stability: batch training with large batches" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -253,7 +253,7 @@ test "numerical stability: batch training with large batches" {
 
 test "numerical stability: multi-layer stability" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -285,10 +285,10 @@ test "numerical stability: multi-layer stability" {
 
     // All weights should be finite
     for (net.layers.items) |lyr| {
-        for (lyr.weights) |w| {
+        for (lyr.weights.slice) |w| {
             try testing.expect(std.math.isFinite(w));
         }
-        for (lyr.bias) |b| {
+        for (lyr.bias.slice) |b| {
             try testing.expect(std.math.isFinite(b));
         }
     }
@@ -296,7 +296,7 @@ test "numerical stability: multi-layer stability" {
 
 test "numerical stability: NaN propagation prevention" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -330,7 +330,7 @@ test "numerical stability: NaN propagation prevention" {
 
 test "numerical stability: Inf propagation prevention" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -360,7 +360,7 @@ test "numerical stability: Inf propagation prevention" {
 
 test "numerical stability: gradient clipping simulation" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -391,7 +391,7 @@ test "numerical stability: gradient clipping simulation" {
 
 test "numerical stability: very shallow network" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -419,7 +419,7 @@ test "numerical stability: very shallow network" {
 
 test "numerical stability: multiple input dimensions" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -448,7 +448,7 @@ test "numerical stability: multiple input dimensions" {
 
 test "numerical stability: precision under multiple operations" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -473,7 +473,7 @@ test "numerical stability: precision under multiple operations" {
 
     // Record initial weights
     for (net.layers.items) |lyr| {
-        for (lyr.weights) |w| {
+        for (lyr.weights.slice) |w| {
             initial_weight_sum += w;
         }
     }
@@ -483,7 +483,7 @@ test "numerical stability: precision under multiple operations" {
 
     // Record final weights
     for (net.layers.items) |lyr| {
-        for (lyr.weights) |w| {
+        for (lyr.weights.slice) |w| {
             final_weight_sum += w;
         }
     }
@@ -495,7 +495,7 @@ test "numerical stability: precision under multiple operations" {
 
 test "numerical stability: forward pass consistency" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -530,7 +530,7 @@ test "numerical stability: forward pass consistency" {
 
 test "numerical stability: backward pass consistency" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -563,7 +563,7 @@ test "numerical stability: backward pass consistency" {
 
 test "numerical stability: layerwise gradients" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -580,10 +580,10 @@ test "numerical stability: layerwise gradients" {
 
     // Check that gradients exist and are finite for all layers
     for (net.layers.items) |lyr| {
-        for (lyr.grad_weights) |g| {
+        for (lyr.grad_weights.slice) |g| {
             try testing.expect(std.math.isFinite(g));
         }
-        for (lyr.grad_bias) |g| {
+        for (lyr.grad_bias.slice) |g| {
             try testing.expect(std.math.isFinite(g));
         }
     }
@@ -591,7 +591,7 @@ test "numerical stability: layerwise gradients" {
 
 test "numerical stability: loss function边界" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -619,7 +619,7 @@ test "numerical stability: loss function边界" {
 
 test "numerical stability: training with constant loss" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -653,7 +653,7 @@ test "numerical stability: training with constant loss" {
 
 test "numerical stability: exponential scale inputs" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();

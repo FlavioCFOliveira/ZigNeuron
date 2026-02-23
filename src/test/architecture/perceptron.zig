@@ -17,7 +17,7 @@ fn expectNear(actual: f32, expected: f32, tolerance: f32) !void {
 
 test "perceptron: simple binary classifier" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -37,7 +37,7 @@ test "perceptron: simple binary classifier" {
 
 test "perceptron: learn AND gate" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -75,7 +75,7 @@ test "perceptron: learn AND gate" {
 
 test "perceptron: learn OR gate" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -110,7 +110,7 @@ test "perceptron: learn OR gate" {
 
 test "perceptron: single layer linear" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -145,7 +145,7 @@ test "perceptron: single layer linear" {
 
 test "perceptron: weights are initialized" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -167,7 +167,7 @@ test "perceptron: weights are initialized" {
 
 test "perceptron: layer sizes correct" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -183,7 +183,7 @@ test "perceptron: layer sizes correct" {
 
 test "perceptron: batch forward pass" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -204,7 +204,7 @@ test "perceptron: batch forward pass" {
 
 test "perceptron: gradient flow" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -219,7 +219,7 @@ test "perceptron: gradient flow" {
     // Store initial weights
     const layer0 = net.layers.items[0];
     var initial_weights: [6]f32 = undefined;
-    @memcpy(&initial_weights, layer0.weights[0..6]);
+    @memcpy(&initial_weights, layer0.weights.slice[0..6]);
 
     // Training step
     _ = try net.trainStep(input, target, 0.1, loss_fn);

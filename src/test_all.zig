@@ -150,34 +150,35 @@ test "loss binary cross entropy forward" {
 // Layer Tests - existing tests from src/
 test "layer dense forward" {
     const allocator = testing.allocator;
-    var lyr = try layer.Dense.init(allocator, 2, 1, .relu, backend.Backend{ .cpu = {} });
+    var lyr = try layer.Dense.init(allocator, 2, 1, .relu, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer lyr.deinit();
 
-    lyr.weights[0] = 1.0;
-    lyr.weights[1] = 1.0;
-    lyr.bias[0] = 0.0;
+    lyr.weights.slice[0] = 1.0;
+    lyr.weights.slice[1] = 1.0;
+    lyr.bias.slice[0] = 0.0;
 
     var input: [2]f32 = .{1.0, 1.0};
     var output: [1]f32 = undefined;
-    try lyr.forward(&input, &output);
+    try lyr.forward(&input, null, &output, null);
 
     try expectNear(output[0], 2.0, 0.0001);
 }
 
 test "layer dense backward" {
     const allocator = testing.allocator;
-    var lyr = try layer.Dense.init(allocator, 2, 1, .relu, backend.Backend{ .cpu = {} });
+    var lyr = try layer.Dense.init(allocator, 2, 1, .relu, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer lyr.deinit();
 
-    lyr.weights[0] = 1.0;
-    lyr.weights[1] = 1.0;
-    lyr.bias[0] = 0.0;
+    lyr.weights.slice[0] = 1.0;
+    lyr.weights.slice[1] = 1.0;
+    lyr.bias.slice[0] = 0.0;
 
     var input: [2]f32 = .{1.0, 1.0};
     var grad_output: [1]f32 = .{1.0};
     var grad_input: [2]f32 = undefined;
+    var pre_activation: [1]f32 = .{2.0};
 
-    try lyr.backward(&input, &grad_output, &grad_input);
+    try lyr.backward(&input, null, &grad_output, null, &grad_input, null, &pre_activation, null);
 
     try expectNear(grad_input[0], 1.0, 0.0001);
     try expectNear(grad_input[1], 1.0, 0.0001);
@@ -200,7 +201,7 @@ test "optimizer adam basic" {
 test "network basic" {
     const allocator = testing.allocator;
 
-    const net = try network.Network.init(allocator, backend.Backend{ .cpu = {} });
+    const net = try network.Network.init(allocator, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer net.deinit();
 
     _ = try net.addDense(2, 3, .relu);
@@ -214,7 +215,7 @@ test "network basic" {
 test "memory: Dense layer" {
     const allocator = testing.allocator;
 
-    const lyr = try layer.Dense.init(allocator, 4, 8, .relu, backend.Backend{ .cpu = {} });
+    const lyr = try layer.Dense.init(allocator, 4, 8, .relu, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer lyr.deinit();
 
     const input = allocator.alloc(f32, 4) catch unreachable;
@@ -222,13 +223,13 @@ test "memory: Dense layer" {
     const output = allocator.alloc(f32, 8) catch unreachable;
     defer allocator.free(output);
 
-    try lyr.forward(input, output);
+    try lyr.forward(input, null, output, null);
 }
 
 test "memory: Network forward pass" {
     const allocator = testing.allocator;
 
-    const net = try network.Network.init(allocator, backend.Backend{ .cpu = {} });
+    const net = try network.Network.init(allocator, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer net.deinit();
 
     _ = try net.addDense(4, 8, .relu);
@@ -243,7 +244,7 @@ test "memory: Network forward pass" {
 test "memory: Training step" {
     const allocator = testing.allocator;
 
-    const net = try network.Network.init(allocator, backend.Backend{ .cpu = {} });
+    const net = try network.Network.init(allocator, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer net.deinit();
 
     _ = try net.addDense(4, 8, .relu);
@@ -263,7 +264,7 @@ test "memory: Optimizer training" {
     // This test verifies the optimizer infrastructure can be created
     const allocator = testing.allocator;
 
-    const net = try network.Network.init(allocator, backend.Backend{ .cpu = {} });
+    const net = try network.Network.init(allocator, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer net.deinit();
 
     _ = try net.addDense(4, 8, .relu);
@@ -374,7 +375,7 @@ test "vulkan: shader module" {
 }
 
 test "vulkan: activation forward small" {
-    const cpu_backend = backend.Backend{ .cpu = {} };
+    const cpu_backend = backend.Backend{ .type = .cpu, .metal_ctx = null };
     const act = activation.Activation{ .relu = {} };
 
     const allocator = testing.allocator;
@@ -387,7 +388,7 @@ test "vulkan: activation forward small" {
         v.* = @as(f32, @floatFromInt(i % 100)) / 10.0 - 5.0;
     }
 
-    try cpu_backend.activationForward(act, input, output);
+    try cpu_backend.activationForward(act, input, null, output, null);
 
     // Verify ReLU: negative values become 0
     for (input, output) |in, out| {
@@ -397,7 +398,7 @@ test "vulkan: activation forward small" {
 }
 
 test "vulkan: activation backward small" {
-    const cpu_backend = backend.Backend{ .cpu = {} };
+    const cpu_backend = backend.Backend{ .type = .cpu, .metal_ctx = null };
     const act = activation.Activation{ .sigmoid = {} };
 
     const allocator = testing.allocator;
@@ -413,7 +414,7 @@ test "vulkan: activation backward small" {
     }
     @memset(grad_output, 1.0);
 
-    try cpu_backend.activationBackward(act, input, grad_output, grad_input);
+    try cpu_backend.activationBackward(act, input, null, grad_output, null, grad_input, null);
 
     // Verify sigmoid derivative: s'(x) = s(x) * (1 - s(x))
     for (input, grad_input) |in, gi| {
@@ -424,7 +425,7 @@ test "vulkan: activation backward small" {
 }
 
 test "vulkan: loss backward mse" {
-    const cpu_backend = backend.Backend{ .cpu = {} };
+    const cpu_backend = backend.Backend{ .type = .cpu, .metal_ctx = null };
     const loss_fn = loss.Loss{ .mse = {} };
 
     const allocator = testing.allocator;
@@ -442,11 +443,12 @@ test "vulkan: loss backward mse" {
         v.* = @as(f32, @floatFromInt((i + 50) % 100)) / 10.0;
     }
 
-    try cpu_backend.lossBackward(loss_fn, output, target, grad_output);
+    try cpu_backend.lossBackward(loss_fn, output, null, target, null, grad_output, null);
 
-    // Verify MSE gradient: dL/dy = 2(y - t)
+    // Verify MSE gradient: dL/dy = 2(y - t) / n
+    const n = @as(f32, @floatFromInt(output.len));
     for (output, target, grad_output) |o, t, g| {
-        const expected = 2 * (o - t);
+        const expected = 2 * (o - t) / n;
         try expectNear(g, expected, 0.0001);
     }
 }
@@ -454,7 +456,7 @@ test "vulkan: loss backward mse" {
 test "vulkan: network forward with CPU backend" {
     const allocator = testing.allocator;
 
-    const net = try network.Network.init(allocator, backend.Backend{ .cpu = {} });
+    const net = try network.Network.init(allocator, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer net.deinit();
 
     _ = try net.addDense(4, 8, .relu);
@@ -472,7 +474,7 @@ test "vulkan: network forward with CPU backend" {
 test "vulkan: network training with CPU backend" {
     const allocator = testing.allocator;
 
-    const net = try network.Network.init(allocator, backend.Backend{ .cpu = {} });
+    const net = try network.Network.init(allocator, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer net.deinit();
 
     _ = try net.addDense(2, 4, .relu);
@@ -502,7 +504,7 @@ test "vulkan: precision comparison CPU vs expected" {
     // Test that CPU implementation gives expected results for known values
     const allocator = testing.allocator;
 
-    const net = try network.Network.init(allocator, backend.Backend{ .cpu = {} });
+    const net = try network.Network.init(allocator, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer net.deinit();
 
     // Simple network: 2 inputs -> 2 hidden -> 1 output

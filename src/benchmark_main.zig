@@ -11,7 +11,7 @@ pub fn main() !void {
     std.debug.print("=== ZigNeuron Performance Benchmarks ===\n\n", .{});
 
     // Get available backends
-    const cpu_backend = backend_module.Backend{ .cpu = {} };
+    const cpu_backend = backend_module.Backend{ .type = .cpu, .metal_ctx = null };
 
     var results: std.ArrayList(benchmark.BenchmarkResult) = .{
         .items = &[_]benchmark.BenchmarkResult{},

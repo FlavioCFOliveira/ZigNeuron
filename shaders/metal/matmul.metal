@@ -5,6 +5,10 @@ using namespace metal;
 
 // Basic matrix multiplication: C = A * B
 // A: [M x K], B: [K x N], C: [M x N]
+kernel void test_write(device float* out [[buffer(0)]], uint gid [[thread_position_in_grid]]) {
+    if (gid == 0) out[0] = 1.23f;
+}
+
 kernel void matmul(
     device const float* A [[buffer(0)]],
     device const float* B [[buffer(1)]],
@@ -159,6 +163,18 @@ kernel void matmul_transpose_a(
             sum += A[k * M + row] * B[k * N + col];
         }
         C[row * N + col] = sum;
+    }
+}
+
+// Add bias to output: output = output + bias
+kernel void add_bias(
+    device float* output [[buffer(0)]],
+    device const float* bias [[buffer(1)]],
+    constant uint& size [[buffer(2)]],
+    uint gid [[thread_position_in_grid]])
+{
+    if (gid < size) {
+        output[gid] += bias[gid];
     }
 }
 

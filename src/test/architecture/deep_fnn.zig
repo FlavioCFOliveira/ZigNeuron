@@ -17,7 +17,7 @@ fn expectNear(actual: f32, expected: f32, tolerance: f32) !void {
 
 test "deep_fnn: 4-layer network forward" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -37,7 +37,7 @@ test "deep_fnn: 4-layer network forward" {
 
 test "deep_fnn: network with skip connections" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -55,7 +55,7 @@ test "deep_fnn: network with skip connections" {
 
 test "deep_fnn: deep network training" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -97,7 +97,7 @@ test "deep_fnn: deep network training" {
 
 test "deep_fnn: network depth validation" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -114,7 +114,7 @@ test "deep_fnn: network depth validation" {
 
 test "deep_fnn: weight initialization scales with depth" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -129,7 +129,7 @@ test "deep_fnn: weight initialization scales with depth" {
     // All weights should be initialized
     for (net.layers.items) |lyr| {
         var has_nonzero = false;
-        for (lyr.weights) |w| {
+        for (lyr.weights.slice) |w| {
             if (w != 0) {
                 has_nonzero = true;
                 break;
@@ -141,7 +141,7 @@ test "deep_fnn: weight initialization scales with depth" {
 
 test "deep_fnn: backward pass through multiple layers" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -160,7 +160,7 @@ test "deep_fnn: backward pass through multiple layers" {
     // Check that all layers have non-zero gradients
     for (net.layers.items) |lyr| {
         var has_nonzero_grad = false;
-        for (lyr.grad_weights) |g| {
+        for (lyr.grad_weights.slice) |g| {
             if (@abs(g) > 1e-6) {
                 has_nonzero_grad = true;
                 break;
@@ -172,7 +172,7 @@ test "deep_fnn: backward pass through multiple layers" {
 
 test "deep_fnn: sigmoid output bounds preserved" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -195,7 +195,7 @@ test "deep_fnn: sigmoid output bounds preserved" {
 
 test "deep_fnn: network state persistence" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -224,7 +224,7 @@ test "deep_fnn: network state persistence" {
 
 test "deep_fnn: multiple forward passes consistency" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -247,7 +247,7 @@ test "deep_fnn: multiple forward passes consistency" {
 
 test "deep_fnn: deep network gradient scale" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -267,10 +267,10 @@ test "deep_fnn: deep network gradient scale" {
 
     // Check that gradients exist and are finite
     for (net.layers.items) |lyr| {
-        for (lyr.grad_weights) |g| {
+        for (lyr.grad_weights.slice) |g| {
             try testing.expect(std.math.isFinite(g));
         }
-        for (lyr.grad_bias) |g| {
+        for (lyr.grad_bias.slice) |g| {
             try testing.expect(std.math.isFinite(g));
         }
     }

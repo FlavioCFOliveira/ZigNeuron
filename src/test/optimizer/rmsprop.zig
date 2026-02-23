@@ -23,7 +23,7 @@ test "optimizer rmsprop: initialization" {
     var rmsprop: optimizer.Rmsprop = .{};
 
     const allocator = testing.allocator;
-    var lyr = try layer.Dense.init(allocator, 2, 1, .relu, backend.Backend{ .cpu = {} });
+    var lyr = try layer.Dense.init(allocator, 2, 1, .relu, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer lyr.deinit();
 
     try rmsprop.init(allocator, &lyr);
@@ -38,42 +38,42 @@ test "optimizer rmsprop: first step" {
     var rmsprop: optimizer.Rmsprop = .{};
 
     const allocator = testing.allocator;
-    var lyr = try layer.Dense.init(allocator, 1, 1, .relu, backend.Backend{ .cpu = {} });
+    var lyr = try layer.Dense.init(allocator, 1, 1, .relu, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer lyr.deinit();
 
     try rmsprop.init(allocator, &lyr);
     defer rmsprop.deinit(allocator);
 
-    lyr.weights[0] = 1.0;
-    lyr.grad_weights[0] = 0.1;
+    lyr.weights.slice[0] = 1.0;
+    lyr.grad_weights.slice[0] = 0.1;
 
     rmsprop.step(&lyr, 0.001);
 
     // g = 0.9 * 0 + 0.1 * 0.1 = 0.01
     // w = 1.0 - 0.001 * 0.1 / (sqrt(0.01) + 1e-8) = 1.0 - 0.001 * 0.1 / 0.1 = 1.0 - 0.001
-    try testing.expectNear(lyr.weights[0], 0.999, 0.0001);
+    try testing.expectNear(lyr.weights.slice[0], 0.999, 0.0001);
 }
 
 test "optimizer rmsprop: second step" {
     var rmsprop: optimizer.Rmsprop = .{};
 
     const allocator = testing.allocator;
-    var lyr = try layer.Dense.init(allocator, 1, 1, .relu, backend.Backend{ .cpu = {} });
+    var lyr = try layer.Dense.init(allocator, 1, 1, .relu, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer lyr.deinit();
 
     try rmsprop.init(allocator, &lyr);
     defer rmsprop.deinit(allocator);
 
-    lyr.weights[0] = 1.0;
-    lyr.grad_weights[0] = 0.1;
+    lyr.weights.slice[0] = 1.0;
+    lyr.grad_weights.slice[0] = 0.1;
 
     // First step
     rmsprop.step(&lyr, 0.001);
-    const w1 = lyr.weights[0];
+    const w1 = lyr.weights.slice[0];
 
     // Second step with same gradient
     rmsprop.step(&lyr, 0.001);
-    const w2 = lyr.weights[0];
+    const w2 = lyr.weights.slice[0];
 
     // Weights should keep changing
     try testing.expect(w2 != w1);
@@ -85,17 +85,17 @@ test "optimizer rmsprop: rho parameter" {
         var rmsprop: optimizer.Rmsprop = .{ .rho = rho };
 
         const allocator = testing.allocator;
-        var lyr = try layer.Dense.init(allocator, 1, 1, .relu, backend.Backend{ .cpu = {} });
+        var lyr = try layer.Dense.init(allocator, 1, 1, .relu, backend.Backend{ .type = .cpu, .metal_ctx = null });
         defer lyr.deinit();
 
         try rmsprop.init(allocator, &lyr);
         defer rmsprop.deinit(allocator);
 
-        lyr.weights[0] = 1.0;
-        lyr.grad_weights[0] = 0.1;
+        lyr.weights.slice[0] = 1.0;
+        lyr.grad_weights.slice[0] = 0.1;
 
         rmsprop.step(&lyr, 0.001);
-        try testing.expect(std.math.isFinite(lyr.weights[0]));
+        try testing.expect(std.math.isFinite(lyr.weights.slice[0]));
     }
 }
 
@@ -105,17 +105,17 @@ test "optimizer rmsprop: different eps values" {
         var rmsprop: optimizer.Rmsprop = .{ .eps = eps };
 
         const allocator = testing.allocator;
-        var lyr = try layer.Dense.init(allocator, 1, 1, .relu, backend.Backend{ .cpu = {} });
+        var lyr = try layer.Dense.init(allocator, 1, 1, .relu, backend.Backend{ .type = .cpu, .metal_ctx = null });
         defer lyr.deinit();
 
         try rmsprop.init(allocator, &lyr);
         defer rmsprop.deinit(allocator);
 
-        lyr.weights[0] = 1.0;
-        lyr.grad_weights[0] = 0.1;
+        lyr.weights.slice[0] = 1.0;
+        lyr.grad_weights.slice[0] = 0.1;
 
         rmsprop.step(&lyr, 0.001);
-        try testing.expect(std.math.isFinite(lyr.weights[0]));
+        try testing.expect(std.math.isFinite(lyr.weights.slice[0]));
     }
 }
 
@@ -123,90 +123,90 @@ test "optimizer rmsprop: bias update" {
     var rmsprop: optimizer.Rmsprop = .{};
 
     const allocator = testing.allocator;
-    var lyr = try layer.Dense.init(allocator, 1, 2, .relu, backend.Backend{ .cpu = {} });
+    var lyr = try layer.Dense.init(allocator, 1, 2, .relu, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer lyr.deinit();
 
     try rmsprop.init(allocator, &lyr);
     defer rmsprop.deinit(allocator);
 
-    lyr.bias[0] = 0.5;
-    lyr.bias[1] = 1.0;
-    lyr.grad_bias[0] = 0.1;
-    lyr.grad_bias[1] = 0.2;
+    lyr.bias.slice[0] = 0.5;
+    lyr.bias.slice[1] = 1.0;
+    lyr.grad_bias.slice[0] = 0.1;
+    lyr.grad_bias.slice[1] = 0.2;
 
     rmsprop.step(&lyr, 0.001);
 
     // Both biases should have changed
-    try testing.expect(lyr.bias[0] != 0.5);
-    try testing.expect(lyr.bias[1] != 1.0);
+    try testing.expect(lyr.bias.slice[0] != 0.5);
+    try testing.expect(lyr.bias.slice[1] != 1.0);
 }
 
 test "optimizer rmsprop: large gradient handling" {
     var rmsprop: optimizer.Rmsprop = .{};
 
     const allocator = testing.allocator;
-    var lyr = try layer.Dense.init(allocator, 1, 1, .relu, backend.Backend{ .cpu = {} });
+    var lyr = try layer.Dense.init(allocator, 1, 1, .relu, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer lyr.deinit();
 
     try rmsprop.init(allocator, &lyr);
     defer rmsprop.deinit(allocator);
 
-    lyr.weights[0] = 1.0;
-    lyr.grad_weights[0] = 100.0;
+    lyr.weights.slice[0] = 1.0;
+    lyr.grad_weights.slice[0] = 100.0;
 
     rmsprop.step(&lyr, 0.001);
 
     // Weight should still be reasonable
-    try testing.expect(std.math.isFinite(lyr.weights[0]));
+    try testing.expect(std.math.isFinite(lyr.weights.slice[0]));
 }
 
 test "optimizer rmsprop: small gradient handling" {
     var rmsprop: optimizer.Rmsprop = .{};
 
     const allocator = testing.allocator;
-    var lyr = try layer.Dense.init(allocator, 1, 1, .relu, backend.Backend{ .cpu = {} });
+    var lyr = try layer.Dense.init(allocator, 1, 1, .relu, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer lyr.deinit();
 
     try rmsprop.init(allocator, &lyr);
     defer rmsprop.deinit(allocator);
 
-    lyr.weights[0] = 1.0;
-    lyr.grad_weights[0] = 1e-10;
+    lyr.weights.slice[0] = 1.0;
+    lyr.grad_weights.slice[0] = 1e-10;
 
     rmsprop.step(&lyr, 0.001);
 
     // Weight should still change slightly
-    try testing.expect(std.math.isFinite(lyr.weights[0]));
+    try testing.expect(std.math.isFinite(lyr.weights.slice[0]));
 }
 
 test "optimizer rmsprop: numerical stability" {
     var rmsprop: optimizer.Rmsprop = .{};
 
     const allocator = testing.allocator;
-    var lyr = try layer.Dense.init(allocator, 1, 1, .relu, backend.Backend{ .cpu = {} });
+    var lyr = try layer.Dense.init(allocator, 1, 1, .relu, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer lyr.deinit();
 
     try rmsprop.init(allocator, &lyr);
     defer rmsprop.deinit(allocator);
 
     // Test with very small weights
-    lyr.weights[0] = 1e-10;
-    lyr.grad_weights[0] = 1e-12;
+    lyr.weights.slice[0] = 1e-10;
+    lyr.grad_weights.slice[0] = 1e-12;
 
     rmsprop.step(&lyr, 0.001);
-    try testing.expect(std.math.isFinite(lyr.weights[0]));
+    try testing.expect(std.math.isFinite(lyr.weights.slice[0]));
 
     // Test with very large weights
-    lyr.weights[0] = 1e10;
-    lyr.grad_weights[0] = 1e8;
+    lyr.weights.slice[0] = 1e10;
+    lyr.grad_weights.slice[0] = 1e8;
 
     rmsprop.step(&lyr, 0.001);
-    try testing.expect(std.math.isFinite(lyr.weights[0]));
+    try testing.expect(std.math.isFinite(lyr.weights.slice[0]));
 }
 
 test "optimizer rmsprop: training convergence" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -241,7 +241,7 @@ test "optimizer rmsprop: deinit" {
     var rmsprop: optimizer.Rmsprop = .{};
 
     const allocator = testing.allocator;
-    var lyr = try layer.Dense.init(allocator, 2, 1, .relu, backend.Backend{ .cpu = {} });
+    var lyr = try layer.Dense.init(allocator, 2, 1, .relu, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer lyr.deinit();
 
     try rmsprop.init(allocator, &lyr);
@@ -254,24 +254,24 @@ test "optimizer rmsprop: union interface" {
     var opt = optimizer.Optimizer{ .rmsprop = optimizer.Rmsprop{} };
     const allocator = testing.allocator;
 
-    var lyr = try layer.Dense.init(allocator, 2, 1, .relu, backend.Backend{ .cpu = {} });
+    var lyr = try layer.Dense.init(allocator, 2, 1, .relu, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer lyr.deinit();
 
     try opt.init(allocator, &lyr);
     defer opt.deinit(allocator, &lyr);
 
-    lyr.weights[0] = 1.0;
-    lyr.grad_weights[0] = 0.1;
+    lyr.weights.slice[0] = 1.0;
+    lyr.grad_weights.slice[0] = 0.1;
 
     opt.step(&lyr, 0.001);
 
     // Weight should have changed
-    try testing.expect(lyr.weights[0] < 1.0);
+    try testing.expect(lyr.weights.slice[0] < 1.0);
 }
 
 test "optimizer rmsprop: learning rate effect" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     // High learning rate
     const net1 = try network.Network.init(allocator, be);
@@ -319,26 +319,26 @@ test "optimizer rmsprop: moving average update" {
     var rmsprop: optimizer.Rmsprop = .{ .rho = 0.9 };
 
     const allocator = testing.allocator;
-    var lyr = try layer.Dense.init(allocator, 1, 1, .relu, backend.Backend{ .cpu = {} });
+    var lyr = try layer.Dense.init(allocator, 1, 1, .relu, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer lyr.deinit();
 
     try rmsprop.init(allocator, &lyr);
     defer rmsprop.deinit(allocator);
 
-    lyr.weights[0] = 1.0;
+    lyr.weights.slice[0] = 1.0;
 
     // First step: g = 0.9 * 0 + 0.1^2 = 0.01
-    lyr.grad_weights[0] = 0.1;
+    lyr.grad_weights.slice[0] = 0.1;
     rmsprop.step(&lyr, 0.001);
     const g1 = rmsprop.g_weights[0];
 
     // Second step: g = 0.9 * 0.01 + 0.1^2 = 0.019
-    lyr.grad_weights[0] = 0.1;
+    lyr.grad_weights.slice[0] = 0.1;
     rmsprop.step(&lyr, 0.001);
     const g2 = rmsprop.g_weights[0];
 
     // Third step: g = 0.9 * 0.019 + 0.1^2 = 0.0271
-    lyr.grad_weights[0] = 0.1;
+    lyr.grad_weights.slice[0] = 0.1;
     rmsprop.step(&lyr, 0.001);
     const g3 = rmsprop.g_weights[0];
 
@@ -351,23 +351,23 @@ test "optimizer rmsprop: adaptive learning rate" {
     var rmsprop: optimizer.Rmsprop = .{};
 
     const allocator = testing.allocator;
-    var lyr = try layer.Dense.init(allocator, 1, 1, .relu, backend.Backend{ .cpu = {} });
+    var lyr = try layer.Dense.init(allocator, 1, 1, .relu, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer lyr.deinit();
 
     try rmsprop.init(allocator, &lyr);
     defer rmsprop.deinit(allocator);
 
-    lyr.weights[0] = 1.0;
+    lyr.weights.slice[0] = 1.0;
 
     // Large gradient
-    lyr.grad_weights[0] = 1.0;
+    lyr.grad_weights.slice[0] = 1.0;
     rmsprop.step(&lyr, 0.001);
-    const w1 = lyr.weights[0];
+    const w1 = lyr.weights.slice[0];
 
     // Small gradient
-    lyr.grad_weights[0] = 0.1;
+    lyr.grad_weights.slice[0] = 0.1;
     rmsprop.step(&lyr, 0.001);
-    const w2 = lyr.weights[0];
+    const w2 = lyr.weights.slice[0];
 
     // The changes should differ
     const change1 = std.math.abs(w1 - 1.0);
@@ -381,33 +381,33 @@ test "optimizer rmsprop: zero gradient" {
     var rmsprop: optimizer.Rmsprop = .{};
 
     const allocator = testing.allocator;
-    var lyr = try layer.Dense.init(allocator, 1, 1, .relu, backend.Backend{ .cpu = {} });
+    var lyr = try layer.Dense.init(allocator, 1, 1, .relu, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer lyr.deinit();
 
     try rmsprop.init(allocator, &lyr);
     defer rmsprop.deinit(allocator);
 
-    lyr.weights[0] = 1.0;
-    lyr.grad_weights[0] = 0.0;
+    lyr.weights.slice[0] = 1.0;
+    lyr.grad_weights.slice[0] = 0.0;
 
     rmsprop.step(&lyr, 0.001);
 
     // Weight should not change with zero gradient
-    try testing.expectNear(lyr.weights[0], 1.0, 0.0001);
+    try testing.expectNear(lyr.weights.slice[0], 1.0, 0.0001);
 }
 
 test "optimizer rmsprop: multiple steps" {
     var rmsprop: optimizer.Rmsprop = .{};
 
     const allocator = testing.allocator;
-    var lyr = try layer.Dense.init(allocator, 1, 1, .relu, backend.Backend{ .cpu = {} });
+    var lyr = try layer.Dense.init(allocator, 1, 1, .relu, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer lyr.deinit();
 
     try rmsprop.init(allocator, &lyr);
     defer rmsprop.deinit(allocator);
 
-    lyr.weights[0] = 1.0;
-    lyr.grad_weights[0] = 0.1;
+    lyr.weights.slice[0] = 1.0;
+    lyr.grad_weights.slice[0] = 0.1;
 
     // Run 100 steps
     for (0..100) |_| {
@@ -415,13 +415,13 @@ test "optimizer rmsprop: multiple steps" {
     }
 
     // Weight should have changed significantly
-    try testing.expect(lyr.weights[0] < 1.0);
-    try testing.expect(std.math.isFinite(lyr.weights[0]));
+    try testing.expect(lyr.weights.slice[0] < 1.0);
+    try testing.expect(std.math.isFinite(lyr.weights.slice[0]));
 }
 
 test "optimizer rmsprop: comparison with other optimizers" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     // RMSprop
     const net1 = try network.Network.init(allocator, be);
@@ -467,7 +467,7 @@ test "optimizer rmsprop: comparison with other optimizers" {
 
 test "optimizer rmsprop: loss reduction" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -509,14 +509,14 @@ test "optimizer rmsprop: weight decay over time" {
     var rmsprop: optimizer.Rmsprop = .{};
 
     const allocator = testing.allocator;
-    var lyr = try layer.Dense.init(allocator, 1, 1, .relu, backend.Backend{ .cpu = {} });
+    var lyr = try layer.Dense.init(allocator, 1, 1, .relu, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer lyr.deinit();
 
     try rmsprop.init(allocator, &lyr);
     defer rmsprop.deinit(allocator);
 
-    lyr.weights[0] = 10.0;
-    lyr.grad_weights[0] = 0.01;
+    lyr.weights.slice[0] = 10.0;
+    lyr.grad_weights.slice[0] = 0.01;
 
     // Run many steps
     for (0..500) |_| {
@@ -524,15 +524,15 @@ test "optimizer rmsprop: weight decay over time" {
     }
 
     // Weight should have decreased
-    try testing.expect(lyr.weights[0] < 10.0);
-    try testing.expect(std.math.isFinite(lyr.weights[0]));
+    try testing.expect(lyr.weights.slice[0] < 10.0);
+    try testing.expect(std.math.isFinite(lyr.weights.slice[0]));
 }
 
 test "optimizer rmsprop: time step increment" {
     var rmsprop: optimizer.Rmsprop = .{};
 
     const allocator = testing.allocator;
-    var lyr = try layer.Dense.init(allocator, 1, 1, .relu, backend.Backend{ .cpu = {} });
+    var lyr = try layer.Dense.init(allocator, 1, 1, .relu, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer lyr.deinit();
 
     try rmsprop.init(allocator, &lyr);
@@ -540,8 +540,8 @@ test "optimizer rmsprop: time step increment" {
 
     try testing.expect(rmsprop.t == 0);
 
-    lyr.weights[0] = 1.0;
-    lyr.grad_weights[0] = 0.1;
+    lyr.weights.slice[0] = 1.0;
+    lyr.grad_weights.slice[0] = 0.1;
 
     rmsprop.step(&lyr, 0.001);
     try testing.expect(rmsprop.t == 1);
@@ -552,7 +552,7 @@ test "optimizer rmsprop: time step increment" {
 
 test "optimizer rmsprop: convergence with noisy data" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -588,23 +588,23 @@ test "optimizer rmsprop: large layer" {
     var rmsprop: optimizer.Rmsprop = .{};
 
     const allocator = testing.allocator;
-    var lyr = try layer.Dense.init(allocator, 100, 50, .relu, backend.Backend{ .cpu = {} });
+    var lyr = try layer.Dense.init(allocator, 100, 50, .relu, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer lyr.deinit();
 
     try rmsprop.init(allocator, &lyr);
     defer rmsprop.deinit(allocator);
 
     // Set all gradients to 0.1
-    @memset(lyr.grad_weights, 0.1);
-    @memset(lyr.grad_bias, 0.1);
+    @memset(lyr.grad_weights.slice, 0.1);
+    @memset(lyr.grad_bias.slice, 0.1);
 
     rmsprop.step(&lyr, 0.001);
 
     // All weights and biases should have updated
-    for (lyr.weights) |w| {
+    for (lyr.weights.slice) |w| {
         try testing.expect(std.math.isFinite(w));
     }
-    for (lyr.bias) |b| {
+    for (lyr.bias.slice) |b| {
         try testing.expect(std.math.isFinite(b));
     }
 }
@@ -613,24 +613,24 @@ test "optimizer rmsprop: gradient history" {
     var rmsprop: optimizer.Rmsprop = .{ .rho = 0.9 };
 
     const allocator = testing.allocator;
-    var lyr = try layer.Dense.init(allocator, 1, 1, .relu, backend.Backend{ .cpu = {} });
+    var lyr = try layer.Dense.init(allocator, 1, 1, .relu, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer lyr.deinit();
 
     try rmsprop.init(allocator, &lyr);
     defer rmsprop.deinit(allocator);
 
-    lyr.weights[0] = 1.0;
+    lyr.weights.slice[0] = 1.0;
 
     // First gradient
-    lyr.grad_weights[0] = 0.1;
+    lyr.grad_weights.slice[0] = 0.1;
     rmsprop.step(&lyr, 0.001);
 
     // Second gradient (same)
-    lyr.grad_weights[0] = 0.1;
+    lyr.grad_weights.slice[0] = 0.1;
     rmsprop.step(&lyr, 0.001);
 
     // Third gradient (different)
-    lyr.grad_weights[0] = 0.2;
+    lyr.grad_weights.slice[0] = 0.2;
     rmsprop.step(&lyr, 0.001);
 
     // The moving average should reflect the new gradient
@@ -642,7 +642,7 @@ test "optimizer rmsprop: gradient history" {
 
 test "optimizer rmsprop: different architectures" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     // Different architectures
     for ([_]usize{ 1, 2, 4, 8, 16 }) |hidden_size| {
@@ -677,21 +677,21 @@ test "optimizer rmsprop: step interface" {
     var rmsprop: optimizer.Rmsprop = .{};
 
     const allocator = testing.allocator;
-    var lyr = try layer.Dense.init(allocator, 2, 1, .relu, backend.Backend{ .cpu = {} });
+    var lyr = try layer.Dense.init(allocator, 2, 1, .relu, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer lyr.deinit();
 
     try rmsprop.init(allocator, &lyr);
     defer rmsprop.deinit(allocator);
 
-    lyr.weights[0] = 1.0;
-    lyr.weights[1] = 2.0;
-    lyr.grad_weights[0] = 0.1;
-    lyr.grad_weights[1] = 0.2;
+    lyr.weights.slice[0] = 1.0;
+    lyr.weights.slice[1] = 2.0;
+    lyr.grad_weights.slice[0] = 0.1;
+    lyr.grad_weights.slice[1] = 0.2;
 
     rmsprop.step(&lyr, 0.001);
 
-    try testing.expect(lyr.weights[0] < 1.0);
-    try testing.expect(lyr.weights[1] < 2.0);
+    try testing.expect(lyr.weights.slice[0] < 1.0);
+    try testing.expect(lyr.weights.slice[1] < 2.0);
 }
 
 pub fn run() !void {

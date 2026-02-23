@@ -17,7 +17,7 @@ fn expectNear(actual: f32, expected: f32, tolerance: f32) !void {
 
 test "regression: learn y = 2x + 1" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -57,7 +57,7 @@ test "regression: learn y = 2x + 1" {
 
 test "regression: multi-output regression" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -90,7 +90,7 @@ test "regression: multi-output regression" {
 
 test "regression: non-linear function approximation" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -126,7 +126,7 @@ test "regression: non-linear function approximation" {
 
 test "regression: normalize inputs" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -158,7 +158,7 @@ test "regression: normalize inputs" {
 
 test "regression: trend prediction" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -192,7 +192,7 @@ test "regression: trend prediction" {
 
 test "regression: output bounds with linear activation" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -212,7 +212,7 @@ test "regression: output bounds with linear activation" {
 
 test "regression: multiple features" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -246,7 +246,7 @@ test "regression: multiple features" {
 
 test "regression: convergence monitoring" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -280,7 +280,7 @@ test "regression: convergence monitoring" {
 
 test "regression: sensitivity to learning rate" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     // Test with high learning rate
     const net1 = try network.Network.init(allocator, be);
@@ -311,7 +311,7 @@ test "regression: sensitivity to learning rate" {
 
 test "regression: missing data handling" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -344,7 +344,7 @@ test "regression: missing data handling" {
 
 test "regression: weight regularization effect" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -366,7 +366,7 @@ test "regression: weight regularization effect" {
 
     // Check that weights are reasonable
     for (net.layers.items) |lyr| {
-        for (lyr.weights) |w| {
+        for (lyr.weights.slice) |w| {
             try testing.expect(std.math.isFinite(w));
         }
     }
@@ -374,7 +374,7 @@ test "regression: weight regularization effect" {
 
 test "regression: output scaling" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -404,7 +404,7 @@ test "regression: output scaling" {
 
 test "regression: early stopping" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -436,7 +436,7 @@ test "regression: early stopping" {
 
 test "regression: noise robustness" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();

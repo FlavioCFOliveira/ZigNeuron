@@ -17,7 +17,7 @@ fn expectNear(actual: f32, expected: f32, tolerance: f32) !void {
 
 test "convergence quadratic: y = x² basic" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -57,7 +57,7 @@ test "convergence quadratic: y = x² basic" {
 
 test "convergence quadratic: y = 2x² + 3x - 1" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -95,7 +95,7 @@ test "convergence quadratic: y = 2x² + 3x - 1" {
 
 test "convergence quadratic: shallow network" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -127,7 +127,7 @@ test "convergence quadratic: shallow network" {
 
 test "convergence quadratic: deep network" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -172,7 +172,7 @@ test "convergence quadratic: deep network" {
 
 test "convergence quadratic: multiple epochs" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -206,7 +206,7 @@ test "convergence quadratic: multiple epochs" {
 
 test "convergence quadratic: learning rate comparison" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     // High learning rate
     const net1 = try network.Network.init(allocator, be);
@@ -248,7 +248,7 @@ test "convergence quadratic: learning rate comparison" {
 
 test "convergence quadratic: extrapolation" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -287,7 +287,7 @@ test "convergence quadratic: extrapolation" {
 
 test "convergence quadratic: loss monitoring" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -330,7 +330,7 @@ test "convergence quadratic: loss monitoring" {
 
 test "convergence quadratic: weight bounds" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -354,10 +354,10 @@ test "convergence quadratic: weight bounds" {
 
     // Check that all weights are finite
     for (net.layers.items) |*l| {
-        for (l.weights) |w| {
+        for (l.weights.slice) |w| {
             try testing.expect(std.math.isFinite(w));
         }
-        for (l.bias) |b| {
+        for (l.bias.slice) |b| {
             try testing.expect(std.math.isFinite(b));
         }
     }
@@ -365,7 +365,7 @@ test "convergence quadratic: weight bounds" {
 
 test "convergence quadratic: gradient flow" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -383,7 +383,7 @@ test "convergence quadratic: gradient flow" {
     // Check that gradients exist
     for (net.layers.items) |*l| {
         var has_nonzero_grad = false;
-        for (l.grad_weights) |g| {
+        for (l.grad_weights.slice) |g| {
             if (@abs(g) > 1e-6) {
                 has_nonzero_grad = true;
                 break;

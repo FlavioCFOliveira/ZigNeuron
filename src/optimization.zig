@@ -320,12 +320,12 @@ pub const Threading = struct {
                     // Accumulate gradients for this chunk of outputs
                     for (s..e) |out_idx| {
                         // Accumulate bias gradient
-                        l.grad_bias[out_idx] += grad[out_idx];
+                        l.grad_bias.slice[out_idx] += grad[out_idx];
 
                         // Accumulate weight gradients
                         for (0..l.input_size) |in_idx| {
                             const weight_idx = out_idx * l.input_size + in_idx;
-                            l.grad_weights[weight_idx] += grad[out_idx] * in[in_idx];
+                            l.grad_weights.slice[weight_idx] += grad[out_idx] * in[in_idx];
                         }
                     }
                 }

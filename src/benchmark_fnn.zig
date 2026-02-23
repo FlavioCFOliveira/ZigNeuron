@@ -94,7 +94,7 @@ pub fn main() !void {
 
     // Test CPU backend
     std.debug.print("Testing CPU Backend...\n", .{});
-    const cpu_result = try benchmarkFNN(zn.backend.Backend{ .cpu = {} }, allocator, "CPU");
+    const cpu_result = try benchmarkFNN(zn.backend.Backend{ .type = .cpu, .metal_ctx = null }, allocator, "CPU");
 
     std.debug.print("Testing Metal GPU Backend...\n", .{});
     const metal_result = try benchmarkFNN(zn.backend.Backend{ .gpu = .metal }, allocator, "Metal GPU");

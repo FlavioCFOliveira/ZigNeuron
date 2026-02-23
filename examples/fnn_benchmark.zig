@@ -38,7 +38,7 @@ fn benchmarkSinewaveRegression(allocator: std.mem.Allocator) !void {
 
     // Test with CPU backend
     std.debug.print("Testing with CPU backend...\n", .{});
-    const cpu_result = try benchmarkSinewave(allocator, zn.backend.Backend{ .cpu = {} }, "CPU");
+    const cpu_result = try benchmarkSinewave(allocator, zn.backend.Backend{ .type = .cpu, .metal_ctx = null }, "CPU");
     printBenchmarkResult(cpu_result);
 
     // Test with Metal backend (if available)
@@ -128,7 +128,7 @@ fn benchmarkBinaryClassification(allocator: std.mem.Allocator) !void {
 
     // Test with CPU backend
     std.debug.print("Testing with CPU backend...\n", .{});
-    const cpu_result = try benchmarkBinaryClassificationImpl(allocator, zn.backend.Backend{ .cpu = {} }, "CPU");
+    const cpu_result = try benchmarkBinaryClassificationImpl(allocator, zn.backend.Backend{ .type = .cpu, .metal_ctx = null }, "CPU");
     printBenchmarkResult(cpu_result);
 
     // Test with Metal backend (if available)
@@ -216,7 +216,7 @@ fn benchmarkMulticlassClassification(allocator: std.mem.Allocator) !void {
 
     // Test with CPU backend
     std.debug.print("Testing with CPU backend...\n", .{});
-    const cpu_result = try benchmarkMulticlassClassificationImpl(allocator, zn.backend.Backend{ .cpu = {} }, "CPU");
+    const cpu_result = try benchmarkMulticlassClassificationImpl(allocator, zn.backend.Backend{ .type = .cpu, .metal_ctx = null }, "CPU");
     printBenchmarkResult(cpu_result);
 
     // Test with Metal backend (if available)

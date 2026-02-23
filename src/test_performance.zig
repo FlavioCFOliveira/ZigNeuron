@@ -9,12 +9,18 @@ pub fn main() !void {
 
     // Test 1: CPU Backend
     std.debug.print("--- Test 1: CPU Backend ---\n", .{});
-    try testFNN(allocator, zn.backend.Backend{ .cpu = {} }, "CPU");
+    var cpu_backend = try zn.backend.Backend.init(allocator);
+    cpu_backend.type = .cpu;
+    try testFNN(allocator, cpu_backend, "CPU");
 
     // Test 2: Metal GPU Backend (if available)
     std.debug.print("\n--- Test 2: Metal GPU Backend ---\n", .{});
-    const metal_backend = zn.backend.Backend{ .gpu = .metal };
-    try testFNN(allocator, metal_backend, "Metal GPU");
+    const metal_backend = try zn.backend.Backend.init(allocator);
+    if (metal_backend.type == .gpu and metal_backend.type.gpu == .metal) {
+        try testFNN(allocator, metal_backend, "Metal GPU");
+    } else {
+        std.debug.print("Metal GPU not available on this system\n", .{});
+    }
 
     std.debug.print("\n=== All tests completed ===\n", .{});
 }
@@ -79,10 +85,10 @@ fn testFNN(allocator: std.mem.Allocator, backend: zn.backend.Backend, name: []co
     // Memory usage estimation
     var memory_usage: usize = 0;
     for (network.layers.items) |layer| {
-        memory_usage += layer.weights.len * @sizeOf(f32);
-        memory_usage += layer.bias.len * @sizeOf(f32);
-        memory_usage += layer.grad_weights.len * @sizeOf(f32);
-        memory_usage += layer.grad_bias.len * @sizeOf(f32);
+        memory_usage += layer.weights.size * @sizeOf(f32);
+        memory_usage += layer.bias.size * @sizeOf(f32);
+        memory_usage += layer.grad_weights.size * @sizeOf(f32);
+        memory_usage += layer.grad_bias.size * @sizeOf(f32);
     }
     std.debug.print("  Estimated memory usage: {d} bytes\n", .{memory_usage});
 

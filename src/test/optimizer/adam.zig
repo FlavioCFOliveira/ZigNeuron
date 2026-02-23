@@ -26,7 +26,7 @@ test "optimizer adam: initialization" {
     var adam: optimizer.Adam = .{};
 
     const allocator = testing.allocator;
-    var lyr = try layer.Dense.init(allocator, 2, 1, .relu, backend.Backend{ .cpu = {} });
+    var lyr = try layer.Dense.init(allocator, 2, 1, .relu, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer lyr.deinit();
 
     try adam.init(allocator, &lyr);
@@ -43,14 +43,14 @@ test "optimizer adam: first step" {
     var adam: optimizer.Adam = .{};
 
     const allocator = testing.allocator;
-    var lyr = try layer.Dense.init(allocator, 1, 1, .relu, backend.Backend{ .cpu = {} });
+    var lyr = try layer.Dense.init(allocator, 1, 1, .relu, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer lyr.deinit();
 
     try adam.init(allocator, &lyr);
     defer adam.deinit(allocator);
 
-    lyr.weights[0] = 1.0;
-    lyr.grad_weights[0] = 0.1;
+    lyr.weights.slice[0] = 1.0;
+    lyr.grad_weights.slice[0] = 0.1;
 
     // First step: t=1
     adam.step(&lyr, 0.001);
@@ -62,35 +62,35 @@ test "optimizer adam: first step" {
     // m_hat = 0.1 / (1 - 0.9) = 1.0
     // v_hat = 0.01 / (1 - 0.999) = 10.0
     // w = 1.0 - 0.001 * 1.0 / (sqrt(10) + 1e-8) ≈ 1.0 - 0.000316
-    try testing.expect(lyr.weights[0] < 1.0);
+    try testing.expect(lyr.weights.slice[0] < 1.0);
 }
 
 test "optimizer adam: bias correction" {
     var adam: optimizer.Adam = .{};
 
     const allocator = testing.allocator;
-    var lyr = try layer.Dense.init(allocator, 1, 1, .relu, backend.Backend{ .cpu = {} });
+    var lyr = try layer.Dense.init(allocator, 1, 1, .relu, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer lyr.deinit();
 
     try adam.init(allocator, &lyr);
     defer adam.deinit(allocator);
 
-    lyr.weights[0] = 1.0;
+    lyr.weights.slice[0] = 1.0;
 
     // First step: t=1, bias correction is strong
-    lyr.grad_weights[0] = 0.1;
+    lyr.grad_weights.slice[0] = 0.1;
     adam.step(&lyr, 0.001);
-    const w1 = lyr.weights[0];
+    const w1 = lyr.weights.slice[0];
 
     // Second step: t=2, bias correction is weaker
-    lyr.grad_weights[0] = 0.1;
+    lyr.grad_weights.slice[0] = 0.1;
     adam.step(&lyr, 0.001);
-    const w2 = lyr.weights[0];
+    const w2 = lyr.weights.slice[0];
 
     // Third step: t=3, bias correction is even weaker
-    lyr.grad_weights[0] = 0.1;
+    lyr.grad_weights.slice[0] = 0.1;
     adam.step(&lyr, 0.001);
-    const w3 = lyr.weights[0];
+    const w3 = lyr.weights.slice[0];
 
     // Weights should keep decreasing (learning)
     try testing.expect(w3 < w2);
@@ -101,27 +101,27 @@ test "optimizer adam: adaptive learning rate" {
     var adam: optimizer.Adam = .{};
 
     const allocator = testing.allocator;
-    var lyr = try layer.Dense.init(allocator, 1, 1, .relu, backend.Backend{ .cpu = {} });
+    var lyr = try layer.Dense.init(allocator, 1, 1, .relu, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer lyr.deinit();
 
     try adam.init(allocator, &lyr);
     defer adam.deinit(allocator);
 
-    lyr.weights[0] = 1.0;
+    lyr.weights.slice[0] = 1.0;
 
     // Large gradient multiple times
     for (0..10) |_| {
-        lyr.grad_weights[0] = 1.0;
+        lyr.grad_weights.slice[0] = 1.0;
         adam.step(&lyr, 0.001);
     }
 
     // Weight should have changed
-    try testing.expect(lyr.weights[0] < 1.0);
+    try testing.expect(lyr.weights.slice[0] < 1.0);
 }
 
 test "optimizer adam: different beta1 values" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     for ([_]f32{ 0.5, 0.9, 0.99 }) |beta1| {
         const adam: optimizer.Adam = .{ .beta1 = beta1 };
@@ -155,7 +155,7 @@ test "optimizer adam: different beta1 values" {
 
 test "optimizer adam: different beta2 values" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     for ([_]f32{ 0.99, 0.999, 0.9999 }) |beta2| {
         const adam: optimizer.Adam = .{ .beta2 = beta2 };
@@ -189,7 +189,7 @@ test "optimizer adam: different beta2 values" {
 
 test "optimizer adam: different eps values" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     for ([_]f32{ 1e-8, 1e-7, 1e-6 }) |eps| {
         const adam: optimizer.Adam = .{ .eps = eps };
@@ -229,26 +229,26 @@ test "optimizer adam: comparison with known values" {
     };
 
     const allocator = testing.allocator;
-    var lyr = try layer.Dense.init(allocator, 1, 1, .relu, backend.Backend{ .cpu = {} });
+    var lyr = try layer.Dense.init(allocator, 1, 1, .relu, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer lyr.deinit();
 
     try adam.init(allocator, &lyr);
     defer adam.deinit(allocator);
 
-    lyr.weights[0] = 0.5;
-    lyr.grad_weights[0] = 0.1;
+    lyr.weights.slice[0] = 0.5;
+    lyr.grad_weights.slice[0] = 0.1;
 
     // First step
     adam.step(&lyr, 0.001);
-    const w1 = lyr.weights[0];
+    const w1 = lyr.weights.slice[0];
 
     // Verify weight decreased
     try testing.expect(w1 < 0.5);
 
     // Second step
-    lyr.grad_weights[0] = 0.1;
+    lyr.grad_weights.slice[0] = 0.1;
     adam.step(&lyr, 0.001);
-    const w2 = lyr.weights[0];
+    const w2 = lyr.weights.slice[0];
 
     // Should continue decreasing
     try testing.expect(w2 < w1);
@@ -258,94 +258,94 @@ test "optimizer adam: bias update" {
     var adam: optimizer.Adam = .{};
 
     const allocator = testing.allocator;
-    var lyr = try layer.Dense.init(allocator, 1, 2, .relu, backend.Backend{ .cpu = {} });
+    var lyr = try layer.Dense.init(allocator, 1, 2, .relu, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer lyr.deinit();
 
     try adam.init(allocator, &lyr);
     defer adam.deinit(allocator);
 
-    lyr.bias[0] = 0.5;
-    lyr.bias[1] = 1.0;
-    lyr.grad_bias[0] = 0.1;
-    lyr.grad_bias[1] = 0.2;
+    lyr.bias.slice[0] = 0.5;
+    lyr.bias.slice[1] = 1.0;
+    lyr.grad_bias.slice[0] = 0.1;
+    lyr.grad_bias.slice[1] = 0.2;
 
     adam.step(&lyr, 0.001);
 
     // Both biases should have changed
-    try testing.expect(lyr.bias[0] != 0.5);
-    try testing.expect(lyr.bias[1] != 1.0);
+    try testing.expect(lyr.bias.slice[0] != 0.5);
+    try testing.expect(lyr.bias.slice[1] != 1.0);
 }
 
 test "optimizer adam: large gradient handling" {
     var adam: optimizer.Adam = .{};
 
     const allocator = testing.allocator;
-    var lyr = try layer.Dense.init(allocator, 1, 1, .relu, backend.Backend{ .cpu = {} });
+    var lyr = try layer.Dense.init(allocator, 1, 1, .relu, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer lyr.deinit();
 
     try adam.init(allocator, &lyr);
     defer adam.deinit(allocator);
 
-    lyr.weights[0] = 1.0;
+    lyr.weights.slice[0] = 1.0;
 
     // Very large gradient
-    lyr.grad_weights[0] = 100.0;
+    lyr.grad_weights.slice[0] = 100.0;
 
     adam.step(&lyr, 0.001);
 
     // Weight should still be reasonable (Adam adapts learning rate)
-    try testing.expect(std.math.isFinite(lyr.weights[0]));
+    try testing.expect(std.math.isFinite(lyr.weights.slice[0]));
 }
 
 test "optimizer adam: small gradient handling" {
     var adam: optimizer.Adam = .{};
 
     const allocator = testing.allocator;
-    var lyr = try layer.Dense.init(allocator, 1, 1, .relu, backend.Backend{ .cpu = {} });
+    var lyr = try layer.Dense.init(allocator, 1, 1, .relu, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer lyr.deinit();
 
     try adam.init(allocator, &lyr);
     defer adam.deinit(allocator);
 
-    lyr.weights[0] = 1.0;
+    lyr.weights.slice[0] = 1.0;
 
     // Very small gradient
-    lyr.grad_weights[0] = 1e-10;
+    lyr.grad_weights.slice[0] = 1e-10;
 
     adam.step(&lyr, 0.001);
 
     // Weight should still change slightly
-    try testing.expect(std.math.isFinite(lyr.weights[0]));
+    try testing.expect(std.math.isFinite(lyr.weights.slice[0]));
 }
 
 test "optimizer adam: numerical stability" {
     var adam: optimizer.Adam = .{};
 
     const allocator = testing.allocator;
-    var lyr = try layer.Dense.init(allocator, 1, 1, .relu, backend.Backend{ .cpu = {} });
+    var lyr = try layer.Dense.init(allocator, 1, 1, .relu, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer lyr.deinit();
 
     try adam.init(allocator, &lyr);
     defer adam.deinit(allocator);
 
     // Test with very small weights
-    lyr.weights[0] = 1e-10;
-    lyr.grad_weights[0] = 1e-12;
+    lyr.weights.slice[0] = 1e-10;
+    lyr.grad_weights.slice[0] = 1e-12;
 
     adam.step(&lyr, 0.001);
-    try testing.expect(std.math.isFinite(lyr.weights[0]));
+    try testing.expect(std.math.isFinite(lyr.weights.slice[0]));
 
     // Test with very large weights
-    lyr.weights[0] = 1e10;
-    lyr.grad_weights[0] = 1e8;
+    lyr.weights.slice[0] = 1e10;
+    lyr.grad_weights.slice[0] = 1e8;
 
     adam.step(&lyr, 0.001);
-    try testing.expect(std.math.isFinite(lyr.weights[0]));
+    try testing.expect(std.math.isFinite(lyr.weights.slice[0]));
 }
 
 test "optimizer adam: training convergence" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -380,7 +380,7 @@ test "optimizer adam: deinit" {
     var adam: optimizer.Adam = .{};
 
     const allocator = testing.allocator;
-    var lyr = try layer.Dense.init(allocator, 2, 1, .relu, backend.Backend{ .cpu = {} });
+    var lyr = try layer.Dense.init(allocator, 2, 1, .relu, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer lyr.deinit();
 
     try adam.init(allocator, &lyr);
@@ -393,24 +393,24 @@ test "optimizer adam: union interface" {
     var opt = optimizer.Optimizer{ .adam = optimizer.Adam{} };
     const allocator = testing.allocator;
 
-    var lyr = try layer.Dense.init(allocator, 2, 1, .relu, backend.Backend{ .cpu = {} });
+    var lyr = try layer.Dense.init(allocator, 2, 1, .relu, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer lyr.deinit();
 
     try opt.init(allocator, &lyr);
     defer opt.deinit(allocator, &lyr);
 
-    lyr.weights[0] = 1.0;
-    lyr.grad_weights[0] = 0.1;
+    lyr.weights.slice[0] = 1.0;
+    lyr.grad_weights.slice[0] = 0.1;
 
     opt.step(&lyr, 0.001);
 
     // Weight should have changed
-    try testing.expect(lyr.weights[0] < 1.0);
+    try testing.expect(lyr.weights.slice[0] < 1.0);
 }
 
 test "optimizer adam: learning rate effect" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     // High learning rate
     const net1 = try network.Network.init(allocator, be);
@@ -460,28 +460,28 @@ test "optimizer adam: adaptive behavior" {
     var adam: optimizer.Adam = .{};
 
     const allocator = testing.allocator;
-    var lyr = try layer.Dense.init(allocator, 1, 1, .relu, backend.Backend{ .cpu = {} });
+    var lyr = try layer.Dense.init(allocator, 1, 1, .relu, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer lyr.deinit();
 
     try adam.init(allocator, &lyr);
     defer adam.deinit(allocator);
 
-    lyr.weights[0] = 1.0;
+    lyr.weights.slice[0] = 1.0;
 
     // Large gradient
-    lyr.grad_weights[0] = 1.0;
+    lyr.grad_weights.slice[0] = 1.0;
     adam.step(&lyr, 0.001);
-    const w1 = lyr.weights[0];
+    const w1 = lyr.weights.slice[0];
 
     // Small gradient
-    lyr.grad_weights[0] = 0.01;
+    lyr.grad_weights.slice[0] = 0.01;
     adam.step(&lyr, 0.001);
-    const w2 = lyr.weights[0];
+    const w2 = lyr.weights.slice[0];
 
     // Large gradient again
-    lyr.grad_weights[0] = 1.0;
+    lyr.grad_weights.slice[0] = 1.0;
     adam.step(&lyr, 0.001);
-    const w3 = lyr.weights[0];
+    const w3 = lyr.weights.slice[0];
 
     // The change should differ based on gradient magnitude
     _ = std.math.abs(w1 - 1.0);
@@ -496,33 +496,33 @@ test "optimizer adam: zero gradient" {
     var adam: optimizer.Adam = .{};
 
     const allocator = testing.allocator;
-    var lyr = try layer.Dense.init(allocator, 1, 1, .relu, backend.Backend{ .cpu = {} });
+    var lyr = try layer.Dense.init(allocator, 1, 1, .relu, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer lyr.deinit();
 
     try adam.init(allocator, &lyr);
     defer adam.deinit(allocator);
 
-    lyr.weights[0] = 1.0;
-    lyr.grad_weights[0] = 0.0;
+    lyr.weights.slice[0] = 1.0;
+    lyr.grad_weights.slice[0] = 0.0;
 
     adam.step(&lyr, 0.001);
 
     // Weight should not change with zero gradient
-    try testing.expectNear(lyr.weights[0], 1.0, 0.0001);
+    try testing.expectNear(lyr.weights.slice[0], 1.0, 0.0001);
 }
 
 test "optimizer adam: multiple steps" {
     var adam: optimizer.Adam = .{};
 
     const allocator = testing.allocator;
-    var lyr = try layer.Dense.init(allocator, 1, 1, .relu, backend.Backend{ .cpu = {} });
+    var lyr = try layer.Dense.init(allocator, 1, 1, .relu, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer lyr.deinit();
 
     try adam.init(allocator, &lyr);
     defer adam.deinit(allocator);
 
-    lyr.weights[0] = 1.0;
-    lyr.grad_weights[0] = 0.1;
+    lyr.weights.slice[0] = 1.0;
+    lyr.grad_weights.slice[0] = 0.1;
 
     // Run 100 steps
     for (0..100) |_| {
@@ -530,15 +530,15 @@ test "optimizer adam: multiple steps" {
     }
 
     // Weight should have changed significantly
-    try testing.expect(lyr.weights[0] < 1.0);
+    try testing.expect(lyr.weights.slice[0] < 1.0);
 
     // Should still be finite
-    try testing.expect(std.math.isFinite(lyr.weights[0]));
+    try testing.expect(std.math.isFinite(lyr.weights.slice[0]));
 }
 
 test "optimizer adam: comparison with SGD" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     // Adam
     const net1 = try network.Network.init(allocator, be);
@@ -584,7 +584,7 @@ test "optimizer adam: comparison with SGD" {
 
 test "optimizer adam: loss reduction" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -627,14 +627,14 @@ test "optimizer adam: weight decay over time" {
     var adam: optimizer.Adam = .{};
 
     const allocator = testing.allocator;
-    var lyr = try layer.Dense.init(allocator, 1, 1, .relu, backend.Backend{ .cpu = {} });
+    var lyr = try layer.Dense.init(allocator, 1, 1, .relu, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer lyr.deinit();
 
     try adam.init(allocator, &lyr);
     defer adam.deinit(allocator);
 
-    lyr.weights[0] = 10.0;
-    lyr.grad_weights[0] = 0.01;
+    lyr.weights.slice[0] = 10.0;
+    lyr.grad_weights.slice[0] = 0.01;
 
     // Run many steps
     for (0..500) |_| {
@@ -642,15 +642,15 @@ test "optimizer adam: weight decay over time" {
     }
 
     // Weight should have decreased
-    try testing.expect(lyr.weights[0] < 10.0);
-    try testing.expect(std.math.isFinite(lyr.weights[0]));
+    try testing.expect(lyr.weights.slice[0] < 10.0);
+    try testing.expect(std.math.isFinite(lyr.weights.slice[0]));
 }
 
 test "optimizer adam: time step increment" {
     var adam: optimizer.Adam = .{};
 
     const allocator = testing.allocator;
-    var lyr = try layer.Dense.init(allocator, 1, 1, .relu, backend.Backend{ .cpu = {} });
+    var lyr = try layer.Dense.init(allocator, 1, 1, .relu, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer lyr.deinit();
 
     try adam.init(allocator, &lyr);
@@ -658,8 +658,8 @@ test "optimizer adam: time step increment" {
 
     try testing.expect(adam.t == 0);
 
-    lyr.weights[0] = 1.0;
-    lyr.grad_weights[0] = 0.1;
+    lyr.weights.slice[0] = 1.0;
+    lyr.grad_weights.slice[0] = 0.1;
 
     adam.step(&lyr, 0.001);
     try testing.expect(adam.t == 1);
@@ -675,14 +675,14 @@ test "optimizer adam: moment estimates" {
     var adam: optimizer.Adam = .{};
 
     const allocator = testing.allocator;
-    var lyr = try layer.Dense.init(allocator, 1, 1, .relu, backend.Backend{ .cpu = {} });
+    var lyr = try layer.Dense.init(allocator, 1, 1, .relu, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer lyr.deinit();
 
     try adam.init(allocator, &lyr);
     defer adam.deinit(allocator);
 
-    lyr.weights[0] = 1.0;
-    lyr.grad_weights[0] = 0.1;
+    lyr.weights.slice[0] = 1.0;
+    lyr.grad_weights.slice[0] = 0.1;
 
     // First step
     adam.step(&lyr, 0.001);
@@ -700,7 +700,7 @@ test "optimizer adam: moment estimates" {
 
 test "optimizer adam: convergence with noisy data" {
     const allocator = testing.allocator;
-    const be = backend.Backend{ .cpu = {} };
+    const be = backend.Backend{ .type = .cpu, .metal_ctx = null };
 
     const net = try network.Network.init(allocator, be);
     defer net.deinit();
@@ -736,23 +736,23 @@ test "optimizer adam: large layer" {
     var adam: optimizer.Adam = .{};
 
     const allocator = testing.allocator;
-    var lyr = try layer.Dense.init(allocator, 100, 50, .relu, backend.Backend{ .cpu = {} });
+    var lyr = try layer.Dense.init(allocator, 100, 50, .relu, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer lyr.deinit();
 
     try adam.init(allocator, &lyr);
     defer adam.deinit(allocator);
 
     // Set all gradients to 0.1
-    @memset(lyr.grad_weights, 0.1);
-    @memset(lyr.grad_bias, 0.1);
+    @memset(lyr.grad_weights.slice, 0.1);
+    @memset(lyr.grad_bias.slice, 0.1);
 
     adam.step(&lyr, 0.001);
 
     // All weights and biases should have updated
-    for (lyr.weights) |w| {
+    for (lyr.weights.slice) |w| {
         try testing.expect(std.math.isFinite(w));
     }
-    for (lyr.bias) |b| {
+    for (lyr.bias.slice) |b| {
         try testing.expect(std.math.isFinite(b));
     }
 }

@@ -16,7 +16,7 @@ test "memory leak: Dense layer init/deinit" {
 
     // Allocate many layers and verify no leaks
     for (0..100) |_| {
-        const lyr = try layer.Dense.init(allocator, 4, 8, .relu, backend.Backend{ .cpu = {} });
+        const lyr = try layer.Dense.init(allocator, 4, 8, .relu, backend.Backend{ .type = .cpu, .metal_ctx = null });
         lyr.deinit();
     }
 }
@@ -26,7 +26,7 @@ test "memory leak: Network init/deinit" {
 
     // Create and destroy many networks
     for (0..100) |_| {
-        const net = try network.Network.init(allocator, backend.Backend{ .cpu = {} });
+        const net = try network.Network.init(allocator, backend.Backend{ .type = .cpu, .metal_ctx = null });
         net.deinit();
     }
 }
@@ -35,7 +35,7 @@ test "memory leak: Network with layers" {
     const allocator = testing.allocator;
 
     for (0..50) |_| {
-        const net = try network.Network.init(allocator, backend.Backend{ .cpu = {} });
+        const net = try network.Network.init(allocator, backend.Backend{ .type = .cpu, .metal_ctx = null });
 
         _ = try net.addDense(4, 8, .relu);
         _ = try net.addDense(8, 4, .relu);
@@ -48,7 +48,7 @@ test "memory leak: Network with layers" {
 test "memory leak: Forward pass allocations" {
     const allocator = testing.allocator;
 
-    const net = try network.Network.init(allocator, backend.Backend{ .cpu = {} });
+    const net = try network.Network.init(allocator, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer net.deinit();
 
     _ = try net.addDense(4, 8, .relu);
@@ -69,7 +69,7 @@ test "memory leak: Forward pass allocations" {
 test "memory leak: Training allocations" {
     const allocator = testing.allocator;
 
-    const net = try network.Network.init(allocator, backend.Backend{ .cpu = {} });
+    const net = try network.Network.init(allocator, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer net.deinit();
 
     _ = try net.addDense(4, 8, .relu);
@@ -103,7 +103,7 @@ test "memory leak: SGD optimizer" {
     for (0..50) |_| {
         var sgd: optimizer.Sgd = .{ .momentum = 0.9 };
 
-        const lyr = try layer.Dense.init(allocator, 4, 8, .relu, backend.Backend{ .cpu = {} });
+        const lyr = try layer.Dense.init(allocator, 4, 8, .relu, backend.Backend{ .type = .cpu, .metal_ctx = null });
         defer lyr.deinit();
 
         try sgd.init(allocator, &lyr);
@@ -117,7 +117,7 @@ test "memory leak: Adam optimizer" {
     for (0..50) |_| {
         var adam: optimizer.Adam = .{};
 
-        const lyr = try layer.Dense.init(allocator, 4, 8, .relu, backend.Backend{ .cpu = {} });
+        const lyr = try layer.Dense.init(allocator, 4, 8, .relu, backend.Backend{ .type = .cpu, .metal_ctx = null });
         defer lyr.deinit();
 
         try adam.init(allocator, &lyr);
@@ -131,7 +131,7 @@ test "memory leak: RMSprop optimizer" {
     for (0..50) |_| {
         var rmsprop: optimizer.Rmsprop = .{};
 
-        const lyr = try layer.Dense.init(allocator, 4, 8, .relu, backend.Backend{ .cpu = {} });
+        const lyr = try layer.Dense.init(allocator, 4, 8, .relu, backend.Backend{ .type = .cpu, .metal_ctx = null });
         defer lyr.deinit();
 
         try rmsprop.init(allocator, &lyr);
@@ -143,7 +143,7 @@ test "memory leak: Network with optimizer" {
     const allocator = testing.allocator;
 
     for (0..20) |_| {
-        const net = try network.Network.init(allocator, backend.Backend{ .cpu = {} });
+        const net = try network.Network.init(allocator, backend.Backend{ .type = .cpu, .metal_ctx = null });
 
         _ = try net.addDense(4, 8, .relu);
         _ = try net.addDense(8, 1, .linear);
@@ -159,7 +159,7 @@ test "memory leak: Network with optimizer" {
 test "memory leak: Deep network" {
     const allocator = testing.allocator;
 
-    const net = try network.Network.init(allocator, backend.Backend{ .cpu = {} });
+    const net = try network.Network.init(allocator, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer net.deinit();
 
     // Deep network: 1-64-64-64-64-1
@@ -183,7 +183,7 @@ test "memory leak: Deep network" {
 test "memory leak: Batch training" {
     const allocator = testing.allocator;
 
-    const net = try network.Network.init(allocator, backend.Backend{ .cpu = {} });
+    const net = try network.Network.init(allocator, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer net.deinit();
 
     _ = try net.addDense(4, 8, .relu);
@@ -215,7 +215,7 @@ test "memory leak: Multiple networks simultaneously" {
     // Create multiple networks at once
     var networks: [20]*network.Network = undefined;
     for (0..20) |i| {
-        networks[i] = try network.Network.init(allocator, backend.Backend{ .cpu = {} });
+        networks[i] = try network.Network.init(allocator, backend.Backend{ .type = .cpu, .metal_ctx = null });
 
         _ = try networks[i].addDense(2, 4, .relu);
         _ = try networks[i].addDense(4, 1, .sigmoid);
@@ -238,7 +238,7 @@ test "memory leak: Multiple networks simultaneously" {
 test "memory leak: Sequential training" {
     const allocator = testing.allocator;
 
-    const net = try network.Network.init(allocator, backend.Backend{ .cpu = {} });
+    const net = try network.Network.init(allocator, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer net.deinit();
 
     _ = try net.addDense(1, 8, .relu);
@@ -271,15 +271,17 @@ test "memory leak: Layer operations" {
 
     // Test forward/backward cycles
     for (0..100) |_| {
-        const lyr = try layer.Dense.init(allocator, 4, 8, .relu, backend.Backend{ .cpu = {} });
+        const lyr = try layer.Dense.init(allocator, 4, 8, .relu, backend.Backend{ .type = .cpu, .metal_ctx = null });
 
         const input: []const f32 = &.{ 0.1, 0.2, 0.3, 0.4 };
         var output: [8]f32 = undefined;
-        try lyr.forward(input, &output);
+        try lyr.forward(input, null, &output, null);
 
         const grad_output: []const f32 = &.{ 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0 };
         var grad_input: [4]f32 = undefined;
-        try lyr.backward(input, grad_output, &grad_input);
+        var pre_act: [8]f32 = undefined;
+        @memset(&pre_act, 0.5);
+        try lyr.backward(input, null, grad_output, null, &grad_input, null, &pre_act, null);
 
         lyr.deinit();
     }
@@ -329,7 +331,7 @@ test "memory leak: Loss operations" {
 test "memory leak: Large network" {
     const allocator = testing.allocator;
 
-    const net = try network.Network.init(allocator, backend.Backend{ .cpu = {} });
+    const net = try network.Network.init(allocator, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer net.deinit();
 
     // Large network
@@ -352,7 +354,7 @@ test "memory leak: Large network" {
 test "memory leak: Gradient computation" {
     const allocator = testing.allocator;
 
-    const net = try network.Network.init(allocator, backend.Backend{ .cpu = {} });
+    const net = try network.Network.init(allocator, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer net.deinit();
 
     _ = try net.addDense(4, 8, .relu);
@@ -379,14 +381,14 @@ test "memory leak: Optimizer step" {
     for (0..100) |_| {
         var sgd: optimizer.Sgd = .{ .momentum = 0.9 };
 
-        const lyr = try layer.Dense.init(allocator, 4, 8, .relu, backend.Backend{ .cpu = {} });
+        const lyr = try layer.Dense.init(allocator, 4, 8, .relu, backend.Backend{ .type = .cpu, .metal_ctx = null });
 
         try sgd.init(allocator, &lyr);
 
         // Run many steps
         for (0..100) |_| {
-            @memset(lyr.grad_weights, 0.1);
-            @memset(lyr.grad_bias, 0.1);
+            @memset(lyr.grad_weights.slice, 0.1);
+            @memset(lyr.grad_bias.slice, 0.1);
             sgd.step(&lyr, 0.01);
         }
 
@@ -398,7 +400,7 @@ test "memory leak: Optimizer step" {
 test "memory leak: Complex training loop" {
     const allocator = testing.allocator;
 
-    const net = try network.Network.init(allocator, backend.Backend{ .cpu = {} });
+    const net = try network.Network.init(allocator, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer net.deinit();
 
     _ = try net.addDense(4, 8, .relu);
@@ -438,7 +440,7 @@ test "memory leak: Multiple optimizers" {
     var optimizers: [10]optimizer.Optimizer = undefined;
 
     for (0..10) |i| {
-        networks[i] = try network.Network.init(allocator, backend.Backend{ .cpu = {} });
+        networks[i] = try network.Network.init(allocator, backend.Backend{ .type = .cpu, .metal_ctx = null });
 
         _ = try networks[i].addDense(2, 4, .relu);
         _ = try networks[i].addDense(4, 1, .linear);
@@ -471,7 +473,7 @@ test "memory leak: Multiple optimizers" {
 test "memory leak: Network copy scenario" {
     const allocator = testing.allocator;
 
-    const net1 = try network.Network.init(allocator, backend.Backend{ .cpu = {} });
+    const net1 = try network.Network.init(allocator, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer net1.deinit();
 
     _ = try net1.addDense(2, 4, .relu);
@@ -490,7 +492,7 @@ test "memory leak: Network copy scenario" {
     try net1.train(training_data, training_targets, 10, 0.01, loss_fn);
 
     // Create second network
-    const net2 = try network.Network.init(allocator, backend.Backend{ .cpu = {} });
+    const net2 = try network.Network.init(allocator, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer net2.deinit();
 
     _ = try net2.addDense(2, 4, .relu);
@@ -512,14 +514,14 @@ test "memory leak: Nested allocations" {
 
     // Test allocation/deallocation nesting
     for (0..10) |_| {
-        const net1 = try network.Network.init(allocator, backend.Backend{ .cpu = {} });
+        const net1 = try network.Network.init(allocator, backend.Backend{ .type = .cpu, .metal_ctx = null });
         defer net1.deinit();
 
         _ = try net1.addDense(2, 4, .relu);
         _ = try net1.addDense(4, 1, .linear);
 
         for (0..5) |_| {
-            const net2 = try network.Network.init(allocator, backend.Backend{ .cpu = {} });
+            const net2 = try network.Network.init(allocator, backend.Backend{ .type = .cpu, .metal_ctx = null });
             defer net2.deinit();
 
             _ = try net2.addDense(2, 4, .relu);
@@ -542,21 +544,21 @@ test "memory leak: Deep nesting" {
     const allocator = testing.allocator;
 
     // Create a deeply nested structure
-    var level1 = try network.Network.init(allocator, backend.Backend{ .cpu = {} });
+    var level1 = try network.Network.init(allocator, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer level1.deinit();
 
     _ = try level1.addDense(2, 4, .relu);
     _ = try level1.addDense(4, 1, .linear);
 
     for (0..5) |_| {
-        var level2 = try network.Network.init(allocator, backend.Backend{ .cpu = {} });
+        var level2 = try network.Network.init(allocator, backend.Backend{ .type = .cpu, .metal_ctx = null });
         defer level2.deinit();
 
         _ = try level2.addDense(2, 4, .relu);
         _ = try level2.addDense(4, 1, .linear);
 
         for (0..3) |_| {
-            var level3 = try network.Network.init(allocator, backend.Backend{ .cpu = {} });
+            var level3 = try network.Network.init(allocator, backend.Backend{ .type = .cpu, .metal_ctx = null });
             defer level3.deinit();
 
             _ = try level3.addDense(2, 4, .relu);
@@ -580,7 +582,7 @@ test "memory leak: Many small networks" {
 
     // Create many small networks
     for (0..200) |_| {
-        const net = try network.Network.init(allocator, backend.Backend{ .cpu = {} });
+        const net = try network.Network.init(allocator, backend.Backend{ .type = .cpu, .metal_ctx = null });
         defer net.deinit();
 
         _ = try net.addDense(1, 2, .relu);
@@ -595,7 +597,7 @@ test "memory leak: Many small networks" {
 test "memory leak: Large layer training" {
     const allocator = testing.allocator;
 
-    const net = try network.Network.init(allocator, backend.Backend{ .cpu = {} });
+    const net = try network.Network.init(allocator, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer net.deinit();
 
     // Large layer
@@ -622,11 +624,11 @@ test "memory leak: Repeated layer creation" {
     const allocator = testing.allocator;
 
     for (0..500) |_| {
-        const lyr = try layer.Dense.init(allocator, 4, 4, .relu, backend.Backend{ .cpu = {} });
+        const lyr = try layer.Dense.init(allocator, 4, 4, .relu, backend.Backend{ .type = .cpu, .metal_ctx = null });
 
         const input: []const f32 = &.{ 0.1, 0.2, 0.3, 0.4 };
         var output: [4]f32 = undefined;
-        try lyr.forward(input, &output);
+        try lyr.forward(input, null, &output, null);
 
         lyr.deinit();
     }
@@ -641,16 +643,21 @@ test "memory leak: Activation function cycles" {
 
     // Cycle through activations
     for (0..100) |_| {
-        const lyr1 = try layer.Dense.init(allocator, 4, 8, .relu, backend.Backend{ .cpu = {} });
-        const lyr2 = try layer.Dense.init(allocator, 8, 4, .sigmoid, backend.Backend{ .cpu = {} });
-        const lyr3 = try layer.Dense.init(allocator, 4, 2, .tanh, backend.Backend{ .cpu = {} });
+        const lyr1 = try layer.Dense.init(allocator, 4, 8, .relu, backend.Backend{ .type = .cpu, .metal_ctx = null });
+        const lyr2 = try layer.Dense.init(allocator, 8, 4, .sigmoid, backend.Backend{ .type = .cpu, .metal_ctx = null });
+        const lyr3 = try layer.Dense.init(allocator, 4, 2, .tanh, backend.Backend{ .type = .cpu, .metal_ctx = null });
 
         const input: []const f32 = &.{ 0.1, 0.2, 0.3, 0.4 };
         var output: [2]f32 = undefined;
 
-        const temp1 = try lyr1.forward(input, &[_]f32{0} ** 8);
-        const temp2 = try lyr2.forward(temp1, &[_]f32{0} ** 4);
-        _ = try lyr3.forward(temp2, &output);
+        const temp1_buf = try allocator.alloc(f32, 8);
+        defer allocator.free(temp1_buf);
+        const temp1 = try lyr1.forward(input, null, temp1_buf, null);
+
+        const temp2_buf = try allocator.alloc(f32, 4);
+        defer allocator.free(temp2_buf);
+        const temp2 = try lyr2.forward(temp1, null, temp2_buf, null);
+        _ = try lyr3.forward(temp2, null, &output, null);
 
         lyr1.deinit();
         lyr2.deinit();
@@ -664,14 +671,14 @@ test "memory leak: Optimizer with momentum" {
     for (0..50) |_| {
         var sgd: optimizer.Sgd = .{ .momentum = 0.9 };
 
-        const lyr = try layer.Dense.init(allocator, 10, 10, .relu, backend.Backend{ .cpu = {} });
+        const lyr = try layer.Dense.init(allocator, 10, 10, .relu, backend.Backend{ .type = .cpu, .metal_ctx = null });
 
         try sgd.init(allocator, &lyr);
 
         // Run many steps
         for (0..50) |_| {
-            @memset(lyr.grad_weights, 0.01);
-            @memset(lyr.grad_bias, 0.01);
+            @memset(lyr.grad_weights.slice, 0.01);
+            @memset(lyr.grad_bias.slice, 0.01);
             sgd.step(&lyr, 0.01);
         }
 
@@ -686,14 +693,14 @@ test "memory leak: Adam state accumulation" {
     for (0..50) |_| {
         var adam: optimizer.Adam = .{};
 
-        const lyr = try layer.Dense.init(allocator, 8, 8, .relu, backend.Backend{ .cpu = {} });
+        const lyr = try layer.Dense.init(allocator, 8, 8, .relu, backend.Backend{ .type = .cpu, .metal_ctx = null });
 
         try adam.init(allocator, &lyr);
 
         // Run many steps
         for (0..100) |_| {
-            @memset(lyr.grad_weights, 0.1);
-            @memset(lyr.grad_bias, 0.1);
+            @memset(lyr.grad_weights.slice, 0.1);
+            @memset(lyr.grad_bias.slice, 0.1);
             adam.step(&lyr, 0.001);
         }
 
@@ -708,14 +715,14 @@ test "memory leak: RMSprop state accumulation" {
     for (0..50) |_| {
         var rmsprop: optimizer.Rmsprop = .{};
 
-        const lyr = try layer.Dense.init(allocator, 8, 8, .relu, backend.Backend{ .cpu = {} });
+        const lyr = try layer.Dense.init(allocator, 8, 8, .relu, backend.Backend{ .type = .cpu, .metal_ctx = null });
 
         try rmsprop.init(allocator, &lyr);
 
         // Run many steps
         for (0..100) |_| {
-            @memset(lyr.grad_weights, 0.1);
-            @memset(lyr.grad_bias, 0.1);
+            @memset(lyr.grad_weights.slice, 0.1);
+            @memset(lyr.grad_bias.slice, 0.1);
             rmsprop.step(&lyr, 0.001);
         }
 
@@ -727,7 +734,7 @@ test "memory leak: RMSprop state accumulation" {
 test "memory leak: Gradient accumulation" {
     const allocator = testing.allocator;
 
-    const net = try network.Network.init(allocator, backend.Backend{ .cpu = {} });
+    const net = try network.Network.init(allocator, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer net.deinit();
 
     _ = try net.addDense(4, 8, .relu);
@@ -751,7 +758,7 @@ test "memory leak: Gradient accumulation" {
 test "memory leak: Mixed operations" {
     const allocator = testing.allocator;
 
-    const net = try network.Network.init(allocator, backend.Backend{ .cpu = {} });
+    const net = try network.Network.init(allocator, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer net.deinit();
 
     _ = try net.addDense(2, 4, .relu);
@@ -787,7 +794,7 @@ test "memory leak: Mixed operations" {
 test "memory leak: Complex network with multiple optimizers" {
     const allocator = testing.allocator;
 
-    const net = try network.Network.init(allocator, backend.Backend{ .cpu = {} });
+    const net = try network.Network.init(allocator, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer net.deinit();
 
     _ = try net.addDense(2, 8, .relu);
