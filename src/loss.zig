@@ -6,32 +6,35 @@ pub const Loss = union(enum) {
     cross_entropy, // Cross-entropy (expects pre-computed probabilities)
     cross_entropy_logits, // Cross-entropy with logits (combined softmax + cross-entropy)
     binary_cross_entropy,
+    kl_divergence, // KL Divergence for VAE
 
     /// Whether the loss gradient is already computed w.r.t. pre-activation (logits)
     /// For cross-entropy with log-softmax, the gradient is (softmax - target) which is w.r.t. logits
     /// For MSE and BCE, the gradient needs to be multiplied by activation derivative
     pub fn isLogitsGradient(self: Loss) bool {
         return switch (self) {
-            .cross_entropy => true,
+            .cross_entropy, .kl_divergence => true,
             else => false,
         };
     }
 
     /// Compute loss value
     pub fn forward(self: Loss, output: []const f32, target: []const f32) !f32 {
-        if (output.len != target.len) return error.ShapeMismatch;
+        // target is unused for kl_divergence
+        if (self != .kl_divergence and output.len != target.len) return error.ShapeMismatch;
 
         return switch (self) {
             .mse => self.mseForward(output, target),
             .cross_entropy => self.crossEntropyForward(output, target),
             .cross_entropy_logits => self.crossEntropyLogitsForward(output, target),
             .binary_cross_entropy => self.binaryCrossEntropyForward(output, target),
+            .kl_divergence => self.klDivergenceForward(output),
         };
     }
 
     /// Compute gradient of loss w.r.t output
     pub fn backward(self: Loss, output: []const f32, target: []const f32, grad_output: []f32) !void {
-        if (output.len != target.len) return error.ShapeMismatch;
+        if (self != .kl_divergence and output.len != target.len) return error.ShapeMismatch;
         if (output.len != grad_output.len) return error.ShapeMismatch;
 
         switch (self) {
@@ -39,6 +42,39 @@ pub const Loss = union(enum) {
             .cross_entropy => try self.crossEntropyBackward(output, target, grad_output),
             .cross_entropy_logits => try self.crossEntropyLogitsBackward(output, target, grad_output),
             .binary_cross_entropy => try self.binaryCrossEntropyBackward(output, target, grad_output),
+            .kl_divergence => try self.klDivergenceBackward(output, grad_output),
+        }
+    }
+
+    fn klDivergenceForward(self: Loss, output: []const f32) f32 {
+        _ = self;
+        // output = [mu, log_var]
+        const n = output.len / 2;
+        const mu = output[0..n];
+        const log_var = output[n..];
+        var kld: f32 = 0;
+        for (0..n) |i| {
+            kld += -0.5 * (1.0 + log_var[i] - mu[i] * mu[i] - std.math.exp(log_var[i]));
+        }
+        return kld / @as(f32, @floatFromInt(n));
+    }
+
+    fn klDivergenceBackward(self: Loss, output: []const f32, grad_output: []f32) !void {
+        _ = self;
+        const n = output.len / 2;
+        const mu = output[0..n];
+        const log_var = output[n..];
+        const grad_mu = grad_output[0..n];
+        const grad_log_var = grad_output[n..];
+        const n_f = @as(f32, @floatFromInt(n));
+
+        for (mu, grad_mu) |m, *gm| {
+            // dKLD/dmu = mu
+            gm.* = m / n_f;
+        }
+        for (log_var, grad_log_var) |lv, *glv| {
+            // dKLD/dlog_var = 0.5 * (exp(log_var) - 1)
+            glv.* = 0.5 * (std.math.exp(lv) - 1.0) / n_f;
         }
     }
 
@@ -54,8 +90,9 @@ pub const Loss = union(enum) {
 
     fn mseBackward(self: Loss, output: []const f32, target: []const f32, grad_output: []f32) !void {
         _ = self;
-        for (output, target, grad_output, 0..) |o, t, _, i| {
-            grad_output[i] = 2 * (o - t);
+        const n: f32 = @floatFromInt(output.len);
+        for (output, target, grad_output) |o, t, *go| {
+            go.* = 2 * (o - t) / n;
         }
     }
 
@@ -124,34 +161,26 @@ pub const Loss = union(enum) {
         _ = self;
         // For cross-entropy with log-softmax, the gradient is (softmax(output) - target)
         // This is the derivative of the loss with respect to the logits
-        // We need to compute softmax(output) first
 
         const n = output.len;
+        if (n == 0) return;
 
         // Find max value for numerical stability
-        var max_val: f32 = -std.math.inf(f32);
-        for (output) |x| {
+        var max_val: f32 = output[0];
+        for (output[1..]) |x| {
             if (x > max_val) max_val = x;
         }
 
-        // Compute exponentials using a larger array for flexibility
-        var softmax_buffer: [16]f32 = undefined;  // Support up to 16 classes
-        if (n > softmax_buffer.len) return error.NotSupported;
-
+        // Compute exponentials into grad_output to avoid allocation
         var sum: f32 = 0;
-        for (output, 0..) |x, i| {
-            softmax_buffer[i] = std.math.exp(x - max_val);
-            sum += softmax_buffer[i];
+        for (output, grad_output) |o, *go| {
+            go.* = std.math.exp(o - max_val);
+            sum += go.*;
         }
 
-        // Normalize to get probabilities
-        for (0..n) |i| {
-            softmax_buffer[i] /= sum;
-        }
-
-        // Gradient is (softmax - target)
-        for (0..n) |i| {
-            grad_output[i] = softmax_buffer[i] - target[i];
+        // Normalize and subtract target: grad = softmax - target
+        for (grad_output, target) |*go, t| {
+            go.* = (go.* / sum) - t;
         }
     }
 
@@ -192,6 +221,8 @@ pub const Loss = union(enum) {
     fn crossEntropyLogitsBackward(self: Loss, logits: []const f32, target: []const f32, grad_output: []f32) !void {
         _ = self;
 
+        if (logits.len == 0) return;
+
         // Compute softmax(logits)
         var max_logit: f32 = logits[0];
         for (logits[1..]) |logit| {
@@ -199,14 +230,14 @@ pub const Loss = union(enum) {
         }
 
         var sum_exp: f32 = 0;
-        for (logits) |logit| {
-            sum_exp += std.math.exp(logit - max_logit);
+        for (logits, grad_output) |logit, *go| {
+            go.* = std.math.exp(logit - max_logit);
+            sum_exp += go.*;
         }
 
         // Gradient is: softmax(logits) - target
-        for (logits, target, grad_output, 0..) |logit, t, _, i| {
-            const prob = std.math.exp(logit - max_logit) / sum_exp;
-            grad_output[i] = prob - t;
+        for (grad_output, target) |*go, t| {
+            go.* = (go.* / sum_exp) - t;
         }
     }
 
@@ -234,13 +265,14 @@ pub const Loss = union(enum) {
         // For BCE with sigmoid output, the gradient simplifies to (p - t)
         // because the sigmoid derivative cancels with the denominator
         // Use clipping for numerical stability
+        const n: f32 = @floatFromInt(output.len);
         const eps: f32 = 1e-7;
-        for (output, target, grad_output, 0..) |o, t, _, i| {
+        for (output, target, grad_output) |o, t, *go| {
             var p = o;
             if (p < eps) p = eps;
-            if (p > 1 - eps) p = 1 - eps;
+            if (p > 1.0 - eps) p = 1.0 - eps;
             // Gradient of BCE with sigmoid is simply (prediction - target)
-            grad_output[i] = p - t;
+            go.* = (p - t) / n;
         }
     }
 };

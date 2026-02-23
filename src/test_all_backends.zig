@@ -122,10 +122,10 @@ fn testBackend(allocator: std.mem.Allocator, backend: zn.backend.Backend, name: 
 
     // Calculate memory usage
     for (network.layers.items) |lyr| {
-        result.memory_usage_bytes += lyr.weights.slice.len * @sizeOf(f32);
-        result.memory_usage_bytes += lyr.bias.slice.len * @sizeOf(f32);
-        result.memory_usage_bytes += lyr.grad_weights.slice.len * @sizeOf(f32);
-        result.memory_usage_bytes += lyr.grad_bias.slice.len * @sizeOf(f32);
+        result.memory_usage_bytes += lyr.getWeights().slice.len * @sizeOf(f32);
+        result.memory_usage_bytes += lyr.getBias().slice.len * @sizeOf(f32);
+        result.memory_usage_bytes += lyr.getGradWeights().slice.len * @sizeOf(f32);
+        result.memory_usage_bytes += lyr.getGradBias().slice.len * @sizeOf(f32);
     }
 
     // Generate test data

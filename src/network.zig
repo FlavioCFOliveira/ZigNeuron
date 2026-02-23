@@ -44,12 +44,12 @@ pub const Network = struct {
     optimizers: std.array_list.Managed(?optimizer.Optimizer),
     /// Pre-allocated buffers for GPU efficiency
     work_buffer: ?[]f32, // Reusable buffer for intermediate computations
+    output_buffer: ?[]f32, // Pre-allocated output buffer for training
     max_layer_size: usize, // Track maximum layer size for buffer allocation
 
     // Pre-allocated work tensors for backprop to avoid repeated allocation/deallocation (crucial for Metal batching)
     grad_work_1: ?tensor.Tensor = null,
     grad_work_2: ?tensor.Tensor = null,
-    grad_after_act_work: ?tensor.Tensor = null,
 
     pub fn init(allocator: std.mem.Allocator, backend: backend_module.Backend) !*Network {
         const self = try allocator.create(Network);
@@ -60,12 +60,12 @@ pub const Network = struct {
         self.caches = std.array_list.Managed(?LayerCache).init(allocator);
         self.backend = backend;
         self.work_buffer = null;
+        self.output_buffer = null;
         self.max_layer_size = 0;
         self.optimizers = std.array_list.Managed(?optimizer.Optimizer).init(allocator);
 
         self.grad_work_1 = null;
         self.grad_work_2 = null;
-        self.grad_after_act_work = null;
 
         return self;
     }
@@ -89,11 +89,13 @@ pub const Network = struct {
         if (self.work_buffer) |buf| {
             allocator.free(buf);
         }
+        if (self.output_buffer) |buf| {
+            allocator.free(buf);
+        }
 
         // Free work tensors
         if (self.grad_work_1) |*t| t.deinit();
         if (self.grad_work_2) |*t| t.deinit();
-        if (self.grad_after_act_work) |*t| t.deinit();
 
         var mutable_backend = self.backend;
         mutable_backend.deinit();
@@ -279,18 +281,17 @@ pub const Network = struct {
     }
 
     fn reallocateWorkBuffers(self: *Network, size: usize) !void {
-        if (self.backend.type == .gpu) {
-            if (self.work_buffer) |buf| self.allocator.free(buf);
-            self.work_buffer = try self.allocator.alloc(f32, size);
+        if (self.work_buffer) |buf| self.allocator.free(buf);
+        self.work_buffer = try self.allocator.alloc(f32, size);
 
-            if (self.grad_work_1) |*t| t.deinit();
-            if (self.grad_work_2) |*t| t.deinit();
-            if (self.grad_after_act_work) |*t| t.deinit();
+        if (self.output_buffer) |buf| self.allocator.free(buf);
+        self.output_buffer = try self.allocator.alloc(f32, size);
 
-            self.grad_work_1 = try tensor.Tensor.init(self.allocator, &.{size}, self.backend);
-            self.grad_work_2 = try tensor.Tensor.init(self.allocator, &.{size}, self.backend);
-            self.grad_after_act_work = try tensor.Tensor.init(self.allocator, &.{size}, self.backend);
-        }
+        if (self.grad_work_1) |*t| t.deinit();
+        if (self.grad_work_2) |*t| t.deinit();
+
+        self.grad_work_1 = try tensor.Tensor.init(self.allocator, &.{size}, self.backend);
+        self.grad_work_2 = try tensor.Tensor.init(self.allocator, &.{size}, self.backend);
     }
 
     pub fn forward(self: *Network, input: []const f32, output: []f32) !void {
@@ -302,31 +303,37 @@ pub const Network = struct {
         var current_buf: ?*const metal.MTLBuffer = null;
 
         for (self.layers.items, 0..) |l, i| {
+            const l_input_size = l.inputSize();
+            const seq_len = current_slice.len / l_input_size;
+            const l_output_size = l.outputSize();
+            const total_output_size = seq_len * l_output_size;
+
             // Reuse cache if it exists and has the correct size
             if (self.caches.items[i]) |*cache| {
                 if (cache.input.slice.len != current_slice.len) {
                     cache.input.deinit();
                     cache.input = try tensor.Tensor.init(self.allocator, &.{current_slice.len}, self.backend);
                 }
-                if (cache.activated_output.slice.len != l.outputSize()) {
+                if (cache.activated_output.slice.len != total_output_size) {
                     cache.activated_output.deinit();
-                    cache.activated_output = try tensor.Tensor.init(self.allocator, &.{l.outputSize()}, self.backend);
+                    cache.activated_output = try tensor.Tensor.init(self.allocator, &.{total_output_size}, self.backend);
                 }
             } else {
                 self.caches.items[i] = LayerCache{
                     .input = try tensor.Tensor.init(self.allocator, &.{current_slice.len}, self.backend),
-                    .activated_output = try tensor.Tensor.init(self.allocator, &.{l.outputSize()}, self.backend),
+                    .activated_output = try tensor.Tensor.init(self.allocator, &.{total_output_size}, self.backend),
                 };
             }
 
             var cache = &self.caches.items[i].?;
 
             if (current_buf) |buf| {
-                // GPU to GPU copy (using linear activation as a copy kernel)
-                try self.backend.activationForward(.linear, current_slice, buf, cache.input.slice, cache.input.getMtlBuffer());
+                // GPU to GPU copy
+                try self.backend.copyData(current_slice, buf, cache.input.slice, cache.input.getMtlBuffer());
             } else {
                 // CPU to GPU copy
                 @memcpy(cache.input.slice, current_slice);
+                try self.backend.copyData(cache.input.slice, null, cache.input.slice, cache.input.getMtlBuffer());
             }
 
             // Run layer forward pass
@@ -337,9 +344,30 @@ pub const Network = struct {
         }
 
         // Copy final output to provided buffer
-        const last_activated_output = self.caches.items[self.layers.items.len - 1].?.activated_output;
-        const final_slice = last_activated_output.slice;
-        @memcpy(output[0..final_slice.len], final_slice);
+        const last_cache = self.caches.items[self.layers.items.len - 1].?;
+        const final_slice = last_cache.activated_output.slice;
+        const last_layer_output_size = self.layers.items[self.layers.items.len - 1].outputSize();
+        const final_seq_len = final_slice.len / last_layer_output_size;
+
+        // Sync final output from GPU to CPU slice
+        // Only wait for completion IF we are not in a larger batch
+        if (self.backend.metal_ctx) |ctx| {
+            if (ctx.active_command_buffer == null) {
+                try self.backend.endCommandBatch();
+                try self.backend.copyData(final_slice, last_cache.activated_output.getMtlBuffer(), final_slice, null);
+            }
+        } else {
+            // CPU mode or already in a batch - the caller will call endCommandBatch
+        }
+
+        const out_len = @min(output.len, final_slice.len);
+        if (final_seq_len > 1 and output.len == last_layer_output_size) {
+            // Many-to-one: only copy the last step of the sequence
+            const last_step_start = (final_seq_len - 1) * last_layer_output_size;
+            @memcpy(output, final_slice[last_step_start .. last_step_start + last_layer_output_size]);
+        } else {
+            @memcpy(output[0..out_len], final_slice[0..out_len]);
+        }
     }
 
     pub fn clearGradients(self: *Network) void {
@@ -357,22 +385,28 @@ pub const Network = struct {
         const output = last_cache.activated_output.slice;
         const output_buf = last_cache.activated_output.getMtlBuffer();
 
-        // Use pre-allocated work tensors
-        if (self.grad_work_1 == null) {
-            // If they weren't allocated in addDense (CPU mode), allocate them here
-            self.grad_work_1 = try tensor.Tensor.init(self.allocator, &.{self.max_layer_size}, self.backend);
-            self.grad_work_2 = try tensor.Tensor.init(self.allocator, &.{self.max_layer_size}, self.backend);
-            self.grad_after_act_work = try tensor.Tensor.init(self.allocator, &.{self.max_layer_size}, self.backend);
+        // Use pre-allocated work tensors, resizing if necessary
+        // We need to accommodate the largest sequence across all layers
+        var max_needed: usize = 0;
+        for (self.caches.items) |cache_opt| {
+            if (cache_opt) |c| {
+                max_needed = @max(max_needed, c.input.slice.len);
+                max_needed = @max(max_needed, c.activated_output.slice.len);
+            }
+        }
+
+        if (self.grad_work_1 == null or self.grad_work_1.?.slice.len < max_needed) {
+            if (self.grad_work_1) |*t| t.deinit();
+            if (self.grad_work_2) |*t| t.deinit();
+            self.grad_work_1 = try tensor.Tensor.init(self.allocator, &.{max_needed}, self.backend);
+            self.grad_work_2 = try tensor.Tensor.init(self.allocator, &.{max_needed}, self.backend);
         }
 
         var grad = self.grad_work_1.?;
         var next_grad = self.grad_work_2.?;
-        var grad_after_act = self.grad_after_act_work.?;
 
-        const output_size = self.layers.items[last_layer_idx].outputSize();
-
-        // Compute gradient of loss w.r.t output
-        try self.backend.lossBackward(loss_fn, output, output_buf, target, null, grad.slice[0..output_size], grad.getMtlBuffer());
+        // Compute gradient of loss w.r.t output for the entire sequence
+        try self.backend.lossBackward(loss_fn, output, output_buf, target, null, grad.slice[0..output.len], grad.getMtlBuffer());
 
         // Backpropagate through layers in reverse order
         var i: usize = self.layers.items.len;
@@ -381,37 +415,22 @@ pub const Network = struct {
             const l = self.layers.items[i];
             const cache = self.caches.items[i] orelse return error.NoCache;
 
-            // Compute gradient after activation
-            try self.backend.activationBackward(l.getActivation(),
-                cache.activated_output.slice, cache.activated_output.getMtlBuffer(),
-                grad.slice[0..l.outputSize()], grad.getMtlBuffer(),
-                grad_after_act.slice, grad_after_act.getMtlBuffer()
-            );
+            const grad_in_size = cache.input.slice.len;
+            const grad_input_slice = next_grad.slice[0..grad_in_size];
 
-            // Accumulate gradients for weights and bias
-            try l.accumulateGradients(
+            // Use unified backward call - now handles activation derivative,
+            // weight accumulation, and grad_input computation for all layer types.
+            try l.backward(
                 cache.input.slice, cache.input.getMtlBuffer(),
-                grad_after_act.slice, grad_after_act.getMtlBuffer()
+                grad.slice[0..cache.activated_output.slice.len], grad.getMtlBuffer(),
+                grad_input_slice, next_grad.getMtlBuffer(),
+                cache.activated_output.slice, cache.activated_output.getMtlBuffer()
             );
 
-            // Compute gradient for previous layer
-            if (i > 0) {
-                // Compute gradient for previous layer: grad_input = grad_after_act * weights^T
-                const weights = l.getWeights();
-                try self.backend.matMulTransposeB(
-                    grad_after_act.slice, grad_after_act.getMtlBuffer(),
-                    weights.slice, weights.getMtlBuffer(),
-                    next_grad.slice, next_grad.getMtlBuffer(),
-                    1, // batch_size
-                    l.inputSize(),
-                    l.outputSize()
-                );
-
-                // Swap grad and next_grad for the next iteration
-                const tmp = grad;
-                grad = next_grad;
-                next_grad = tmp;
-            }
+            // Swap grad and next_grad for the next iteration
+            const tmp = grad;
+            grad = next_grad;
+            next_grad = tmp;
         }
     }
 
@@ -427,8 +446,12 @@ pub const Network = struct {
         const output_size = self.layers.items[self.layers.items.len - 1].outputSize();
         if (target.len != output_size) return error.OutputSizeMismatch;
 
-        const output = try self.allocator.alloc(f32, output_size);
-        defer self.allocator.free(output);
+        // Use pre-allocated output buffer
+        if (self.output_buffer == null or self.output_buffer.?.len < output_size) {
+            if (self.output_buffer) |buf| self.allocator.free(buf);
+            self.output_buffer = try self.allocator.alloc(f32, output_size);
+        }
+        const output = self.output_buffer.?[0..output_size];
 
         _ = try self.forward(input, output);
 
@@ -442,14 +465,18 @@ pub const Network = struct {
         }
 
         // End command batch and wait for completion BEFORE calculating loss
-        // This ensures 'output' has the latest values from GPU
         try self.backend.endCommandBatch();
 
-        // Sync output after batch completion (Network.forward's copy was too early during a batch)
-        const last_activated_output = self.caches.items[self.layers.items.len - 1].?.activated_output;
-        @memcpy(output, last_activated_output.slice);
+        // Sync output after batch completion
+        // Note: forward() already handled the sync if it was in a batch,
+        // and also handled many-to-one mapping if output.len < final_slice.len.
+        // No need to sync again here with potentially mismatched sizes.
 
-        return try loss_fn.forward(output, target);
+        const l_val = try loss_fn.forward(output, target);
+        if (std.math.isNan(l_val)) {
+            std.debug.print("NaN loss detected!\n", .{});
+        }
+        return l_val;
     }
 
     pub fn train(self: *Network, inputs: []const []const f32, targets: []const []const f32, epochs: usize, learning_rate: f32, loss_fn: loss.Loss) !void {

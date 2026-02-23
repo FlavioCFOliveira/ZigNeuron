@@ -52,28 +52,20 @@ pub const Activation = union(enum) {
         }
     }
 
-    /// Softmax backward pass (Jacobian-vector product)
-    pub fn softmaxBackward(self: Activation, input: []const f32, grad_output: []const f32, grad_input: []f32) !void {
-        if (input.len != grad_output.len or input.len != grad_input.len) return error.ShapeMismatch;
+    /// Softmax backward pass (efficient O(N) implementation)
+    /// Assumes 'softmax_output' contains the already computed softmax values
+    pub fn softmaxBackward(self: Activation, softmax_output: []const f32, grad_output: []const f32, grad_input: []f32) !void {
+        _ = self;
+        if (softmax_output.len != grad_output.len or softmax_output.len != grad_input.len) return error.ShapeMismatch;
 
-        // First compute softmax output
-        const n = input.len;
-        const softmax = try std.heap.page_allocator.alloc(f32, n);
-        defer std.heap.page_allocator.free(softmax);
+        // Efficient gradient computation: grad_input_j = softmax_j * (grad_output_j - sum(grad_output_i * softmax_i))
+        var sum_grad_softmax: f32 = 0;
+        for (grad_output, softmax_output) |go, s| {
+            sum_grad_softmax += go * s;
+        }
 
-        try self.softmaxForward(input, softmax);
-
-        // Compute Jacobian-vector product
-        for (0..input.len) |i| {
-            var sum: f32 = 0;
-            for (0..input.len) |j| {
-                if (i == j) {
-                    sum += softmax[i] * (1 - softmax[i]) * grad_output[i];
-                } else {
-                    sum -= softmax[i] * softmax[j] * grad_output[j];
-                }
-            }
-            grad_input[i] = sum;
+        for (grad_input, grad_output, softmax_output) |*gi, go, s| {
+            gi.* = s * (go - sum_grad_softmax);
         }
     }
 

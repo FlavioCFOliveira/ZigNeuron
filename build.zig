@@ -311,4 +311,61 @@ pub fn build(b: *std.Build) void {
     const run_cnn = b.addRunArtifact(cnn_exe);
     const cnn_step = b.step("example-cnn", "Run stock prediction CNN example");
     cnn_step.dependOn(&run_cnn.step);
+
+    // Comprehensive Suite
+    const examples = [_][]const u8{
+        "01_vanilla_rnn",
+        "02_vanilla_bidirectional",
+        "03_vanilla_twopath",
+        "04_lstm",
+        "05_lstm_bidirectional",
+        "06_lstm_twopath",
+        "07_gru",
+        "08_gru_bidirectional",
+        "09_gru_twopath",
+        "10_lstm_seq2seq",
+        "11_lstm_bidirectional_seq2seq",
+        "12_lstm_seq2seq_vae",
+        "13_gru_seq2seq",
+        "14_gru_bidirectional_seq2seq",
+        "15_gru_seq2seq_vae",
+        "16_attention",
+        "17_cnn_seq2seq",
+        "18_dilated_cnn_seq2seq",
+    };
+
+    const suite_common_module = b.addModule("suite_common", .{
+        .root_source_file = b.path("examples/comprehensive_suite/common.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    suite_common_module.addImport("ZigNeuron", lib_module);
+
+    for (examples) |example_name| {
+        const suite_module = b.addModule(example_name, .{
+            .root_source_file = b.path(b.fmt("examples/comprehensive_suite/{s}.zig", .{example_name})),
+            .target = target,
+            .optimize = optimize,
+        });
+        suite_module.addImport("ZigNeuron", lib_module);
+        suite_module.addImport("common", suite_common_module);
+
+        const suite_exe = b.addExecutable(.{
+            .name = example_name,
+            .root_module = suite_module,
+        });
+
+        if (target.result.os.tag == .macos) {
+            suite_exe.linkLibC();
+            suite_exe.linkSystemLibrary("objc");
+            suite_exe.linkFramework("Metal");
+            suite_exe.linkFramework("Foundation");
+            suite_exe.linkFramework("QuartzCore");
+        }
+        b.installArtifact(suite_exe);
+
+        const run_suite_exe = b.addRunArtifact(suite_exe);
+        const suite_step = b.step(b.fmt("run-{s}", .{example_name}), b.fmt("Run comprehensive suite example: {s}", .{example_name}));
+        suite_step.dependOn(&run_suite_exe.step);
+    }
 }

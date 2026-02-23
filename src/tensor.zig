@@ -6,14 +6,22 @@ const metal = @import("metal.zig");
 pub const Tensor = struct {
     allocator: std.mem.Allocator,
     size: usize,
+    shape: []const usize,
     slice: []f32,
     mtl_buffer: ?metal.MTLBuffer = null,
     backend_type: backend_module.Backend.BackendType,
 
-    pub fn init(allocator: std.mem.Allocator, size: usize, backend: backend_module.Backend) !Tensor {
+    pub fn init(allocator: std.mem.Allocator, shape: []const usize, backend: backend_module.Backend) !Tensor {
+        var size: usize = 1;
+        for (shape) |dim| size *= dim;
+
+        const shape_copy = try allocator.alloc(usize, shape.len);
+        @memcpy(shape_copy, shape);
+
         var self = Tensor{
             .allocator = allocator,
             .size = size,
+            .shape = shape_copy,
             .slice = undefined,
             .mtl_buffer = null,
             .backend_type = backend.type,
@@ -21,9 +29,9 @@ pub const Tensor = struct {
 
         if (backend.type == .gpu and backend.type.gpu == .metal) {
             if (backend.metal_ctx) |ctx| {
-                // Allocate Unified Memory buffer on Metal
+                // Allocate Unified Memory buffer on Metal using the pool
                 const byte_length = size * @sizeOf(f32);
-                var buffer = try ctx.device.newBufferWithLength(
+                var buffer = try ctx.allocBuffer(
                     byte_length,
                     .StorageModeShared
                 );
@@ -56,6 +64,7 @@ pub const Tensor = struct {
     }
 
     pub fn deinit(self: *Tensor) void {
+        self.allocator.free(self.shape);
         if (self.mtl_buffer) |buf| {
             buf.release();
         } else {
@@ -75,5 +84,17 @@ pub const Tensor = struct {
             return buf;
         }
         return null;
+    }
+
+    /// Helper for 3D indexing: [batch, seq, feature]
+    pub fn index3D(self: *const Tensor, b: usize, s: usize, f: usize) usize {
+        std.debug.assert(self.shape.len == 3);
+        return (b * self.shape[1] * self.shape[2]) + (s * self.shape[2]) + f;
+    }
+
+    /// Helper for 2D indexing: [rows, cols]
+    pub fn index2D(self: *const Tensor, r: usize, c: usize) usize {
+        std.debug.assert(self.shape.len == 2);
+        return (r * self.shape[1]) + c;
     }
 };

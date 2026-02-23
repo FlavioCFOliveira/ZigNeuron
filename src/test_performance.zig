@@ -85,10 +85,10 @@ fn testFNN(allocator: std.mem.Allocator, backend: zn.backend.Backend, name: []co
     // Memory usage estimation
     var memory_usage: usize = 0;
     for (network.layers.items) |layer| {
-        memory_usage += layer.weights.size * @sizeOf(f32);
-        memory_usage += layer.bias.size * @sizeOf(f32);
-        memory_usage += layer.grad_weights.size * @sizeOf(f32);
-        memory_usage += layer.grad_bias.size * @sizeOf(f32);
+        memory_usage += layer.getWeights().slice.len * @sizeOf(f32);
+        memory_usage += layer.getBias().slice.len * @sizeOf(f32);
+        memory_usage += layer.getGradWeights().slice.len * @sizeOf(f32);
+        memory_usage += layer.getGradBias().slice.len * @sizeOf(f32);
     }
     std.debug.print("  Estimated memory usage: {d} bytes\n", .{memory_usage});
 

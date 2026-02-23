@@ -91,13 +91,11 @@ test "optimizer rmsprop basic" {
     defer lyr.deinit();
 
     var rmsprop: optimizer.Rmsprop = .{
-        .g_weights = try allocator.alloc(f32, lyr.weights.slice.len),
-        .g_bias = try allocator.alloc(f32, lyr.bias.slice.len),
+        .g_weights = &.{},
+        .g_bias = &.{},
     };
-    defer allocator.free(rmsprop.g_weights);
-    defer allocator.free(rmsprop.g_bias);
 
-    rmsprop.init(allocator, lyr) catch unreachable;
+    try rmsprop.init(allocator, lyr);
 
     try testing.expect(rmsprop.t == 0);
 
@@ -112,7 +110,7 @@ test "optimizer rmsprop basic" {
 }
 
 test "optimizer sgd clears gradients after step" {
-    const sgd: optimizer.Sgd = .{};
+    var sgd: optimizer.Sgd = .{};
     const allocator = testing.allocator;
 
     var lyr = try layer.Dense.init(allocator, 2, 1, .relu, backend.Backend{ .type = .cpu, .metal_ctx = null });
@@ -208,7 +206,7 @@ test "optimizer: step interface" {
 }
 
 test "optimizer: multiple layers with different sizes" {
-    const sgd: optimizer.Sgd = .{};
+    var sgd: optimizer.Sgd = .{};
     const allocator = testing.allocator;
 
     var lyr1 = try layer.Dense.init(allocator, 2, 3, .relu, backend.Backend{ .type = .cpu, .metal_ctx = null });

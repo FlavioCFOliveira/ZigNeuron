@@ -97,7 +97,7 @@ test "layer dense weight updates" {
 test "layer dense different activations" {
     const allocator = testing.allocator;
 
-    for ([_]activation.ActivationType{ .relu, .sigmoid, .tanh }) |act_type| {
+    for ([_]activation.Activation{ .relu, .sigmoid, .tanh }) |act_type| {
         var lyr = try layer.Dense.init(allocator, 2, 2, act_type, backend.Backend{ .type = .cpu, .metal_ctx = null });
         defer lyr.deinit();
 

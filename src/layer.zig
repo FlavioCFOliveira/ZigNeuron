@@ -72,25 +72,6 @@ pub const Layer = union(enum) {
         }
     }
 
-    pub fn accumulateGradients(self: Layer,
-        input: []const f32, input_buf: ?*const metal.MTLBuffer,
-        grad_after_act: []const f32, grad_after_act_buf: ?*const metal.MTLBuffer
-    ) !void {
-        switch (self) {
-            .dense => |d| try d.accumulateGradients(input, input_buf, grad_after_act, grad_after_act_buf),
-            .rnn => |r| try r.accumulateGradients(input, input_buf, grad_after_act, grad_after_act_buf),
-            .lstm => |l| try l.accumulateGradients(input, input_buf, grad_after_act, grad_after_act_buf),
-            .gru => |g| try g.accumulateGradients(input, input_buf, grad_after_act, grad_after_act_buf),
-            .sampling => |s| try s.accumulateGradients(input, input_buf, grad_after_act, grad_after_act_buf),
-            .conv1d => |c| try c.accumulateGradients(input, input_buf, grad_after_act, grad_after_act_buf),
-            .layer_norm => |ln| try ln.accumulateGradients(input, input_buf, grad_after_act, grad_after_act_buf),
-            .dropout => |dr| try dr.accumulateGradients(input, input_buf, grad_after_act, grad_after_act_buf),
-            .attention => |a| try a.accumulateGradients(input, input_buf, grad_after_act, grad_after_act_buf),
-            .bidirectional => |b| try b.accumulateGradients(input, input_buf, grad_after_act, grad_after_act_buf),
-            .twopath => |t| try t.accumulateGradients(input, input_buf, grad_after_act, grad_after_act_buf),
-        }
-    }
-
     pub fn inputSize(self: Layer) usize {
         switch (self) {
             .dense => |d| return d.input_size,
@@ -325,6 +306,7 @@ pub const Dense = struct {
     bias: tensor.Tensor,
     grad_weights: tensor.Tensor, // Gradient buffer for weights
     grad_bias: tensor.Tensor, // Gradient buffer for bias
+    grad_after_act: tensor.Tensor, // Reusable buffer for backward pass
     input_size: usize,
     output_size: usize,
     act: activation.Activation,
@@ -347,6 +329,9 @@ pub const Dense = struct {
 
         self.grad_bias = try tensor.Tensor.init(allocator, &.{output_size}, backend);
         errdefer self.grad_bias.deinit();
+
+        self.grad_after_act = try tensor.Tensor.init(allocator, &.{output_size}, backend);
+        errdefer self.grad_after_act.deinit();
 
         // Xavier/He initialization based on activation function
         var prng = std.Random.DefaultPrng.init(@intCast(@as(u64, @bitCast(std.time.timestamp())) +% input_size +% output_size));
@@ -377,6 +362,7 @@ pub const Dense = struct {
         self.bias.deinit();
         self.grad_weights.deinit();
         self.grad_bias.deinit();
+        self.grad_after_act.deinit();
         self.allocator.destroy(self);
     }
 
@@ -401,10 +387,9 @@ pub const Dense = struct {
     }
 
     pub fn forward(self: *Dense, input: []const f32, input_buf: ?*const metal.MTLBuffer, output: []f32, output_buf: ?*const metal.MTLBuffer) !void {
-        if (input.len != self.input_size) return error.InvalidInputSize;
-        if (output.len != self.output_size) return error.InvalidOutputSize;
+        const batch_size = input.len / self.input_size;
+        if (output.len != batch_size * self.output_size) return error.InvalidOutputSize;
 
-        const batch_size: usize = 1;
         try self.backend.matMul(
             input, input_buf,
             self.weights.slice, self.weights.getMtlBuffer(),
@@ -414,11 +399,21 @@ pub const Dense = struct {
             self.input_size,
         );
 
-        // Add bias
+        // Add bias (broadcasted over batch)
         try self.backend.addBias(output, output_buf, self.bias.slice, self.bias.getMtlBuffer());
 
         // Apply activation
-        try self.backend.activationForward(self.act, output, output_buf, output, output_buf);
+        if (self.act == .softmax) {
+            for (0..batch_size) |s| {
+                const start = s * self.output_size;
+                const end = (s + 1) * self.output_size;
+                const out_sample = output[start..end];
+                const out_buf_sample = if (output_buf) |b| b else null; // Metal needs offset support which we might need to add to activationForward
+                try self.backend.activationForward(self.act, out_sample, out_buf_sample, out_sample, out_buf_sample);
+            }
+        } else {
+            try self.backend.activationForward(self.act, output, output_buf, output, output_buf);
+        }
     }
 
     pub fn backward(self: *Dense,
@@ -427,60 +422,60 @@ pub const Dense = struct {
         grad_input: []f32, grad_input_buf: ?*const metal.MTLBuffer,
         activated_output: []const f32, activated_output_buf: ?*const metal.MTLBuffer
     ) !void {
-        _ = input;
-        _ = input_buf;
-        // Apply activation derivative to grad_output
-        // We need a temporary buffer for grad_after_act.
-        // In a real optimized network, this would be pre-allocated.
-        var grad_after_act = try tensor.Tensor.init(self.allocator, &.{self.output_size}, self.backend);
-        defer grad_after_act.deinit();
+        const batch_size = input.len / self.input_size;
 
-        try self.backend.activationBackward(self.act,
-            activated_output, activated_output_buf,
-            grad_output, grad_output_buf,
-            grad_after_act.slice, grad_after_act.getMtlBuffer()
-        );
+        // Ensure grad_after_act is large enough for the batch
+        if (self.grad_after_act.slice.len < batch_size * self.output_size) {
+            self.grad_after_act.deinit();
+            self.grad_after_act = try tensor.Tensor.init(self.allocator, &.{ batch_size * self.output_size }, self.backend);
+        }
+        const gaa = self.grad_after_act.slice[0 .. batch_size * self.output_size];
+        const gaa_buf = self.grad_after_act.getMtlBuffer();
+
+        // Apply activation derivative to grad_output
+        if (self.act == .softmax) {
+            for (0..batch_size) |s| {
+                const start = s * self.output_size;
+                const end = (s + 1) * self.output_size;
+                const act_sample = activated_output[start..end];
+                const go_sample = grad_output[start..end];
+                const gaa_sample = gaa[start..end];
+                const gaa_buf_sample = gaa_buf; // getBuffer handles offset
+                try self.backend.activationBackward(self.act, act_sample, activated_output_buf, go_sample, grad_output_buf, gaa_sample, gaa_buf_sample);
+            }
+        } else {
+            try self.backend.activationBackward(self.act,
+                activated_output, activated_output_buf,
+                grad_output, grad_output_buf,
+                gaa, gaa_buf
+            );
+        }
 
         // Compute grad_input = grad_after_act * weights^T
-        // grad_after_act: [batch_size x output_size]
-        // weights: [input_size x output_size]
-        // grad_input: [batch_size x input_size]
-        const batch_size: usize = 1;
         try self.backend.matMulTransposeB(
-            grad_after_act.slice, grad_after_act.getMtlBuffer(),
+            gaa, gaa_buf,
             self.weights.slice, self.weights.getMtlBuffer(),
             grad_input, grad_input_buf,
             batch_size,
             self.input_size,
             self.output_size,
         );
-    }
 
-    /// Accumulate gradients for weights and bias from a sample
-    /// This is a helper function for backpropagation in networks
-    pub fn accumulateGradients(self: *Dense,
-        input: []const f32, input_buf: ?*const metal.MTLBuffer,
-        grad_after_act: []const f32, grad_after_act_buf: ?*const metal.MTLBuffer
-    ) !void {
-        // Accumulate bias gradient
+        // Accumulate bias gradient (sum over batch)
         try self.backend.accumulateBias(
             self.grad_bias.slice, self.grad_bias.getMtlBuffer(),
-            grad_after_act, grad_after_act_buf
+            gaa, gaa_buf
         );
 
         // Accumulate weight gradients
         // dW = input^T * grad_after_act
-        // input: [1 x input_size]
-        // grad_after_act: [1 x output_size]
-        // input^T: [input_size x 1]
-        // dW: [input_size x output_size]
         try self.backend.matMulTransposeA(
             input, input_buf,
-            grad_after_act, grad_after_act_buf,
+            gaa, gaa_buf,
             self.grad_weights.slice, self.grad_weights.getMtlBuffer(),
             self.input_size,
             self.output_size,
-            1 // k = 1 for single sample
+            batch_size
         );
     }
 };
@@ -555,10 +550,6 @@ pub const SamplingLayer = struct {
             grad_log_var[i] = grad_output[i] * self.epsilon.slice[i] * std.math.exp(0.5 * log_var[i]) * 0.5;
         }
     }
-
-    pub fn accumulateGradients(self: *SamplingLayer, input: []const f32, input_buf: ?*const metal.MTLBuffer, grad_after_act: []const f32, grad_after_act_buf: ?*const metal.MTLBuffer) !void {
-        _ = self; _ = input; _ = input_buf; _ = grad_after_act; _ = grad_after_act_buf;
-    }
 };
 
 pub const Conv1D = struct {
@@ -566,6 +557,7 @@ pub const Conv1D = struct {
     bias: tensor.Tensor,    // [out_channels]
     grad_weights: tensor.Tensor,
     grad_bias: tensor.Tensor,
+    grad_after_act: tensor.Tensor, // Reusable buffer
     in_channels: usize,
     out_channels: usize,
     kernel_size: usize,
@@ -592,6 +584,10 @@ pub const Conv1D = struct {
         self.bias = try tensor.Tensor.init(allocator, &.{out_channels}, backend);
         self.grad_weights = try tensor.Tensor.init(allocator, &.{ out_channels, in_channels, kernel_size }, backend);
         self.grad_bias = try tensor.Tensor.init(allocator, &.{out_channels}, backend);
+        errdefer self.grad_bias.deinit();
+
+        self.grad_after_act = try tensor.Tensor.init(allocator, &.{self.output_size}, backend);
+        errdefer self.grad_after_act.deinit();
 
         // Kaiming initialization
         const scale = @sqrt(2.0 / @as(f32, @floatFromInt(in_channels * kernel_size)));
@@ -610,6 +606,7 @@ pub const Conv1D = struct {
         self.bias.deinit();
         self.grad_weights.deinit();
         self.grad_bias.deinit();
+        self.grad_after_act.deinit();
         self.allocator.destroy(self);
     }
 
@@ -640,16 +637,15 @@ pub const Conv1D = struct {
         const in_len = input.len / self.in_channels;
         const out_len = grad_output.len / self.out_channels;
 
-        // 1. Activation backward
-        const grad_after_act = try self.allocator.alloc(f32, grad_output.len);
-        defer self.allocator.free(grad_after_act);
-        try self.backend.activationBackward(self.act, activated_output, activated_output_buf, grad_output, grad_output_buf, grad_after_act, null);
+        // 1. Activation backward using pre-allocated buffer
+        try self.backend.activationBackward(self.act, activated_output, activated_output_buf, grad_output, grad_output_buf, self.grad_after_act.slice, self.grad_after_act.getMtlBuffer());
+        const gaa = self.grad_after_act.slice;
 
         // 2. Compute grad_input and accumulate grad_weights/bias
         @memset(grad_input, 0);
         for (0..self.out_channels) |oc| {
             for (0..out_len) |t| {
-                const go = grad_after_act[oc * out_len + t];
+                const go = gaa[oc * out_len + t];
                 self.grad_bias.slice[oc] += go;
                 for (0..self.in_channels) |ic| {
                     for (0..self.kernel_size) |k| {
@@ -661,10 +657,6 @@ pub const Conv1D = struct {
                 }
             }
         }
-    }
-
-    pub fn accumulateGradients(self: *Conv1D, input: []const f32, input_buf: ?*const metal.MTLBuffer, grad_after_act: []const f32, grad_after_act_buf: ?*const metal.MTLBuffer) !void {
-        _ = self; _ = input; _ = input_buf; _ = grad_after_act; _ = grad_after_act_buf;
     }
 };
 
@@ -738,10 +730,6 @@ pub const LayerNorm = struct {
             grad_input[i] = go * self.gamma.slice[i] * std_inv;
         }
     }
-
-    pub fn accumulateGradients(self: *LayerNorm, input: []const f32, input_buf: ?*const metal.MTLBuffer, grad_after_act: []const f32, grad_after_act_buf: ?*const metal.MTLBuffer) !void {
-        _ = self; _ = input; _ = input_buf; _ = grad_after_act; _ = grad_after_act_buf;
-    }
 };
 
 pub const Dropout = struct {
@@ -795,10 +783,6 @@ pub const Dropout = struct {
             grad_input[i] = grad_output[i] * self.mask.slice[i] * scale;
         }
     }
-
-    pub fn accumulateGradients(self: *Dropout, input: []const f32, input_buf: ?*const metal.MTLBuffer, grad_after_act: []const f32, grad_after_act_buf: ?*const metal.MTLBuffer) !void {
-        _ = self; _ = input; _ = input_buf; _ = grad_after_act; _ = grad_after_act_buf;
-    }
 };
 
 pub const Attention = struct {
@@ -844,10 +828,6 @@ pub const Attention = struct {
     pub fn backward(self: *Attention, input: []const f32, input_buf: ?*const metal.MTLBuffer, grad_output: []const f32, grad_output_buf: ?*const metal.MTLBuffer, grad_input: []f32, grad_input_buf: ?*const metal.MTLBuffer, activated_output: []const f32, activated_output_buf: ?*const metal.MTLBuffer) !void {
         _ = self; _ = input; _ = input_buf; _ = grad_output_buf; _ = grad_input_buf; _ = activated_output; _ = activated_output_buf;
         @memcpy(grad_input, grad_output);
-    }
-
-    pub fn accumulateGradients(self: *Attention, input: []const f32, input_buf: ?*const metal.MTLBuffer, grad_after_act: []const f32, grad_after_act_buf: ?*const metal.MTLBuffer) !void {
-        _ = self; _ = input; _ = input_buf; _ = grad_after_act; _ = grad_after_act_buf;
     }
 };
 

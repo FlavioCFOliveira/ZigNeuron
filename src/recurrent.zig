@@ -103,22 +103,29 @@ pub const VanillaRNN = struct {
         const hidden_size = self.hidden_size;
         const batch_size = 1;
 
-        // 1. Batch input matmul for the whole sequence: output = input * weights_ih
-        // input: [seq_len, input_size]
-        // weights_ih: [input_size, hidden_size]
-        // output: [seq_len, hidden_size]
-        try self.backend.matMul(
-            input, input_buf,
-            self.weights_ih.slice, self.weights_ih.getMtlBuffer(),
-            output, output_buf,
-            seq_len, hidden_size, self.input_size
-        );
-
         // Initial hidden state h_0 is all zeros
         @memset(self.h_prev_work.slice, 0);
 
         for (0..seq_len) |t| {
-            const h_t = output[t * hidden_size .. (t + 1) * hidden_size];
+            // If output buffer is large enough, store all hidden states (many-to-many)
+            // Otherwise, we only care about the last hidden state (many-to-one)
+            const h_t = if (output.len >= seq_len * hidden_size)
+                output[t * hidden_size .. (t + 1) * hidden_size]
+            else if (t == seq_len - 1)
+                output[0..hidden_size]
+            else
+                self.grad_after_act_work.slice; // Use a work buffer if we don't store intermediate states
+
+            // 1. Calculate W_ih * x_t
+            // If we're not storing all states, we need a temporary buffer for this step
+            // because in the many-to-many case we used the output buffer directly.
+            const x_t = input[t * self.input_size .. (t + 1) * self.input_size];
+            try self.backend.matMul(
+                x_t, input_buf,
+                self.weights_ih.slice, self.weights_ih.getMtlBuffer(),
+                h_t, output_buf,
+                batch_size, hidden_size, self.input_size
+            );
 
             // 2. tmp_hh = W_hh * h_{t-1}
             try self.backend.matMul(
@@ -129,7 +136,6 @@ pub const VanillaRNN = struct {
             );
 
             // 3. h_t = tanh(h_t + tmp_hh + bias)
-            // Note: h_t already contains W_ih * x_t
             try self.backend.rnnForwardStep(
                 h_t, output_buf,
                 self.tmp_hh_work.slice, self.tmp_hh_work.getMtlBuffer(),
@@ -216,10 +222,6 @@ pub const VanillaRNN = struct {
                 1, self.input_size, hidden_size
             );
         }
-    }
-
-    pub fn accumulateGradients(self: *VanillaRNN, input: []const f32, input_buf: ?*const metal.MTLBuffer, grad_after_act: []const f32, grad_after_act_buf: ?*const metal.MTLBuffer) !void {
-        _ = self; _ = input; _ = input_buf; _ = grad_after_act; _ = grad_after_act_buf;
     }
 };
 
@@ -453,10 +455,6 @@ pub const LSTM = struct {
             try self.backend.matMulTransposeB(d_gates, self.grad_gates_work.getMtlBuffer(), self.weights_ih.slice, self.weights_ih.getMtlBuffer(), gi_t, grad_input_buf, 1, self.input_size, 4 * hidden_size);
         }
     }
-
-    pub fn accumulateGradients(self: *LSTM, input: []const f32, input_buf: ?*const metal.MTLBuffer, grad_after_act: []const f32, grad_after_act_buf: ?*const metal.MTLBuffer) !void {
-        _ = self; _ = input; _ = input_buf; _ = grad_after_act; _ = grad_after_act_buf;
-    }
 };
 
 /// GRU Layer
@@ -570,27 +568,35 @@ pub const GRU = struct {
         const hidden_size = self.hidden_size;
         const batch_size = 1;
 
-        // 1. Batch input matmul for the whole sequence: gate_activations = input * weights_ih
-        // gate_activations: [seq_len, 3 * hidden_size]
-        try self.backend.matMul(
-            input, input_buf,
-            self.weights_ih.slice, self.weights_ih.getMtlBuffer(),
-            self.gate_activations.slice, self.gate_activations.getMtlBuffer(),
-            seq_len, 3 * hidden_size, self.input_size
-        );
-
         @memset(self.h_prev_work.slice, 0);
 
         for (0..seq_len) |t| {
+            const h_t = if (output.len >= seq_len * hidden_size)
+                output[t * hidden_size .. (t + 1) * hidden_size]
+            else if (t == seq_len - 1)
+                output[0..hidden_size]
+            else
+                self.h_prev_work.slice; // Reuse h_prev_work as dummy if needed
+
+            // We still need to store intermediate gate activations and hh_components for backward pass.
+            // These were allocated with max_seq_len, so it's fine.
             const gates_t = self.gate_activations.slice[t * 3 * hidden_size .. (t + 1) * 3 * hidden_size];
             const hh_t = self.hh_components.slice[t * 3 * hidden_size .. (t + 1) * 3 * hidden_size];
-            const h_t = output[t * hidden_size .. (t + 1) * hidden_size];
+
+            // 1. Calculate W_ih * x_t
+            const x_t = input[t * self.input_size .. (t + 1) * self.input_size];
+            try self.backend.matMul(
+                x_t, input_buf,
+                self.weights_ih.slice, self.weights_ih.getMtlBuffer(),
+                gates_t, self.gate_activations.getMtlBuffer(),
+                batch_size, 3 * hidden_size, self.input_size
+            );
 
             // 2. gates_hh = W_hh * h_{t-1}
             try self.backend.matMul(self.h_prev_work.slice, self.h_prev_work.getMtlBuffer(), self.weights_hh.slice, self.weights_hh.getMtlBuffer(), self.gates_hh_work.slice, self.gates_hh_work.getMtlBuffer(), batch_size, 3 * hidden_size, hidden_size);
 
             // 3. Combined GRU forward step
-            // Note: gates_t already contains W_ih * x_t (from batch matmul)
+            // Note: gates_t already contains W_ih * x_t
             try self.backend.gruForwardStep(
                 gates_t, self.gate_activations.getMtlBuffer(),
                 self.gates_hh_work.slice, self.gates_hh_work.getMtlBuffer(),
@@ -658,10 +664,6 @@ pub const GRU = struct {
             const gi_t = grad_input[t * self.input_size .. (t + 1) * self.input_size];
             try self.backend.matMulTransposeB(d_gates, self.grad_gates_work.getMtlBuffer(), self.weights_ih.slice, self.weights_ih.getMtlBuffer(), gi_t, grad_input_buf, 1, self.input_size, 3 * hidden_size);
         }
-    }
-
-    pub fn accumulateGradients(self: *GRU, input: []const f32, input_buf: ?*const metal.MTLBuffer, grad_after_act: []const f32, grad_after_act_buf: ?*const metal.MTLBuffer) !void {
-        _ = self; _ = input; _ = input_buf; _ = grad_after_act; _ = grad_after_act_buf;
     }
 };
 
@@ -801,8 +803,13 @@ pub const Seq2seq = struct {
     decoder: RecurrentLayer,
     input_size: usize,
     hidden_size: usize,
+    max_seq_len: usize,
     allocator: std.mem.Allocator,
     backend: backend_module.Backend,
+
+    // Buffers for zero-allocation
+    enc_outputs_work: tensor.Tensor, // [max_seq_len * hidden_size]
+    dec_input_work: tensor.Tensor,   // [max_seq_len * hidden_size]
 
     pub fn init(allocator: std.mem.Allocator, encoder_type: RecurrentLayerType, decoder_type: RecurrentLayerType, input_size: usize, hidden_size: usize, max_seq_len: usize, act: activation.Activation, backend: backend_module.Backend) !*Seq2seq {
         const self = try allocator.create(Seq2seq);
@@ -822,8 +829,14 @@ pub const Seq2seq = struct {
         };
         errdefer self.decoder.deinit();
 
+        self.enc_outputs_work = try tensor.Tensor.init(allocator, &.{ max_seq_len * hidden_size }, backend);
+        errdefer self.enc_outputs_work.deinit();
+        self.dec_input_work = try tensor.Tensor.init(allocator, &.{ max_seq_len * hidden_size }, backend);
+        errdefer self.dec_input_work.deinit();
+
         self.input_size = input_size;
         self.hidden_size = hidden_size;
+        self.max_seq_len = max_seq_len;
         self.backend = backend;
         self.allocator = allocator;
 
@@ -833,6 +846,8 @@ pub const Seq2seq = struct {
     pub fn deinit(self: *Seq2seq) void {
         self.encoder.deinit();
         self.decoder.deinit();
+        self.enc_outputs_work.deinit();
+        self.dec_input_work.deinit();
         self.allocator.destroy(self);
     }
 
@@ -842,28 +857,27 @@ pub const Seq2seq = struct {
     ) !void {
         const enc_seq_len = input.len / self.input_size;
         const dec_seq_len = output.len / self.hidden_size;
+        if (enc_seq_len > self.max_seq_len or dec_seq_len > self.max_seq_len) return error.SequenceTooLong;
         const hidden_size = self.hidden_size;
 
         // 1. Encoder forward
-        const enc_outputs = try self.allocator.alloc(f32, enc_seq_len * hidden_size);
-        defer self.allocator.free(enc_outputs);
-        try self.encoder.forward(input, input_buf, enc_outputs, null);
+        const enc_outputs = self.enc_outputs_work.slice[0 .. enc_seq_len * hidden_size];
+        try self.encoder.forward(input, input_buf, enc_outputs, self.enc_outputs_work.getMtlBuffer());
 
         // 2. Transfer state from encoder to decoder
         // Last hidden state of encoder becomes initial hidden state of decoder
+        // Sync to CPU if needed to find last_h
+        try self.backend.copyData(enc_outputs, self.enc_outputs_work.getMtlBuffer(), enc_outputs, null);
         const last_h = enc_outputs[(enc_seq_len - 1) * hidden_size .. enc_seq_len * hidden_size];
         const dec_h_prev = self.decoder.getHPrevWork();
         try self.backend.copyData(last_h, null, dec_h_prev.slice, dec_h_prev.getMtlBuffer());
 
         // 3. Decoder forward
-        // For simplicity, we use zero input or a context vector.
-        // In many seq2seq models, we pass a special <SOS> token or the context vector.
-        // Here we'll pass zeros and let it use the initial hidden state.
-        const dec_input = try self.allocator.alloc(f32, dec_seq_len * hidden_size);
+        const dec_input = self.dec_input_work.slice[0 .. dec_seq_len * hidden_size];
         @memset(dec_input, 0);
-        defer self.allocator.free(dec_input);
+        try self.backend.copyData(dec_input, null, dec_input, self.dec_input_work.getMtlBuffer());
 
-        try self.decoder.forward(dec_input, null, output, output_buf);
+        try self.decoder.forward(dec_input, self.dec_input_work.getMtlBuffer(), output, output_buf);
     }
 
     // Backward and updateWeights omitted for brevity in this complex multi-layer wrapper,
@@ -876,7 +890,20 @@ pub const Bidirectional = struct {
     bw_layer: RecurrentLayer,
     input_size: usize,
     hidden_size: usize,
+    max_seq_len: usize,
     allocator: std.mem.Allocator,
+    backend: backend_module.Backend,
+
+    // Buffers for zero-allocation
+    fw_output_work: tensor.Tensor,      // [max_seq_len * hidden_size]
+    bw_output_raw_work: tensor.Tensor,  // [max_seq_len * hidden_size]
+    reversed_input_work: tensor.Tensor, // [max_seq_len * input_size]
+    grad_fw_work: tensor.Tensor,       // [max_seq_len * hidden_size]
+    grad_bw_rev_work: tensor.Tensor,   // [max_seq_len * hidden_size]
+    fw_h_states_work: tensor.Tensor,   // [max_seq_len * hidden_size]
+    bw_h_states_rev_work: tensor.Tensor, // [max_seq_len * hidden_size]
+    grad_input_fw_work: tensor.Tensor, // [max_seq_len * input_size]
+    grad_input_bw_rev_work: tensor.Tensor, // [max_seq_len * input_size]
 
     pub fn init(allocator: std.mem.Allocator, layer_type: RecurrentLayerType, input_size: usize, hidden_size: usize, max_seq_len: usize, act: activation.Activation, backend: backend_module.Backend) !*Bidirectional {
         const self = try allocator.create(Bidirectional);
@@ -896,9 +923,31 @@ pub const Bidirectional = struct {
         };
         errdefer self.bw_layer.deinit();
 
+        self.fw_output_work = try tensor.Tensor.init(allocator, &.{ max_seq_len * hidden_size }, backend);
+        errdefer self.fw_output_work.deinit();
+        self.bw_output_raw_work = try tensor.Tensor.init(allocator, &.{ max_seq_len * hidden_size }, backend);
+        errdefer self.bw_output_raw_work.deinit();
+        self.reversed_input_work = try tensor.Tensor.init(allocator, &.{ max_seq_len * input_size }, backend);
+        errdefer self.reversed_input_work.deinit();
+
+        self.grad_fw_work = try tensor.Tensor.init(allocator, &.{ max_seq_len * hidden_size }, backend);
+        errdefer self.grad_fw_work.deinit();
+        self.grad_bw_rev_work = try tensor.Tensor.init(allocator, &.{ max_seq_len * hidden_size }, backend);
+        errdefer self.grad_bw_rev_work.deinit();
+        self.fw_h_states_work = try tensor.Tensor.init(allocator, &.{ max_seq_len * hidden_size }, backend);
+        errdefer self.fw_h_states_work.deinit();
+        self.bw_h_states_rev_work = try tensor.Tensor.init(allocator, &.{ max_seq_len * hidden_size }, backend);
+        errdefer self.bw_h_states_rev_work.deinit();
+        self.grad_input_fw_work = try tensor.Tensor.init(allocator, &.{ max_seq_len * input_size }, backend);
+        errdefer self.grad_input_fw_work.deinit();
+        self.grad_input_bw_rev_work = try tensor.Tensor.init(allocator, &.{ max_seq_len * input_size }, backend);
+        errdefer self.grad_input_bw_rev_work.deinit();
+
         self.input_size = input_size;
         self.hidden_size = hidden_size;
+        self.max_seq_len = max_seq_len;
         self.allocator = allocator;
+        self.backend = backend;
 
         return self;
     }
@@ -906,6 +955,15 @@ pub const Bidirectional = struct {
     pub fn deinit(self: *Bidirectional) void {
         self.fw_layer.deinit();
         self.bw_layer.deinit();
+        self.fw_output_work.deinit();
+        self.bw_output_raw_work.deinit();
+        self.reversed_input_work.deinit();
+        self.grad_fw_work.deinit();
+        self.grad_bw_rev_work.deinit();
+        self.fw_h_states_work.deinit();
+        self.bw_h_states_rev_work.deinit();
+        self.grad_input_fw_work.deinit();
+        self.grad_input_bw_rev_work.deinit();
         self.allocator.destroy(self);
     }
 
@@ -913,28 +971,33 @@ pub const Bidirectional = struct {
         input: []const f32, input_buf: ?*const metal.MTLBuffer,
         output: []f32, output_buf: ?*const metal.MTLBuffer
     ) !void {
-        _ = input_buf; _ = output_buf;
         const seq_len = input.len / self.input_size;
+        if (seq_len > self.max_seq_len) return error.SequenceTooLong;
         const hidden_size = self.hidden_size;
 
         // 1. Forward pass for forward layer
-        const fw_output = try self.allocator.alloc(f32, seq_len * hidden_size);
-        defer self.allocator.free(fw_output);
-        try self.fw_layer.forward(input, null, fw_output, null);
+        const fw_output = self.fw_output_work.slice[0 .. seq_len * hidden_size];
+        try self.fw_layer.forward(input, input_buf, fw_output, self.fw_output_work.getMtlBuffer());
 
         // 2. Backward pass for backward layer (process reversed input)
-        const reversed_input = try self.allocator.alloc(f32, input.len);
-        defer self.allocator.free(reversed_input);
+        const reversed_input = self.reversed_input_work.slice[0..input.len];
         for (0..seq_len) |t| {
             const src_t = seq_len - 1 - t;
             @memcpy(reversed_input[t * self.input_size .. (t + 1) * self.input_size], input[src_t * self.input_size .. (src_t + 1) * self.input_size]);
         }
+        // Sync to GPU if needed
+        try self.backend.copyData(reversed_input, null, reversed_input, self.reversed_input_work.getMtlBuffer());
 
-        const bw_output_raw = try self.allocator.alloc(f32, seq_len * hidden_size);
-        defer self.allocator.free(bw_output_raw);
-        try self.bw_layer.forward(reversed_input, null, bw_output_raw, null);
+        const bw_output_raw = self.bw_output_raw_work.slice[0 .. seq_len * hidden_size];
+        try self.bw_layer.forward(reversed_input, self.reversed_input_work.getMtlBuffer(), bw_output_raw, self.bw_output_raw_work.getMtlBuffer());
 
         // 3. Reverse backward output and concatenate
+        // Sync back to CPU for concatenation if needed (if output_buf is null)
+        if (output_buf == null) {
+            try self.backend.copyData(fw_output, self.fw_output_work.getMtlBuffer(), fw_output, null);
+            try self.backend.copyData(bw_output_raw, self.bw_output_raw_work.getMtlBuffer(), bw_output_raw, null);
+        }
+
         for (0..seq_len) |t| {
             const fw_t = fw_output[t * hidden_size .. (t + 1) * hidden_size];
             const src_t = seq_len - 1 - t;
@@ -944,6 +1007,11 @@ pub const Bidirectional = struct {
             @memcpy(out_t[0..hidden_size], fw_t);
             @memcpy(out_t[hidden_size .. 2 * hidden_size], bw_t);
         }
+
+        // Sync concatenated output to GPU if needed
+        if (output_buf != null) {
+            try self.backend.copyData(output, null, output, output_buf);
+        }
     }
 
     pub fn backward(self: *Bidirectional,
@@ -952,69 +1020,75 @@ pub const Bidirectional = struct {
         grad_input: []f32, grad_input_buf: ?*const metal.MTLBuffer,
         h_states: []const f32, h_states_buf: ?*const metal.MTLBuffer
     ) !void {
-        _ = input_buf; _ = grad_output_buf; _ = grad_input_buf; _ = h_states_buf;
         const seq_len = input.len / self.input_size;
         const hidden_size = self.hidden_size;
 
-        // 1. Split grad_output
-        const grad_fw = try self.allocator.alloc(f32, seq_len * hidden_size);
-        defer self.allocator.free(grad_fw);
-        const grad_bw_reversed = try self.allocator.alloc(f32, seq_len * hidden_size);
-        defer self.allocator.free(grad_bw_reversed);
+        // 1. Split grad_output and h_states
+        // Sync from GPU if needed
+        if (grad_output_buf != null) {
+             // We need to work on slices, so sync to local buffer first
+             try self.backend.copyData(grad_output, grad_output_buf, @constCast(grad_output), null);
+        }
+        if (h_states_buf != null) {
+             try self.backend.copyData(h_states, h_states_buf, @constCast(h_states), null);
+        }
+
+        const grad_fw = self.grad_fw_work.slice[0 .. seq_len * hidden_size];
+        const grad_bw_rev = self.grad_bw_rev_work.slice[0 .. seq_len * hidden_size];
+        const fw_h_states = self.fw_h_states_work.slice[0 .. seq_len * hidden_size];
+        const bw_h_states_rev = self.bw_h_states_rev_work.slice[0 .. seq_len * hidden_size];
 
         for (0..seq_len) |t| {
             const g_out_t = grad_output[t * 2 * hidden_size .. (t + 1) * 2 * hidden_size];
             @memcpy(grad_fw[t * hidden_size .. (t + 1) * hidden_size], g_out_t[0..hidden_size]);
 
             const bw_t = seq_len - 1 - t;
-            @memcpy(grad_bw_reversed[bw_t * hidden_size .. (bw_t + 1) * hidden_size], g_out_t[hidden_size .. 2 * hidden_size]);
-        }
+            @memcpy(grad_bw_rev[bw_t * hidden_size .. (bw_t + 1) * hidden_size], g_out_t[hidden_size .. 2 * hidden_size]);
 
-        // 2. Split h_states
-        const fw_h_states = try self.allocator.alloc(f32, seq_len * hidden_size);
-        defer self.allocator.free(fw_h_states);
-        const bw_h_states_reversed = try self.allocator.alloc(f32, seq_len * hidden_size);
-        defer self.allocator.free(bw_h_states_reversed);
-
-        for (0..seq_len) |t| {
             const h_t = h_states[t * 2 * hidden_size .. (t + 1) * 2 * hidden_size];
             @memcpy(fw_h_states[t * hidden_size .. (t + 1) * hidden_size], h_t[0..hidden_size]);
-
-            const bw_t = seq_len - 1 - t;
-            @memcpy(bw_h_states_reversed[bw_t * hidden_size .. (bw_t + 1) * hidden_size], h_t[hidden_size .. 2 * hidden_size]);
+            @memcpy(bw_h_states_rev[bw_t * hidden_size .. (bw_t + 1) * hidden_size], h_t[hidden_size .. 2 * hidden_size]);
         }
 
+        // Sync split buffers to GPU
+        try self.backend.copyData(grad_fw, null, grad_fw, self.grad_fw_work.getMtlBuffer());
+        try self.backend.copyData(grad_bw_rev, null, grad_bw_rev, self.grad_bw_rev_work.getMtlBuffer());
+        try self.backend.copyData(fw_h_states, null, fw_h_states, self.fw_h_states_work.getMtlBuffer());
+        try self.backend.copyData(bw_h_states_rev, null, bw_h_states_rev, self.bw_h_states_rev_work.getMtlBuffer());
+
         // 3. Reversed input for backward layer
-        const reversed_input = try self.allocator.alloc(f32, input.len);
-        defer self.allocator.free(reversed_input);
+        const reversed_input = self.reversed_input_work.slice[0..input.len];
         for (0..seq_len) |t| {
             const src_t = seq_len - 1 - t;
             @memcpy(reversed_input[t * self.input_size .. (t + 1) * self.input_size], input[src_t * self.input_size .. (src_t + 1) * self.input_size]);
         }
+        try self.backend.copyData(reversed_input, null, reversed_input, self.reversed_input_work.getMtlBuffer());
 
         // 4. Backprop through both layers
-        const grad_input_fw = try self.allocator.alloc(f32, input.len);
-        defer self.allocator.free(grad_input_fw);
-        try self.fw_layer.backward(input, null, grad_fw, null, grad_input_fw, null, fw_h_states, null);
+        const grad_input_fw = self.grad_input_fw_work.slice[0..input.len];
+        try self.fw_layer.backward(input, input_buf, grad_fw, self.grad_fw_work.getMtlBuffer(), grad_input_fw, self.grad_input_fw_work.getMtlBuffer(), fw_h_states, self.fw_h_states_work.getMtlBuffer());
 
-        const grad_input_bw_reversed = try self.allocator.alloc(f32, input.len);
-        defer self.allocator.free(grad_input_bw_reversed);
-        try self.bw_layer.backward(reversed_input, null, grad_bw_reversed, null, grad_input_bw_reversed, null, bw_h_states_reversed, null);
+        const grad_input_bw_rev = self.grad_input_bw_rev_work.slice[0..input.len];
+        try self.bw_layer.backward(reversed_input, self.reversed_input_work.getMtlBuffer(), grad_bw_rev, self.grad_bw_rev_work.getMtlBuffer(), grad_input_bw_rev, self.grad_input_bw_rev_work.getMtlBuffer(), bw_h_states_rev, self.bw_h_states_rev_work.getMtlBuffer());
 
         // 5. Combine grad_input
-        @memset(grad_input, 0);
+        // Sync back to CPU for combination
+        try self.backend.copyData(grad_input_fw, self.grad_input_fw_work.getMtlBuffer(), grad_input_fw, null);
+        try self.backend.copyData(grad_input_bw_rev, self.grad_input_bw_rev_work.getMtlBuffer(), grad_input_bw_rev, null);
+
         for (0..seq_len) |t| {
             const fw_gi_t = grad_input_fw[t * self.input_size .. (t + 1) * self.input_size];
             const bw_t = seq_len - 1 - t;
-            const bw_gi_t = grad_input_bw_reversed[bw_t * self.input_size .. (bw_t + 1) * self.input_size];
+            const bw_gi_t = grad_input_bw_rev[bw_t * self.input_size .. (bw_t + 1) * self.input_size];
 
             const gi_t = grad_input[t * self.input_size .. (t + 1) * self.input_size];
             for (gi_t, fw_gi_t, bw_gi_t) |*out, f, b| out.* = f + b;
         }
-    }
 
-    pub fn accumulateGradients(self: *Bidirectional, input: []const f32, input_buf: ?*const metal.MTLBuffer, grad_after_act: []const f32, grad_after_act_buf: ?*const metal.MTLBuffer) !void {
-        _ = self; _ = input; _ = input_buf; _ = grad_after_act; _ = grad_after_act_buf;
+        // Sync final grad_input to GPU
+        if (grad_input_buf != null) {
+            try self.backend.copyData(grad_input, null, grad_input, grad_input_buf);
+        }
     }
 };
 
@@ -1025,7 +1099,19 @@ pub const TwoPath = struct {
     input_size: usize,
     hidden_size1: usize,
     hidden_size2: usize,
+    max_seq_len: usize,
     allocator: std.mem.Allocator,
+    backend: backend_module.Backend,
+
+    // Buffers for zero-allocation
+    out1_work: tensor.Tensor,      // [max_seq_len * hidden_size1]
+    out2_work: tensor.Tensor,      // [max_seq_len * hidden_size2]
+    grad_h1_work: tensor.Tensor,   // [max_seq_len * hidden_size1]
+    grad_h2_work: tensor.Tensor,   // [max_seq_len * hidden_size2]
+    h1_states_work: tensor.Tensor, // [max_seq_len * hidden_size1]
+    h2_states_work: tensor.Tensor, // [max_seq_len * hidden_size2]
+    gi1_work: tensor.Tensor,       // [max_seq_len * input_size]
+    gi2_work: tensor.Tensor,       // [max_seq_len * input_size]
 
     pub fn init(allocator: std.mem.Allocator, layer_type1: RecurrentLayerType, hidden_size1: usize, layer_type2: RecurrentLayerType, hidden_size2: usize, input_size: usize, max_seq_len: usize, act: activation.Activation, backend: backend_module.Backend) !*TwoPath {
         const self = try allocator.create(TwoPath);
@@ -1045,10 +1131,31 @@ pub const TwoPath = struct {
         };
         errdefer self.path2.deinit();
 
+        self.out1_work = try tensor.Tensor.init(allocator, &.{ max_seq_len * hidden_size1 }, backend);
+        errdefer self.out1_work.deinit();
+        self.out2_work = try tensor.Tensor.init(allocator, &.{ max_seq_len * hidden_size2 }, backend);
+        errdefer self.out2_work.deinit();
+
+        self.grad_h1_work = try tensor.Tensor.init(allocator, &.{ max_seq_len * hidden_size1 }, backend);
+        errdefer self.grad_h1_work.deinit();
+        self.grad_h2_work = try tensor.Tensor.init(allocator, &.{ max_seq_len * hidden_size2 }, backend);
+        errdefer self.grad_h2_work.deinit();
+        self.h1_states_work = try tensor.Tensor.init(allocator, &.{ max_seq_len * hidden_size1 }, backend);
+        errdefer self.h1_states_work.deinit();
+        self.h2_states_work = try tensor.Tensor.init(allocator, &.{ max_seq_len * hidden_size2 }, backend);
+        errdefer self.h2_states_work.deinit();
+
+        self.gi1_work = try tensor.Tensor.init(allocator, &.{ max_seq_len * input_size }, backend);
+        errdefer self.gi1_work.deinit();
+        self.gi2_work = try tensor.Tensor.init(allocator, &.{ max_seq_len * input_size }, backend);
+        errdefer self.gi2_work.deinit();
+
         self.input_size = input_size;
         self.hidden_size1 = hidden_size1;
         self.hidden_size2 = hidden_size2;
+        self.max_seq_len = max_seq_len;
         self.allocator = allocator;
+        self.backend = backend;
 
         return self;
     }
@@ -1056,6 +1163,14 @@ pub const TwoPath = struct {
     pub fn deinit(self: *TwoPath) void {
         self.path1.deinit();
         self.path2.deinit();
+        self.out1_work.deinit();
+        self.out2_work.deinit();
+        self.grad_h1_work.deinit();
+        self.grad_h2_work.deinit();
+        self.h1_states_work.deinit();
+        self.h2_states_work.deinit();
+        self.gi1_work.deinit();
+        self.gi2_work.deinit();
         self.allocator.destroy(self);
     }
 
@@ -1063,21 +1178,29 @@ pub const TwoPath = struct {
         input: []const f32, input_buf: ?*const metal.MTLBuffer,
         output: []f32, output_buf: ?*const metal.MTLBuffer
     ) !void {
-        _ = input_buf; _ = output_buf;
         const seq_len = input.len / self.input_size;
+        if (seq_len > self.max_seq_len) return error.SequenceTooLong;
 
-        const out1 = try self.allocator.alloc(f32, seq_len * self.hidden_size1);
-        defer self.allocator.free(out1);
-        try self.path1.forward(input, null, out1, null);
+        const out1 = self.out1_work.slice[0 .. seq_len * self.hidden_size1];
+        try self.path1.forward(input, input_buf, out1, self.out1_work.getMtlBuffer());
 
-        const out2 = try self.allocator.alloc(f32, seq_len * self.hidden_size2);
-        defer self.allocator.free(out2);
-        try self.path2.forward(input, null, out2, null);
+        const out2 = self.out2_work.slice[0 .. seq_len * self.hidden_size2];
+        try self.path2.forward(input, input_buf, out2, self.out2_work.getMtlBuffer());
+
+        // Sync back to CPU for concatenation if needed
+        if (output_buf == null) {
+            try self.backend.copyData(out1, self.out1_work.getMtlBuffer(), out1, null);
+            try self.backend.copyData(out2, self.out2_work.getMtlBuffer(), out2, null);
+        }
 
         for (0..seq_len) |t| {
             const out_t = output[t * (self.hidden_size1 + self.hidden_size2) .. (t + 1) * (self.hidden_size1 + self.hidden_size2)];
             @memcpy(out_t[0..self.hidden_size1], out1[t * self.hidden_size1 .. (t + 1) * self.hidden_size1]);
             @memcpy(out_t[self.hidden_size1..], out2[t * self.hidden_size2 .. (t + 1) * self.hidden_size2]);
+        }
+
+        if (output_buf != null) {
+            try self.backend.copyData(output, null, output, output_buf);
         }
     }
 
@@ -1087,18 +1210,20 @@ pub const TwoPath = struct {
         grad_input: []f32, grad_input_buf: ?*const metal.MTLBuffer,
         h_states: []const f32, h_states_buf: ?*const metal.MTLBuffer
     ) !void {
-        _ = input_buf; _ = grad_output_buf; _ = grad_input_buf; _ = h_states_buf;
         const seq_len = input.len / self.input_size;
 
-        const grad_h1 = try self.allocator.alloc(f32, seq_len * self.hidden_size1);
-        defer self.allocator.free(grad_h1);
-        const grad_h2 = try self.allocator.alloc(f32, seq_len * self.hidden_size2);
-        defer self.allocator.free(grad_h2);
+        // Split grad_output and h_states
+        if (grad_output_buf != null) {
+             try self.backend.copyData(grad_output, grad_output_buf, @constCast(grad_output), null);
+        }
+        if (h_states_buf != null) {
+             try self.backend.copyData(h_states, h_states_buf, @constCast(h_states), null);
+        }
 
-        const h1_states = try self.allocator.alloc(f32, seq_len * self.hidden_size1);
-        defer self.allocator.free(h1_states);
-        const h2_states = try self.allocator.alloc(f32, seq_len * self.hidden_size2);
-        defer self.allocator.free(h2_states);
+        const grad_h1 = self.grad_h1_work.slice[0 .. seq_len * self.hidden_size1];
+        const grad_h2 = self.grad_h2_work.slice[0 .. seq_len * self.hidden_size2];
+        const h1_states = self.h1_states_work.slice[0 .. seq_len * self.hidden_size1];
+        const h2_states = self.h2_states_work.slice[0 .. seq_len * self.hidden_size2];
 
         for (0..seq_len) |t| {
             const g_out_t = grad_output[t * (self.hidden_size1 + self.hidden_size2) .. (t + 1) * (self.hidden_size1 + self.hidden_size2)];
@@ -1110,18 +1235,26 @@ pub const TwoPath = struct {
             @memcpy(h2_states[t * self.hidden_size2 .. (t + 1) * self.hidden_size2], h_t[self.hidden_size1..]);
         }
 
-        const gi1 = try self.allocator.alloc(f32, input.len);
-        defer self.allocator.free(gi1);
-        try self.path1.backward(input, null, grad_h1, null, gi1, null, h1_states, null);
+        // Sync to GPU
+        try self.backend.copyData(grad_h1, null, grad_h1, self.grad_h1_work.getMtlBuffer());
+        try self.backend.copyData(grad_h2, null, grad_h2, self.grad_h2_work.getMtlBuffer());
+        try self.backend.copyData(h1_states, null, h1_states, self.h1_states_work.getMtlBuffer());
+        try self.backend.copyData(h2_states, null, h2_states, self.h2_states_work.getMtlBuffer());
 
-        const gi2 = try self.allocator.alloc(f32, input.len);
-        defer self.allocator.free(gi2);
-        try self.path2.backward(input, null, grad_h2, null, gi2, null, h2_states, null);
+        const gi1 = self.gi1_work.slice[0..input.len];
+        try self.path1.backward(input, input_buf, grad_h1, self.grad_h1_work.getMtlBuffer(), gi1, self.gi1_work.getMtlBuffer(), h1_states, self.h1_states_work.getMtlBuffer());
+
+        const gi2 = self.gi2_work.slice[0..input.len];
+        try self.path2.backward(input, input_buf, grad_h2, self.grad_h2_work.getMtlBuffer(), gi2, self.gi2_work.getMtlBuffer(), h2_states, self.h2_states_work.getMtlBuffer());
+
+        // Sync back to CPU for combination
+        try self.backend.copyData(gi1, self.gi1_work.getMtlBuffer(), gi1, null);
+        try self.backend.copyData(gi2, self.gi2_work.getMtlBuffer(), gi2, null);
 
         for (grad_input, gi1, gi2) |*out, g1, g2| out.* = g1 + g2;
-    }
 
-    pub fn accumulateGradients(self: *TwoPath, input: []const f32, input_buf: ?*const metal.MTLBuffer, grad_after_act: []const f32, grad_after_act_buf: ?*const metal.MTLBuffer) !void {
-        _ = self; _ = input; _ = input_buf; _ = grad_after_act; _ = grad_after_act_buf;
+        if (grad_input_buf != null) {
+            try self.backend.copyData(grad_input, null, grad_input, grad_input_buf);
+        }
     }
 };

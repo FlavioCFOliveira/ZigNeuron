@@ -36,9 +36,9 @@ test "loss mse backward" {
     var grad_output: [2]f32 = undefined;
     try loss_fn.backward(&output, &target, &grad_output);
 
-    // MSE gradient: dL/dy = 2(y - t)
-    try expectNear(grad_output[0], 2.0 * (1.0 - 0.0), 0.0001);
-    try expectNear(grad_output[1], 2.0 * (2.0 - 1.0), 0.0001);
+    // MSE gradient: dL/dy = 2(y - t) / n
+    try expectNear(grad_output[0], 2.0 * (1.0 - 0.0) / 2.0, 0.0001);
+    try expectNear(grad_output[1], 2.0 * (2.0 - 1.0) / 2.0, 0.0001);
 }
 
 test "loss mse gradient direction" {
@@ -101,15 +101,15 @@ test "loss binary_cross_entropy forward" {
 test "loss binary_cross_entropy backward" {
     const loss_fn = loss.Loss{ .binary_cross_entropy = {} };
 
-    // For BCE with sigmoid, gradient is (p - t)
+    // For BCE with sigmoid, gradient is (p - t) / n
     var output: [2]f32 = .{0.7, 0.3};
     var target: [2]f32 = .{1.0, 0.0};
     var grad_output: [2]f32 = undefined;
     try loss_fn.backward(&output, &target, &grad_output);
 
-    // gradient should be [0.7 - 1, 0.3 - 0] = [-0.3, 0.3]
-    try expectNear(grad_output[0], -0.3, 0.001);
-    try expectNear(grad_output[1], 0.3, 0.001);
+    // gradient should be [(0.7 - 1) / 2, (0.3 - 0) / 2] = [-0.15, 0.15]
+    try expectNear(grad_output[0], -0.15, 0.001);
+    try expectNear(grad_output[1], 0.15, 0.001);
 }
 
 test "loss isLogitsGradient" {

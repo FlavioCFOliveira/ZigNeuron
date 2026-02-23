@@ -176,21 +176,34 @@ pub const MetalContext = struct {
     }
 
     pub fn getBuffer(self: *MetalContext, length: usize) !metal.MTLBuffer {
-        if (self.buffer_pool.getPtr(length)) |list| {
-            if (list.popOrNull()) |buf| {
-                return buf;
+        // Use bucket-based pooling (power of two) to increase reuse
+        const pooled_length = if (length == 0) 4 else std.math.ceilPowerOfTwo(usize, length) catch length;
+
+        if (self.buffer_pool.getPtr(pooled_length)) |list| {
+            if (list.items.len > 0) {
+                return list.pop().?;
             }
         }
-        return try self.device.newBufferWithLength(length, .StorageModeShared);
+
+        // If not in pool, create a new one
+        return try self.device.newBufferWithLength(
+            pooled_length,
+            .StorageModeShared
+        );
     }
 
-    pub fn returnBuffer(self: *MetalContext, buffer: metal.MTLBuffer) !void {
+    pub fn returnBuffer(self: *MetalContext, buffer: metal.MTLBuffer) void {
         const length = buffer.length();
-        const res = try self.buffer_pool.getOrPut(length);
+        const res = self.buffer_pool.getOrPut(length) catch {
+            buffer.release();
+            return;
+        };
         if (!res.found_existing) {
-            res.value_ptr.* = std.ArrayList(metal.MTLBuffer).init(self.allocator);
+            res.value_ptr.* = std.ArrayListUnmanaged(metal.MTLBuffer){};
         }
-        try res.value_ptr.append(buffer);
+        res.value_ptr.append(self.allocator, buffer) catch {
+            buffer.release();
+        };
     }
 
     pub fn registerTempResource(self: *MetalContext, resource: metal.MTLBuffer) !void {
@@ -199,7 +212,7 @@ pub const MetalContext = struct {
 
     pub fn clearTempResources(self: *MetalContext) void {
         for (self.temp_resources.items) |res| {
-            self.freeBuffer(res);
+            self.returnBuffer(res);
         }
         self.temp_resources.clearRetainingCapacity();
     }
@@ -207,31 +220,12 @@ pub const MetalContext = struct {
     pub fn allocBuffer(self: *MetalContext, length: usize, options: metal.MTLResourceOptions) !metal.MTLBuffer {
         // Only pool shared buffers for now (common case)
         if (options.storage_mode == 0) {
-            if (self.buffer_pool.getPtr(length)) |list| {
-                if (list.pop()) |buf| {
-                    return buf;
-                }
-            }
+            return self.getBuffer(length);
         }
         return try self.device.newBufferWithLength(length, options);
     }
 
     pub fn freeBuffer(self: *MetalContext, buffer: metal.MTLBuffer) void {
-        const length = buffer.length();
-        if (self.buffer_pool.getPtr(length)) |list| {
-            list.append(self.allocator, buffer) catch {
-                buffer.release();
-            };
-        } else {
-            var list = std.ArrayListUnmanaged(metal.MTLBuffer){};
-            list.append(self.allocator, buffer) catch {
-                buffer.release();
-                return;
-            };
-            self.buffer_pool.put(length, list) catch {
-                list.deinit(self.allocator);
-                buffer.release();
-            };
-        }
+        self.returnBuffer(buffer);
     }
 };

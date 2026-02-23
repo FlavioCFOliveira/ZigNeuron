@@ -59,14 +59,19 @@ kernel void sgd_update_bias(
     }
 }
 
-// Accumulate bias gradients: gb = gb + g
+// Accumulate bias gradients: gb = gb + sum(grad_after_act) over batch
 kernel void accumulate_bias(
     device float* grad_bias [[buffer(0)]],
     device const float* grad_after_act [[buffer(1)]],
-    constant uint& size [[buffer(2)]],
+    constant uint& batch_size [[buffer(2)]],
+    constant uint& bias_size [[buffer(3)]],
     uint gid [[thread_position_in_grid]])
 {
-    if (gid < size) {
-        grad_bias[gid] += grad_after_act[gid];
+    if (gid < bias_size) {
+        float sum = 0.0f;
+        for (uint i = 0; i < batch_size; i++) {
+            sum += grad_after_act[i * bias_size + gid];
+        }
+        grad_bias[gid] += sum;
     }
 }

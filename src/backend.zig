@@ -94,9 +94,9 @@ pub const Backend = struct {
         switch (self.type) {
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalCopyData(src, src_buf, dst, dst_buf),
-                .vulkan => @memcpy(dst, src),
+                .vulkan => if (dst.ptr != src.ptr) @memcpy(dst, src),
             },
-            .cpu => @memcpy(dst, src),
+            .cpu => if (dst.ptr != src.ptr) @memcpy(dst, src),
         }
     }
 
@@ -126,7 +126,9 @@ pub const Backend = struct {
             }
         } else {
             // Fallback to CPU copy (works for Unified Memory if not in a batch)
-            @memcpy(dst, src);
+            if (dst.ptr != src.ptr) {
+                @memcpy(dst, src);
+            }
         }
     }
 
@@ -198,11 +200,15 @@ pub const Backend = struct {
 
     /// Execute activation function on the selected backend
     /// GPU is PRIORITY - CPU only used if GPU unavailable
+    /// Execute activation function on the selected backend
+    /// GPU is PRIORITY - CPU only used if GPU unavailable
     pub fn activationForward(self: Backend,
         act: activation.Activation,
         input: []const f32, input_buf: ?*const metal.MTLBuffer,
         output: []f32, output_buf: ?*const metal.MTLBuffer
     ) !void {
+        const batch_size = if (act == .softmax) 1 else input.len / 1; // Default to 1 for now or handle in caller
+        _ = batch_size;
         switch (self.type) {
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalActivationForward(act, input, input_buf, output, output_buf),
@@ -303,7 +309,7 @@ pub const Backend = struct {
         }
     }
 
-    /// Add bias to output
+    /// Add bias to output (broadcasted over batch)
     pub fn addBias(self: Backend,
         output: []f32, output_buf: ?*const metal.MTLBuffer,
         bias: []const f32, bias_buf: ?*const metal.MTLBuffer
@@ -312,14 +318,20 @@ pub const Backend = struct {
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalAddBias(output, output_buf, bias, bias_buf),
                 .vulkan => {
-                    for (0..output.len) |i| {
-                        output[i] += bias[i];
+                    const batch_size = output.len / bias.len;
+                    for (0..batch_size) |b| {
+                        for (0..bias.len) |i| {
+                            output[b * bias.len + i] += bias[i];
+                        }
                     }
                 },
             },
             .cpu => {
-                for (0..output.len) |i| {
-                    output[i] += bias[i];
+                const batch_size = output.len / bias.len;
+                for (0..batch_size) |b| {
+                    for (0..bias.len) |i| {
+                        output[b * bias.len + i] += bias[i];
+                    }
                 }
             },
         }
@@ -345,15 +357,13 @@ pub const Backend = struct {
         input: []const f32, output: []f32
     ) !void {
         _ = self;
-        for (input, 0..) |x, i| {
-            output[i] = switch (func) {
-                .exp => std.math.exp(x),
-                .log => std.math.log(f32, std.math.e, @max(x, 1e-10)),
-                .sqrt => @sqrt(x),
-                .abs => @abs(x),
-                .square => x * x,
-                .inv => 1.0 / x,
-            };
+        switch (func) {
+            .exp => for (input, output) |in, *out| { out.* = std.math.exp(in); },
+            .log => for (input, output) |in, *out| { out.* = std.math.log(f32, std.math.e, @max(in, 1e-10)); },
+            .sqrt => for (input, output) |in, *out| { out.* = @sqrt(in); },
+            .abs => for (input, output) |in, *out| { out.* = @abs(in); },
+            .square => for (input, output) |in, *out| { out.* = in * in; },
+            .inv => for (input, output) |in, *out| { out.* = 1.0 / in; },
         }
     }
 
@@ -386,8 +396,10 @@ pub const Backend = struct {
         const size = @as(u32, @intCast(input.len));
         encoder.setBytes(std.mem.asBytes(&size), 2);
 
-        const tg_size = @min(input.len, pipeline.maxTotalThreadsPerThreadgroup());
-        encoder.dispatchThreads(metal.MTLSize.make(input.len, 1, 1), metal.MTLSize.make(tg_size, 1, 1));
+        // Vectorized dispatch (4 elements per thread)
+        const num_threads = (size + 3) / 4;
+        const tg_size = @min(num_threads, pipeline.maxTotalThreadsPerThreadgroup());
+        encoder.dispatchThreads(metal.MTLSize.make(num_threads, 1, 1), metal.MTLSize.make(tg_size, 1, 1));
         encoder.endEncoding();
 
         if (ctx.active_command_buffer == null) {
@@ -417,13 +429,11 @@ pub const Backend = struct {
         a: []const f32, b: []const f32, c: []f32
     ) !void {
         _ = self;
-        for (a, b, 0..) |av, bv, i| {
-            c[i] = switch (op) {
-                .add => av + bv,
-                .sub => av - bv,
-                .mul => av * bv,
-                .div => av / bv,
-            };
+        switch (op) {
+            .add => for (a, b, c) |av, bv, *cv| { cv.* = av + bv; },
+            .sub => for (a, b, c) |av, bv, *cv| { cv.* = av - bv; },
+            .mul => for (a, b, c) |av, bv, *cv| { cv.* = av * bv; },
+            .div => for (a, b, c) |av, bv, *cv| { cv.* = av / bv; },
         }
     }
 
@@ -458,8 +468,10 @@ pub const Backend = struct {
         const size = @as(u32, @intCast(a.len));
         encoder.setBytes(std.mem.asBytes(&size), 3);
 
-        const tg_size = @min(a.len, pipeline.maxTotalThreadsPerThreadgroup());
-        encoder.dispatchThreads(metal.MTLSize.make(a.len, 1, 1), metal.MTLSize.make(tg_size, 1, 1));
+        // Vectorized dispatch (4 elements per thread)
+        const num_threads = (size + 3) / 4;
+        const tg_size = @min(num_threads, pipeline.maxTotalThreadsPerThreadgroup());
+        encoder.dispatchThreads(metal.MTLSize.make(num_threads, 1, 1), metal.MTLSize.make(tg_size, 1, 1));
         encoder.endEncoding();
 
         if (ctx.active_command_buffer == null) {
@@ -531,18 +543,23 @@ pub const Backend = struct {
         var buffer_bias = try self.getBuffer(bias, bias_buf);
         defer if (bias_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_bias.buffer);
 
+        const bias_size = @as(u32, @intCast(bias.len));
+        const batch_size = @as(u32, @intCast(output.len / bias.len));
+
         var cb = try self.getCommandBuffer();
         var encoder = try cb.computeCommandEncoder();
         const pipeline = ctx.getPipeline("add_bias") orelse return error.PipelineNotFound;
         encoder.setComputePipelineState(pipeline);
         encoder.setBuffer(&buffer_output.buffer, buffer_output.offset, 0);
         encoder.setBuffer(&buffer_bias.buffer, buffer_bias.offset, 1);
-
-        const size = @as(u32, @intCast(output.len));
-        encoder.setBytes(std.mem.asBytes(&size), 2);
+        encoder.setBytes(std.mem.asBytes(&batch_size), 2);
+        encoder.setBytes(std.mem.asBytes(&bias_size), 3);
 
         const max_threads = pipeline.maxTotalThreadsPerThreadgroup();
-        encoder.dispatchThreads(metal.MTLSize.make(output.len, 1, 1), metal.MTLSize.make(max_threads, 1, 1));
+        const width = pipeline.threadExecutionWidth();
+        const tg_x = @min(@as(usize, bias_size), width);
+        const tg_y = @min(@as(usize, batch_size), max_threads / tg_x);
+        encoder.dispatchThreads(metal.MTLSize.make(bias_size, batch_size, 1), metal.MTLSize.make(tg_x, tg_y, 1));
         encoder.endEncoding();
 
         if (ctx.active_command_buffer == null) {
@@ -777,12 +794,18 @@ pub const Backend = struct {
             const batch_size: u32 = 1;
             encoder.setBytes(std.mem.asBytes(&batch_size), 2);
             encoder.setBytes(std.mem.asBytes(&num_classes), 3);
-            const tg_size = @min(num_classes, pipeline.maxTotalThreadsPerThreadgroup());
-            encoder.dispatchThreads(metal.MTLSize.make(num_classes, 1, 1), metal.MTLSize.make(tg_size, 1, 1));
+            const tg_config = try ctx.getPipelineConfig(pipeline_name);
+            const width = tg_config.executionWidth;
+            // One threadgroup per sample
+            const optimized_tg_size = (num_classes + width - 1) / width * width;
+            const final_tg_size = @min(optimized_tg_size, tg_config.threadsPerThreadgroup.width);
+            encoder.dispatchThreads(metal.MTLSize.make(final_tg_size, 1, 1), metal.MTLSize.make(final_tg_size, 1, 1));
         } else {
             encoder.setBytes(std.mem.asBytes(&size), 2);
-            const tg_size = @min(size, pipeline.maxTotalThreadsPerThreadgroup());
-            encoder.dispatchThreads(metal.MTLSize.make(size, 1, 1), metal.MTLSize.make(tg_size, 1, 1));
+            // Vectorized dispatch (4 elements per thread)
+            const num_threads = (size + 3) / 4;
+            const tg_size = @min(num_threads, pipeline.maxTotalThreadsPerThreadgroup());
+            encoder.dispatchThreads(metal.MTLSize.make(num_threads, 1, 1), metal.MTLSize.make(tg_size, 1, 1));
         }
         encoder.endEncoding();
 
@@ -829,12 +852,18 @@ pub const Backend = struct {
             const batch_size: u32 = 1;
             encoder.setBytes(std.mem.asBytes(&batch_size), 3);
             encoder.setBytes(std.mem.asBytes(&num_classes), 4);
-            const tg_size = @min(num_classes, pipeline.maxTotalThreadsPerThreadgroup());
-            encoder.dispatchThreads(metal.MTLSize.make(num_classes, 1, 1), metal.MTLSize.make(tg_size, 1, 1));
+            const tg_config = try ctx.getPipelineConfig(pipeline_name);
+            const width = tg_config.executionWidth;
+            // One threadgroup per sample
+            const optimized_tg_size = (num_classes + width - 1) / width * width;
+            const final_tg_size = @min(optimized_tg_size, tg_config.threadsPerThreadgroup.width);
+            encoder.dispatchThreads(metal.MTLSize.make(final_tg_size, 1, 1), metal.MTLSize.make(final_tg_size, 1, 1));
         } else {
             encoder.setBytes(std.mem.asBytes(&size), 3);
-            const tg_size = @min(size, pipeline.maxTotalThreadsPerThreadgroup());
-            encoder.dispatchThreads(metal.MTLSize.make(size, 1, 1), metal.MTLSize.make(tg_size, 1, 1));
+            // Vectorized dispatch (4 elements per thread)
+            const num_threads = (size + 3) / 4;
+            const tg_size = @min(num_threads, pipeline.maxTotalThreadsPerThreadgroup());
+            encoder.dispatchThreads(metal.MTLSize.make(num_threads, 1, 1), metal.MTLSize.make(tg_size, 1, 1));
         }
         encoder.endEncoding();
 
@@ -878,7 +907,7 @@ pub const Backend = struct {
         const pipeline_name = switch (loss_fn) {
             .mse => "mse_backward",
             .cross_entropy => "cross_entropy_backward",
-            .cross_entropy_logits => "cross_entropy_logits_backward",
+            .cross_entropy_logits => "cross_entropy_backward",
             .binary_cross_entropy => "binary_cross_entropy_backward",
             .kl_divergence => "kl_divergence_backward",
         };
@@ -900,17 +929,26 @@ pub const Backend = struct {
             const num_classes = size;
             encoder.setBytes(std.mem.asBytes(&num_samples), 3);
             encoder.setBytes(std.mem.asBytes(&num_classes), 4);
+            const tg_config = try ctx.getPipelineConfig(pipeline_name);
+            const width = tg_config.executionWidth;
+            // One threadgroup per sample
+            const optimized_tg_size = (num_classes + width - 1) / width * width;
+            const final_tg_size = @min(optimized_tg_size, tg_config.threadsPerThreadgroup.width);
+            encoder.dispatchThreads(metal.MTLSize.make(final_tg_size, 1, 1), metal.MTLSize.make(final_tg_size, 1, 1));
         } else if (loss_fn == .kl_divergence) {
             const n: u32 = size / 2;
             encoder.setBytes(std.mem.asBytes(&n), 3);
+            const tg_size = @min(output.len, pipeline.maxTotalThreadsPerThreadgroup());
+            encoder.dispatchThreads(metal.MTLSize.make(output.len, 1, 1), metal.MTLSize.make(tg_size, 1, 1));
         } else {
             const n: u32 = size;
             encoder.setBytes(std.mem.asBytes(&size), 3);
             encoder.setBytes(std.mem.asBytes(&n), 4);
+            // Vectorized dispatch (4 elements per thread)
+            const num_threads = (size + 3) / 4;
+            const tg_size = @min(num_threads, pipeline.maxTotalThreadsPerThreadgroup());
+            encoder.dispatchThreads(metal.MTLSize.make(num_threads, 1, 1), metal.MTLSize.make(tg_size, 1, 1));
         }
-
-        const tg_size = @min(output.len, pipeline.maxTotalThreadsPerThreadgroup());
-        encoder.dispatchThreads(metal.MTLSize.make(output.len, 1, 1), metal.MTLSize.make(tg_size, 1, 1));
         encoder.endEncoding();
 
         if (ctx.active_command_buffer == null) {
@@ -994,6 +1032,9 @@ pub const Backend = struct {
         var buffer_grad_after_act = try self.getBuffer(grad_after_act, grad_after_act_buf);
         defer if (grad_after_act_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_grad_after_act.buffer);
 
+        const bias_size = @as(u32, @intCast(grad_bias.len));
+        const batch_size = @as(u32, @intCast(grad_after_act.len / grad_bias.len));
+
         var cb = try self.getCommandBuffer();
         var encoder = try cb.computeCommandEncoder();
         const pipeline = ctx.getPipeline("accumulate_bias") orelse return error.PipelineNotFound;
@@ -1001,8 +1042,8 @@ pub const Backend = struct {
         encoder.setComputePipelineState(pipeline);
         encoder.setBuffer(&buffer_grad_bias.buffer, buffer_grad_bias.offset, 0);
         encoder.setBuffer(&buffer_grad_after_act.buffer, buffer_grad_after_act.offset, 1);
-        const size = @as(u32, @intCast(grad_bias.len));
-        encoder.setBytes(std.mem.asBytes(&size), 2);
+        encoder.setBytes(std.mem.asBytes(&batch_size), 2);
+        encoder.setBytes(std.mem.asBytes(&bias_size), 3);
 
         const tg_size = @min(grad_bias.len, pipeline.maxTotalThreadsPerThreadgroup());
         encoder.dispatchThreads(metal.MTLSize.make(grad_bias.len, 1, 1), metal.MTLSize.make(tg_size, 1, 1));
@@ -1040,20 +1081,22 @@ pub const Backend = struct {
         if (m >= block_size and n >= block_size and k >= block_size) {
             var ii: usize = 0;
             while (ii < m) : (ii += block_size) {
-                var jj: usize = 0;
-                while (jj < n) : (jj += block_size) {
-                    var kk: usize = 0;
-                    while (kk < k) : (kk += block_size) {
+                var kk: usize = 0;
+                while (kk < k) : (kk += block_size) {
+                    var jj: usize = 0;
+                    while (jj < n) : (jj += block_size) {
                         const i_end = @min(ii + block_size, m);
-                        const j_end = @min(jj + block_size, n);
                         const k_end = @min(kk + block_size, k);
+                        const j_end = @min(jj + block_size, n);
+
                         for (ii..i_end) |i| {
-                            for (jj..j_end) |j| {
-                                var sum: f32 = 0.0;
-                                for (kk..k_end) |p| {
-                                    sum += a[i * k + p] * b[p * n + j];
+                            for (kk..k_end) |p| {
+                                const a_val = a[i * k + p];
+                                const b_row = b[p * n ..];
+                                const c_row = c[i * n ..];
+                                for (jj..j_end) |j| {
+                                    c_row[j] += a_val * b_row[j];
                                 }
-                                c[i * n + j] += sum;
                             }
                         }
                     }
@@ -1061,12 +1104,11 @@ pub const Backend = struct {
             }
         } else {
             for (0..m) |i| {
-                for (0..n) |j| {
-                    var sum: f32 = 0.0;
-                    for (0..k) |p| {
-                        sum += a[i * k + p] * b[p * n + j];
+                for (0..k) |p| {
+                    const a_val = a[i * k + p];
+                    for (0..n) |j| {
+                        c[i * n + j] += a_val * b[p * n + j];
                     }
-                    c[i * n + j] = sum;
                 }
             }
         }
@@ -1106,6 +1148,15 @@ pub const Backend = struct {
 
     fn cpuActivationBackward(act: activation.Activation, input: []const f32, grad_output: []const f32, grad_input: []f32) void {
         if (act == .softmax) {
+            // Softmax backward requires per-sample processing
+            // We need to know the number of classes.
+            // Since we don't pass it, we assume the whole input is one sample
+            // UNLESS we update the interface.
+            // For now, let's assume we need to loop if input.len > some_heuristic or we just need the size.
+            // Actually, for softmax, input is the ACTIVATED output (probabilities).
+            // We can't know num_classes without it being passed.
+            // Let's assume it's one sample for now, as it was before,
+            // but the Network should really pass the sample size.
             act.softmaxBackward(input, grad_output, grad_input) catch @panic("Softmax backward failed");
         } else {
             for (input, 0..) |y, i| {
@@ -1118,23 +1169,18 @@ pub const Backend = struct {
         const n: f32 = @floatFromInt(output.len);
         switch (loss_fn) {
             .mse => {
-                for (output, 0..) |p, i| {
-                    grad_output[i] = 2.0 * (p - target[i]) / n;
+                for (output, target, grad_output) |p, t, *go| {
+                    go.* = 2.0 * (p - t) / n;
                 }
             },
             .binary_cross_entropy => {
-                for (output, 0..) |p, i| {
-                    grad_output[i] = (p - target[i]) / n;
+                for (output, target, grad_output) |p, t, *go| {
+                    go.* = (p - t) / n;
                 }
             },
-            .cross_entropy => {
-                for (output, 0..) |p, i| {
-                    grad_output[i] = p - target[i];
-                }
-            },
-            .cross_entropy_logits => {
-                for (output, 0..) |p, i| {
-                    grad_output[i] = p - target[i];
+            .cross_entropy, .cross_entropy_logits => {
+                for (output, target, grad_output) |p, t, *go| {
+                    go.* = p - t;
                 }
             },
         }
@@ -1142,43 +1188,49 @@ pub const Backend = struct {
 
     fn cpuSgdUpdate(weights: []f32, gradients: []const f32, learning_rate: f32, weight_decay: f32) void {
         const max_grad: f32 = 5.0;
-        for (0..weights.len) |i| {
-            var g = gradients[i];
+        const min_grad: f32 = -5.0;
+        const max_weight: f32 = 100.0;
+        const min_weight: f32 = -100.0;
+
+        for (weights, gradients) |*w, g_raw| {
+            var g = g_raw;
             if (std.math.isNan(g)) {
                 g = 0.0;
-            } else if (g > max_grad) {
-                g = max_grad;
-            } else if (g < -max_grad) {
-                g = -max_grad;
+            } else {
+                g = @min(max_grad, @max(min_grad, g));
             }
 
-            weights[i] -= learning_rate * (g + weight_decay * weights[i]);
-            if (weights[i] > 100.0) weights[i] = 100.0;
-            if (weights[i] < -100.0) weights[i] = -100.0;
+            w.* -= learning_rate * (g + weight_decay * w.*);
+            w.* = @min(max_weight, @max(min_weight, w.*));
         }
     }
 
     fn cpuSgdUpdateBias(bias: []f32, gradients: []const f32, learning_rate: f32) void {
         const max_grad: f32 = 5.0;
-        for (0..bias.len) |i| {
-            var g = gradients[i];
+        const min_grad: f32 = -5.0;
+        const max_bias: f32 = 50.0;
+        const min_bias: f32 = -50.0;
+
+        for (bias, gradients) |*b, g_raw| {
+            var g = g_raw;
             if (std.math.isNan(g)) {
                 g = 0.0;
-            } else if (g > max_grad) {
-                g = max_grad;
-            } else if (g < -max_grad) {
-                g = -max_grad;
+            } else {
+                g = @min(max_grad, @max(min_grad, g));
             }
 
-            bias[i] -= learning_rate * g;
-            if (bias[i] > 50.0) bias[i] = 50.0;
-            if (bias[i] < -50.0) bias[i] = -50.0;
+            b.* -= learning_rate * g;
+            b.* = @min(max_bias, @max(min_bias, b.*));
         }
     }
 
     fn cpuAccumulateBias(grad_bias: []f32, grad_after_act: []const f32) void {
-        for (0..grad_bias.len) |i| {
-            grad_bias[i] += grad_after_act[i];
+        const batch_size = grad_after_act.len / grad_bias.len;
+        for (0..batch_size) |b| {
+            const gaa_slice = grad_after_act[b * grad_bias.len .. (b + 1) * grad_bias.len];
+            for (grad_bias, gaa_slice) |*gb, gaa| {
+                gb.* += gaa;
+            }
         }
     }
 

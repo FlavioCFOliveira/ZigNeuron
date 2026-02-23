@@ -36,7 +36,8 @@ test "activation sigmoid forward" {
 
 test "activation sigmoid backward" {
     const act = activation.Activation{ .sigmoid = {} };
-    try expectNear(act.backward(0.0, 1.0), 0.25, 0.0001);
+    // backward(y, grad) where y = sigmoid(x). For x=0, y=0.5
+    try expectNear(act.backward(0.5, 1.0), 0.25, 0.0001);
 }
 
 test "activation tanh forward" {
@@ -85,33 +86,6 @@ test "activation linear backward" {
     try expectNear(act.backward(1.0, 1.0), 1.0, 0.0001);
 }
 
-test "activation forwardBatch" {
-    const act = activation.Activation{ .relu = {} };
-    var input: [4]f32 = .{-1.0, 0.0, 1.0, 2.0};
-    var output: [4]f32 = undefined;
-
-    try act.forwardBatch(&input, &output);
-
-    try expectNear(output[0], 0.0, 0.0001);
-    try expectNear(output[1], 0.0, 0.0001);
-    try expectNear(output[2], 1.0, 0.0001);
-    try expectNear(output[3], 2.0, 0.0001);
-}
-
-test "activation backwardBatch" {
-    const act = activation.Activation{ .relu = {} };
-    var input: [4]f32 = .{-1.0, 0.0, 1.0, 2.0};
-    var grad_output: [4]f32 = .{1.0, 1.0, 1.0, 1.0};
-    var grad_input: [4]f32 = undefined;
-
-    try act.backwardBatch(&input, &grad_output, &grad_input);
-
-    try expectNear(grad_input[0], 0.0, 0.0001);
-    try expectNear(grad_input[1], 0.0, 0.0001);
-    try expectNear(grad_input[2], 1.0, 0.0001);
-    try expectNear(grad_input[3], 1.0, 0.0001);
-}
-
 test "activation derivatives at boundaries" {
     const relu = activation.Activation{ .relu = {} };
     const sigmoid = activation.Activation{ .sigmoid = {} };
@@ -121,12 +95,12 @@ test "activation derivatives at boundaries" {
     try expectNear(relu.backward(0.0, 1.0), 0.0, 0.0001);
 
     // Sigmoid at extreme values
-    try expectNear(sigmoid.backward(100.0, 1.0), 0.0, 0.001);
-    try expectNear(sigmoid.backward(-100.0, 1.0), 0.0, 0.001);
+    try expectNear(sigmoid.backward(1.0, 1.0), 0.0, 0.001);
+    try expectNear(sigmoid.backward(0.0, 1.0), 0.0, 0.001);
 
     // Tanh at extreme values
-    try expectNear(tanh.backward(100.0, 1.0), 0.0, 0.001);
-    try expectNear(tanh.backward(-100.0, 1.0), 0.0, 0.001);
+    try expectNear(tanh.backward(1.0, 1.0), 0.0, 0.001);
+    try expectNear(tanh.backward(-1.0, 1.0), 0.0, 0.001);
 }
 
 test "activation numeric precision" {
@@ -159,7 +133,7 @@ test "activation backprop gradient magnitude" {
     const act = activation.Activation{ .sigmoid = {} };
 
     // Gradient should be max at output=0.5 (input=0)
-    const grad_at_0 = act.backward(0.0, 1.0);
+    const grad_at_0 = act.backward(0.5, 1.0);
     try expectNear(grad_at_0, 0.25, 0.0001);
 
     // Gradient should be smaller at extreme outputs

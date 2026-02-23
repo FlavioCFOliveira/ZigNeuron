@@ -166,15 +166,16 @@ kernel void matmul_transpose_a(
     }
 }
 
-// Add bias to output: output = output + bias
+// Add bias to output: output = output + bias (broadcasted over batch)
 kernel void add_bias(
     device float* output [[buffer(0)]],
     device const float* bias [[buffer(1)]],
-    constant uint& size [[buffer(2)]],
-    uint gid [[thread_position_in_grid]])
+    constant uint& batch_size [[buffer(2)]],
+    constant uint& bias_size [[buffer(3)]],
+    uint2 gid [[thread_position_in_grid]])
 {
-    if (gid < size) {
-        output[gid] += bias[gid];
+    if (gid.x < bias_size && gid.y < batch_size) {
+        output[gid.y * bias_size + gid.x] += bias[gid.x];
     }
 }
 
