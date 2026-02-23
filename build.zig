@@ -236,4 +236,79 @@ pub fn build(b: *std.Build) void {
     const run_all_backends = b.addRunArtifact(all_backends_exe);
     const all_backends_step = b.step("test-backends", "Run comprehensive backend comparison tests");
     all_backends_step.dependOn(&run_all_backends.step);
+
+    // Stock Prediction Example
+    const stock_module = std.Build.Module.create(b, .{
+        .root_source_file = b.path("examples/stock_prediction/lstm.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    stock_module.addImport("ZigNeuron", lib_module);
+
+    const stock_exe = b.addExecutable(.{
+        .name = "stock_lstm",
+        .root_module = stock_module,
+    });
+    if (target.result.os.tag == .macos) {
+        stock_exe.linkLibC();
+        stock_exe.linkSystemLibrary("objc");
+        stock_exe.linkFramework("Metal");
+        stock_exe.linkFramework("Foundation");
+        stock_exe.linkFramework("QuartzCore");
+    }
+    b.installArtifact(stock_exe);
+
+    const run_stock = b.addRunArtifact(stock_exe);
+    const stock_step = b.step("example-stock", "Run stock prediction LSTM example");
+    stock_step.dependOn(&run_stock.step);
+
+    // Attention Example
+    const attention_module = std.Build.Module.create(b, .{
+        .root_source_file = b.path("examples/stock_prediction/attention_transformer.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    attention_module.addImport("ZigNeuron", lib_module);
+
+    const attention_exe = b.addExecutable(.{
+        .name = "stock_attention",
+        .root_module = attention_module,
+    });
+    if (target.result.os.tag == .macos) {
+        attention_exe.linkLibC();
+        attention_exe.linkSystemLibrary("objc");
+        attention_exe.linkFramework("Metal");
+        attention_exe.linkFramework("Foundation");
+        attention_exe.linkFramework("QuartzCore");
+    }
+    b.installArtifact(attention_exe);
+
+    const run_attention = b.addRunArtifact(attention_exe);
+    const attention_step = b.step("example-attention", "Run stock prediction Attention example");
+    attention_step.dependOn(&run_attention.step);
+
+    // CNN Example
+    const cnn_module = std.Build.Module.create(b, .{
+        .root_source_file = b.path("examples/stock_prediction/cnn_seq2seq.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    cnn_module.addImport("ZigNeuron", lib_module);
+
+    const cnn_exe = b.addExecutable(.{
+        .name = "stock_cnn",
+        .root_module = cnn_module,
+    });
+    if (target.result.os.tag == .macos) {
+        cnn_exe.linkLibC();
+        cnn_exe.linkSystemLibrary("objc");
+        cnn_exe.linkFramework("Metal");
+        cnn_exe.linkFramework("Foundation");
+        cnn_exe.linkFramework("QuartzCore");
+    }
+    b.installArtifact(cnn_exe);
+
+    const run_cnn = b.addRunArtifact(cnn_exe);
+    const cnn_step = b.step("example-cnn", "Run stock prediction CNN example");
+    cnn_step.dependOn(&run_cnn.step);
 }
