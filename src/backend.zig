@@ -5,6 +5,8 @@ const std = @import("std");
 const activation = @import("activation.zig");
 const loss = @import("loss.zig");
 const vulkan_module = @import("vulkan.zig");
+const metal = @import("metal.zig");
+const metal_context = @import("metal_context.zig");
 
 /// Available GPU backends in priority order
 pub const GpuBackend = enum {
@@ -15,38 +17,56 @@ pub const GpuBackend = enum {
 };
 
 /// Backend selection - GPU preferred, CPU fallback
-pub const Backend = union(enum) {
-    gpu: GpuBackend,
-    cpu,
+pub const Backend = struct {
+    type: BackendType,
+    metal_ctx: ?*metal_context.MetalContext = null,
 
-    /// Returns the default backend based on available hardware
-    /// Priority: Metal (Apple Silicon) > Vulkan > CPU
-    pub fn default() Backend {
-        return Backend.detect();
+    pub const BackendType = union(enum) {
+        gpu: GpuBackend,
+        cpu,
+    };
+
+    pub fn init(allocator: std.mem.Allocator) !Backend {
+        const detected = detect();
+        var self = Backend{
+            .type = detected,
+            .metal_ctx = null,
+        };
+
+        if (detected == .gpu and detected.gpu == .metal) {
+            self.metal_ctx = try metal_context.MetalContext.init(allocator);
+        }
+
+        return self;
     }
 
-    /// Detect available hardware and return best backend
-    /// Priority: Metal (Apple Silicon) > Vulkan (cross-platform) > CPU
-    pub fn detect() Backend {
+    pub fn deinit(self: *Backend) void {
+        if (self.metal_ctx) |ctx| {
+            ctx.deinit();
+            self.metal_ctx = null;
+        }
+    }
+
+    /// Returns the default backend type based on available hardware
+    /// Priority: Metal (Apple Silicon) > Vulkan > CPU
+    pub fn detect() BackendType {
         // On macOS, try Metal first
-        // We use compile-time detection since we need the info at compile time
-        // For cross-platform, we'll use Vulkan or CPU fallback
         const os_tag = @import("builtin").os.tag;
 
         // Try Metal first (Apple Silicon)
         if (os_tag == .macos) {
             if (metalSupported()) {
-                return Backend{ .gpu = .metal };
+                return BackendType{ .gpu = .metal };
             }
         }
 
         // Try Vulkan next (cross-platform)
         if (vulkanSupported()) {
-            return Backend{ .gpu = .vulkan };
+            return BackendType{ .gpu = .vulkan };
         }
 
         // Fall back to CPU
-        return Backend{ .cpu = {} };
+        return BackendType{ .cpu = {} };
     }
 
     /// Check if Metal is available on this system
@@ -71,24 +91,53 @@ pub const Backend = union(enum) {
 
     /// Execute matrix multiplication on the selected backend
     /// GPU is PRIORITY - CPU only used if GPU unavailable
-    pub fn matMul(self: Backend, a: []const f32, b: []const f32, c: []f32, m: usize, n: usize, k: usize) !void {
-        switch (self) {
+    pub fn matMul(self: Backend,
+        a: []const f32, a_buf: ?*const metal.MTLBuffer,
+        b: []const f32, b_buf: ?*const metal.MTLBuffer,
+        c: []f32, c_buf: ?*const metal.MTLBuffer,
+        m: usize, n: usize, k: usize
+    ) !void {
+        switch (self.type) {
             .gpu => |gpu| switch (gpu) {
-                .metal => try metalMatMul(a, b, c, m, n, k),
-                .vulkan => try vulkanMatMul(a, b, c, m, n, k),
+                .metal => try self.metalMatMul(a, a_buf, b, b_buf, c, c_buf, m, n, k, false),
+                .vulkan => try self.vulkanMatMul(a, b, c, m, n, k),
             },
             .cpu => cpuMatMul(a, b, c, m, n, k),
+        }
+    }
+
+    /// Execute matrix multiplication with transposed B: C = A * B^T
+    pub fn matMulTransposeB(self: Backend,
+        a: []const f32, a_buf: ?*const metal.MTLBuffer,
+        b: []const f32, b_buf: ?*const metal.MTLBuffer,
+        c: []f32, c_buf: ?*const metal.MTLBuffer,
+        m: usize, n: usize, k: usize
+    ) !void {
+        switch (self.type) {
+            .gpu => |gpu| switch (gpu) {
+                .metal => try self.metalMatMul(a, a_buf, b, b_buf, c, c_buf, m, n, k, true),
+                .vulkan => {
+                    // TODO: Vulkan transpose matmul
+                    cpuMatMulTransposeB(a, b, c, m, n, k);
+                },
+            },
+            .cpu => cpuMatMulTransposeB(a, b, c, m, n, k),
         }
     }
 
     /// Execute batched matrix multiplication on the selected backend
     /// GPU is PRIORITY - CPU only used if GPU unavailable
     /// This is more efficient for batch processing
-    pub fn matMulBatch(self: Backend, a: []const f32, b: []const f32, c: []f32, batch_size: usize, n: usize, k: usize) !void {
-        switch (self) {
+    pub fn matMulBatch(self: Backend,
+        a: []const f32, a_buf: ?*const metal.MTLBuffer,
+        b: []const f32, b_buf: ?*const metal.MTLBuffer,
+        c: []f32, c_buf: ?*const metal.MTLBuffer,
+        batch_size: usize, n: usize, k: usize
+    ) !void {
+        switch (self.type) {
             .gpu => |gpu| switch (gpu) {
-                .metal => try metalMatMulBatch(a, b, c, batch_size, n, k),
-                .vulkan => try vulkanMatMulBatch(a, b, c, batch_size, n, k),
+                .metal => try self.metalMatMulBatch(a, a_buf, b, b_buf, c, c_buf, batch_size, n, k),
+                .vulkan => try self.vulkanMatMulBatch(a, b, c, batch_size, n, k),
             },
             .cpu => cpuMatMulBatch(a, b, c, batch_size, n, k),
         }
@@ -96,11 +145,15 @@ pub const Backend = union(enum) {
 
     /// Execute activation function on array
     /// GPU is PRIORITY - CPU only used if GPU unavailable
-    pub fn activationForward(self: Backend, act: activation.Activation, input: []f32, output: []f32) !void {
-        switch (self) {
+    pub fn activationForward(self: Backend,
+        act: activation.Activation,
+        input: []f32, input_buf: ?*const metal.MTLBuffer,
+        output: []f32, output_buf: ?*const metal.MTLBuffer
+    ) !void {
+        switch (self.type) {
             .gpu => |gpu| switch (gpu) {
-                .metal => try metalActivationForward(act, input, output),
-                .vulkan => try vulkanActivationForward(act, input, output),
+                .metal => try self.metalActivationForward(act, input, input_buf, output, output_buf),
+                .vulkan => try self.vulkanActivationForward(act, input, output),
             },
             .cpu => cpuActivationForward(act, input, output),
         }
@@ -108,11 +161,16 @@ pub const Backend = union(enum) {
 
     /// Execute activation backward pass
     /// GPU is PRIORITY - CPU only used if GPU unavailable
-    pub fn activationBackward(self: Backend, act: activation.Activation, input: []const f32, grad_output: []const f32, grad_input: []f32) !void {
-        switch (self) {
+    pub fn activationBackward(self: Backend,
+        act: activation.Activation,
+        input: []const f32, input_buf: ?*const metal.MTLBuffer,
+        grad_output: []const f32, grad_output_buf: ?*const metal.MTLBuffer,
+        grad_input: []f32, grad_input_buf: ?*const metal.MTLBuffer
+    ) !void {
+        switch (self.type) {
             .gpu => |gpu| switch (gpu) {
-                .metal => try metalActivationBackward(act, input, grad_output, grad_input),
-                .vulkan => try vulkanActivationBackward(act, input, grad_output, grad_input),
+                .metal => try self.metalActivationBackward(act, input, input_buf, grad_output, grad_output_buf, grad_input, grad_input_buf),
+                .vulkan => try self.vulkanActivationBackward(act, input, grad_output, grad_input),
             },
             .cpu => cpuActivationBackward(act, input, grad_output, grad_input),
         }
@@ -120,11 +178,16 @@ pub const Backend = union(enum) {
 
     /// Execute loss function gradient on the selected backend
     /// GPU is PRIORITY - CPU only used if GPU unavailable
-    pub fn lossBackward(self: Backend, loss_fn: loss.Loss, output: []const f32, target: []const f32, grad_output: []f32) !void {
-        switch (self) {
+    pub fn lossBackward(self: Backend,
+        loss_fn: loss.Loss,
+        output: []const f32, output_buf: ?*const metal.MTLBuffer,
+        target: []const f32, target_buf: ?*const metal.MTLBuffer,
+        grad_output: []f32, grad_output_buf: ?*const metal.MTLBuffer
+    ) !void {
+        switch (self.type) {
             .gpu => |gpu| switch (gpu) {
-                .metal => try metalLossBackward(loss_fn, output, target, grad_output),
-                .vulkan => try vulkanLossBackward(loss_fn, output, target, grad_output),
+                .metal => try self.metalLossBackward(loss_fn, output, output_buf, target, target_buf, grad_output, grad_output_buf),
+                .vulkan => try self.vulkanLossBackward(loss_fn, output, target, grad_output),
             },
             .cpu => cpuLossBackward(loss_fn, output, target, grad_output),
         }
@@ -133,18 +196,16 @@ pub const Backend = union(enum) {
     // ================== Metal implementations ==================
     // ( Apple Silicon GPU )
 
-    fn metalMatMul(a: []const f32, b: []const f32, c: []f32, m: usize, n: usize, k: usize) !void {
+    fn metalMatMul(self: Backend,
+        a: []const f32, a_buf: ?*const metal.MTLBuffer,
+        b: []const f32, b_buf: ?*const metal.MTLBuffer,
+        c: []f32, c_buf: ?*const metal.MTLBuffer,
+        m: usize, n: usize, k: usize,
+        transpose_b: bool
+    ) !void {
         // Check if we're on macOS
         if (!isMacos()) {
             return error.NotAvailable;
-        }
-
-        // Ultra-low threshold for GPU usage to maximize Metal parallelism on Apple Silicon
-        // Metal on Apple Silicon has extremely low overhead and massive parallelism
-        const total_size = @as(usize, m) * n * k;
-        if (total_size < 128) { // Ultra-low threshold for maximum GPU utilization
-            cpuMatMul(a, b, c, m, n, k);
-            return;
         }
 
         // Validate inputs
@@ -153,18 +214,23 @@ pub const Backend = union(enum) {
         if (c.len < m * n) return error.BufferTooSmall;
 
         // Use GPU implementation
-        try metalMatMulGPU(a, b, c, m, n, k);
+        try self.metalMatMulGPU(a, a_buf, b, b_buf, c, c_buf, m, n, k, transpose_b);
     }
 
-    fn metalMatMulBatch(a: []const f32, b: []const f32, c: []f32, batch_size: usize, n: usize, k: usize) !void {
+    fn metalMatMulBatch(self: Backend,
+        a: []const f32, a_buf: ?*const metal.MTLBuffer,
+        b: []const f32, b_buf: ?*const metal.MTLBuffer,
+        c: []f32, c_buf: ?*const metal.MTLBuffer,
+        batch_size: usize, n: usize, k: usize
+    ) !void {
         // Check if we're on macOS
         if (!isMacos()) {
             return error.NotAvailable;
         }
 
-        // Batch operations are perfect for GPU - always use GPU for batches
+        // Batch operations are perfect for GPU
         const total_size = @as(usize, batch_size) * n * k;
-        if (total_size < 64) { // Even lower threshold for batches
+        if (total_size < 64 and a_buf == null) {
             cpuMatMulBatch(a, b, c, batch_size, n, k);
             return;
         }
@@ -175,24 +241,31 @@ pub const Backend = union(enum) {
         if (c.len < batch_size * n) return error.BufferTooSmall;
 
         // Use GPU implementation
-        try metalMatMulBatchGPU(a, b, c, batch_size, n, k);
+        try self.metalMatMulBatchGPU(a, a_buf, b, b_buf, c, c_buf, batch_size, n, k);
     }
 
-    fn metalActivationForward(act: activation.Activation, input: []f32, output: []f32) !void {
-        // Ultra-low threshold to maximize Metal GPU parallelism on Apple Silicon
-        if (input.len < 32) { // Ultra-low threshold for maximum GPU utilization
+    fn metalActivationForward(self: Backend,
+        act: activation.Activation,
+        input: []f32, input_buf: ?*const metal.MTLBuffer,
+        output: []f32, output_buf: ?*const metal.MTLBuffer
+    ) !void {
+        if (input.len < 32 and input_buf == null) {
             cpuActivationForward(act, input, output);
             return;
         }
 
         if (input.len != output.len) return error.ShapeMismatch;
 
-        try metalActivationForwardGPU(act, input, output);
+        try self.metalActivationForwardGPU(act, input, input_buf, output, output_buf);
     }
 
-    fn metalActivationBackward(act: activation.Activation, input: []const f32, grad_output: []const f32, grad_input: []f32) !void {
-        // Ultra-low threshold to maximize Metal GPU parallelism on Apple Silicon
-        if (input.len < 32) { // Ultra-low threshold for maximum GPU utilization
+    fn metalActivationBackward(self: Backend,
+        act: activation.Activation,
+        input: []const f32, input_buf: ?*const metal.MTLBuffer,
+        grad_output: []const f32, grad_output_buf: ?*const metal.MTLBuffer,
+        grad_input: []f32, grad_input_buf: ?*const metal.MTLBuffer
+    ) !void {
+        if (input.len < 32 and input_buf == null) {
             cpuActivationBackward(act, input, grad_output, grad_input);
             return;
         }
@@ -201,12 +274,16 @@ pub const Backend = union(enum) {
             return error.ShapeMismatch;
         }
 
-        try metalActivationBackwardGPU(act, input, grad_output, grad_input);
+        try self.metalActivationBackwardGPU(act, input, input_buf, grad_output, grad_output_buf, grad_input, grad_input_buf);
     }
 
-    fn metalLossBackward(loss_fn: loss.Loss, output: []const f32, target: []const f32, grad_output: []f32) !void {
-        // Ultra-low threshold to maximize Metal GPU parallelism on Apple Silicon
-        if (output.len < 32) { // Ultra-low threshold for maximum GPU utilization
+    fn metalLossBackward(self: Backend,
+        loss_fn: loss.Loss,
+        output: []const f32, output_buf: ?*const metal.MTLBuffer,
+        target: []const f32, target_buf: ?*const metal.MTLBuffer,
+        grad_output: []f32, grad_output_buf: ?*const metal.MTLBuffer
+    ) !void {
+        if (output.len < 32 and output_buf == null) {
             cpuLossBackward(loss_fn, output, target, grad_output);
             return;
         }
@@ -215,141 +292,470 @@ pub const Backend = union(enum) {
             return error.ShapeMismatch;
         }
 
-        try metalLossBackwardGPU(loss_fn, output, target, grad_output);
+        try self.metalLossBackwardGPU(loss_fn, output, output_buf, target, target_buf, grad_output, grad_output_buf);
     }
 
     /// GPU implementation of batched matrix multiplication using Metal
-    fn metalMatMulBatchGPU(a: []const f32, b: []const f32, c: []f32, batch_size: usize, n: usize, k: usize) !void {
-        // Metal implementation for batched operations
-        // Batched operations are highly efficient on GPU
+    fn metalMatMulBatchGPU(self: Backend,
+        a: []const f32, a_buf: ?*const metal.MTLBuffer,
+        b: []const f32, b_buf: ?*const metal.MTLBuffer,
+        c: []f32, c_buf: ?*const metal.MTLBuffer,
+        batch_size: usize, n: usize, k: usize
+    ) !void {
+        const ctx = self.metal_ctx orelse return error.NotAvailable;
 
-        // Validate matrix dimensions
-        if (a.len < batch_size * k) return error.BufferTooSmall;
-        if (b.len < k * n) return error.BufferTooSmall;
-        if (c.len < batch_size * n) return error.BufferTooSmall;
+        // Use provided buffers or create temporary ones
+        var buffer_a: metal.MTLBuffer = undefined;
+        var own_a = false;
+        if (a_buf) |buf| {
+            buffer_a = buf.*;
+        } else {
+            buffer_a = try ctx.device.newBufferWithBytes(std.mem.sliceAsBytes(a), .StorageModeShared);
+            own_a = true;
+        }
+        defer if (own_a) buffer_a.release();
 
-        // For now, use optimized CPU implementation
-        // In production, this would use Metal compute shaders with batch dimension
-        cpuMatMulBatch(a, b, c, batch_size, n, k);
+        var buffer_b: metal.MTLBuffer = undefined;
+        var own_b = false;
+        if (b_buf) |buf| {
+            buffer_b = buf.*;
+        } else {
+            buffer_b = try ctx.device.newBufferWithBytes(std.mem.sliceAsBytes(b), .StorageModeShared);
+            own_b = true;
+        }
+        defer if (own_b) buffer_b.release();
+
+        var buffer_c: metal.MTLBuffer = undefined;
+        var own_c = false;
+        if (c_buf) |buf| {
+            buffer_c = buf.*;
+        } else {
+            buffer_c = try ctx.device.newBufferWithBytes(std.mem.sliceAsBytes(c), .StorageModeShared);
+            own_c = true;
+        }
+        defer if (own_c) buffer_c.release();
+
+        // Create command buffer and encoder
+        var command_buffer = try ctx.command_queue.commandBuffer();
+        defer command_buffer.release();
+
+        var encoder = try command_buffer.computeCommandEncoder();
+        defer encoder.release();
+
+        // Set pipeline and buffers
+        const pipeline = ctx.getPipeline("matmul_batch") orelse {
+            encoder.endEncoding();
+            return error.PipelineNotFound;
+        };
+        encoder.setComputePipelineState(pipeline);
+        encoder.setBuffer(&buffer_a, 0, 0);
+        encoder.setBuffer(&buffer_b, 0, 1);
+        encoder.setBuffer(&buffer_c, 0, 2);
+
+        // Set matrix dimensions
+        const batch_size_u32 = @as(u32, @intCast(batch_size));
+        const n_u32 = @as(u32, @intCast(n));
+        const k_u32 = @as(u32, @intCast(k));
+        encoder.setBytes(std.mem.asBytes(&batch_size_u32), 3);
+        encoder.setBytes(std.mem.asBytes(&n_u32), 4);
+        encoder.setBytes(std.mem.asBytes(&k_u32), 5);
+
+        // Dispatch threads
+        const threads_per_threadgroup = metal.MTLSize.make(16, 16, 1);
+        const grid_size = metal.MTLSize.make(n, 1, batch_size);
+
+        encoder.dispatchThreads(grid_size, threads_per_threadgroup);
+        encoder.endEncoding();
+
+        // Commit and wait
+        command_buffer.commit();
+        command_buffer.waitUntilCompleted();
+
+        // Synchronize results if needed
+        if (own_c) {
+            const result_ptr = buffer_c.contents();
+            if (@as(usize, @intFromPtr(result_ptr)) != @as(usize, @intFromPtr(c.ptr))) {
+                @memcpy(c, std.mem.bytesAsSlice(f32, result_ptr[0..c.len * 4]));
+            }
+        }
     }
 
     /// GPU implementation of matrix multiplication using Metal
-    fn metalMatMulGPU(a: []const f32, b: []const f32, c: []f32, m: usize, n: usize, k: usize) !void {
-        // Metal implementation for Apple Silicon
-        // Uses inline Metal Shading Language (MSL) via runtime compilation
+    fn metalMatMulGPU(self: Backend,
+        a: []const f32, a_buf: ?*const metal.MTLBuffer,
+        b: []const f32, b_buf: ?*const metal.MTLBuffer,
+        c: []f32, c_buf: ?*const metal.MTLBuffer,
+        m: usize, n: usize, k: usize,
+        transpose_b: bool
+    ) !void {
+        const ctx = self.metal_ctx orelse return error.NotAvailable;
 
-        // Since Zig doesn't have native Metal FFI in stdlib,
-        // we use a CPU fallback with validation for non-macOS platforms
-        // For actual macOS with Metal, this would use:
-        // - MTLDevice, MTLCommandQueue, MTLComputePipelineState
-        // - MTLBuffer for data
-        // - MTLComputeCommandEncoder for execution
+        // Use provided buffers or create temporary ones
+        var buffer_a: metal.MTLBuffer = undefined;
+        var own_a = false;
+        if (a_buf) |buf| {
+            buffer_a = buf.*;
+        } else {
+            buffer_a = try ctx.device.newBufferWithBytes(std.mem.sliceAsBytes(a), .StorageModeShared);
+            own_a = true;
+        }
+        defer if (own_a) buffer_a.release();
 
-        // For now, use CPU implementation with validation
-        // In a production implementation, this would compile and execute MSL shaders
+        var buffer_b: metal.MTLBuffer = undefined;
+        var own_b = false;
+        if (b_buf) |buf| {
+            buffer_b = buf.*;
+        } else {
+            buffer_b = try ctx.device.newBufferWithBytes(std.mem.sliceAsBytes(b), .StorageModeShared);
+            own_b = true;
+        }
+        defer if (own_b) buffer_b.release();
 
-        // Validate matrix dimensions
-        if (a.len < m * k) return error.BufferTooSmall;
-        if (b.len < k * n) return error.BufferTooSmall;
-        if (c.len < m * n) return error.BufferTooSmall;
+        var buffer_c: metal.MTLBuffer = undefined;
+        var own_c = false;
+        if (c_buf) |buf| {
+            buffer_c = buf.*;
+        } else {
+            buffer_c = try ctx.device.newBufferWithBytes(std.mem.sliceAsBytes(c), .StorageModeShared);
+            own_c = true;
+        }
+        defer if (own_c) buffer_c.release();
 
-        // CPU fallback - actual Metal implementation would use GPU compute
-        cpuMatMul(a, b, c, m, n, k);
+        // Create command buffer and encoder
+        var command_buffer = try ctx.command_queue.commandBuffer();
+        defer command_buffer.release();
+
+        var encoder = try command_buffer.computeCommandEncoder();
+        defer encoder.release();
+
+        // Select pipeline
+        var pipeline_name: []const u8 = "matmul";
+        if (transpose_b) {
+            pipeline_name = "matmul_transpose_b";
+        } else if (m % 16 == 0 and n % 16 == 0 and k % 16 == 0) {
+            pipeline_name = "matmul_tiled";
+        }
+
+        const pipeline = ctx.getPipeline(pipeline_name) orelse {
+            encoder.endEncoding();
+            return error.PipelineNotFound;
+        };
+
+        // Set pipeline and buffers
+        encoder.setComputePipelineState(pipeline);
+        encoder.setBuffer(&buffer_a, 0, 0);
+        encoder.setBuffer(&buffer_b, 0, 1);
+        encoder.setBuffer(&buffer_c, 0, 2);
+
+        // Set matrix dimensions
+        const m_u32 = @as(u32, @intCast(m));
+        const n_u32 = @as(u32, @intCast(n));
+        const k_u32 = @as(u32, @intCast(k));
+        encoder.setBytes(std.mem.asBytes(&m_u32), 3);
+        encoder.setBytes(std.mem.asBytes(&n_u32), 4);
+        encoder.setBytes(std.mem.asBytes(&k_u32), 5);
+
+        // Dispatch threads
+        const threads_per_threadgroup = metal.MTLSize.make(16, 16, 1);
+        const grid_size = metal.MTLSize.make(n, m, 1);
+
+        encoder.dispatchThreads(grid_size, threads_per_threadgroup);
+        encoder.endEncoding();
+
+        // Commit and wait
+        command_buffer.commit();
+        command_buffer.waitUntilCompleted();
+
+        // Copy results back (ensure CPU sees updates even on Unified Memory)
+        const result_ptr = buffer_c.contents();
+        if (@as(usize, @intFromPtr(result_ptr)) != @as(usize, @intFromPtr(c.ptr))) {
+            @memcpy(c, std.mem.bytesAsSlice(f32, result_ptr[0..c.len * 4]));
+        } else {
+            // If they are the same pointer, we might still need to invalidate CPU cache on some systems,
+            // but on Apple Silicon Shared memory, waitUntilCompleted should be enough.
+            // We'll do nothing here as @memcpy to self is invalid.
+        }
     }
 
     /// GPU implementation of activation forward using Metal
-    fn metalActivationForwardGPU(act: activation.Activation, input: []f32, output: []f32) !void {
-        // Metal compute shader for activation functions
-        // Would compile and execute MSL kernel like:
-        // kernel void activation_forward(device const float* input,
-        //                                device float* output,
-        //                                uint gid [thread_position_in_grid]) {
-        //     output[gid] = activation(input[gid]);
-        // }
+    fn metalActivationForwardGPU(self: Backend,
+        act: activation.Activation,
+        input: []f32, input_buf: ?*const metal.MTLBuffer,
+        output: []f32, output_buf: ?*const metal.MTLBuffer
+    ) !void {
+        const ctx = self.metal_ctx orelse return error.NotAvailable;
 
-        if (input.len != output.len) return error.ShapeMismatch;
+        // Use provided buffers or create temporary ones
+        var buffer_input: metal.MTLBuffer = undefined;
+        var own_input = false;
+        if (input_buf) |buf| {
+            buffer_input = buf.*;
+        } else {
+            buffer_input = try ctx.device.newBufferWithBytes(std.mem.sliceAsBytes(input), .StorageModeShared);
+            own_input = true;
+        }
+        defer if (own_input) buffer_input.release();
 
-        // CPU fallback
-        for (0..input.len) |i| {
-            output[i] = act.forward(input[i]);
+        var buffer_output: metal.MTLBuffer = undefined;
+        var own_output = false;
+        if (output_buf) |buf| {
+            buffer_output = buf.*;
+        } else {
+            buffer_output = try ctx.device.newBufferWithBytes(std.mem.sliceAsBytes(output), .StorageModeShared);
+            own_output = true;
+        }
+        defer if (own_output) buffer_output.release();
+
+        // Get activation function name based on activation type
+        const pipeline_name = switch (act) {
+            .relu => "relu_forward",
+            .sigmoid => "sigmoid_forward",
+            .tanh => "tanh_forward",
+            .softmax => "softmax_forward",
+            .linear => "linear_forward",
+        };
+
+        const pipeline = ctx.getPipeline(pipeline_name) orelse return error.PipelineNotFound;
+
+        // Create command buffer and encoder
+        var command_buffer = try ctx.command_queue.commandBuffer();
+        defer command_buffer.release();
+
+        var encoder = try command_buffer.computeCommandEncoder();
+        defer encoder.release();
+
+        // Set pipeline and buffers
+        encoder.setComputePipelineState(pipeline);
+        encoder.setBuffer(&buffer_input, 0, 0);
+        encoder.setBuffer(&buffer_output, 0, 1);
+
+        // Special handling for softmax (needs num_classes)
+        if (act == .softmax) {
+            const size: u32 = 1; // For now, activationForward is called per-sample
+            const num_classes = @as(u32, @intCast(input.len));
+            encoder.setBytes(std.mem.asBytes(&size), 2);
+            encoder.setBytes(std.mem.asBytes(&num_classes), 3);
+        } else {
+            // Set array size
+            const size = @as(u32, @intCast(input.len));
+            encoder.setBytes(std.mem.asBytes(&size), 2);
+        }
+
+        // Dispatch threads
+        const threads_per_threadgroup = metal.MTLSize.make(256, 1, 1);
+        const grid_size = if (act == .softmax)
+            metal.MTLSize.make(input.len, 1, 1)
+        else
+            metal.MTLSize.make(input.len, 1, 1);
+
+        encoder.dispatchThreads(grid_size, threads_per_threadgroup);
+        encoder.endEncoding();
+
+        // Commit and wait
+        command_buffer.commit();
+        command_buffer.waitUntilCompleted();
+
+        // Copy results back if pointers differ
+        const result_ptr = buffer_output.contents();
+        if (@as(usize, @intFromPtr(result_ptr)) != @as(usize, @intFromPtr(output.ptr))) {
+            @memcpy(output, std.mem.bytesAsSlice(f32, result_ptr[0..output.len * 4]));
         }
     }
 
     /// GPU implementation of activation backward using Metal
-    fn metalActivationBackwardGPU(act: activation.Activation, input: []const f32, grad_output: []const f32, grad_input: []f32) !void {
-        // Metal compute shader for activation backward
-        // kernel void activation_backward(device const float* input,
-        //                                 device const float* grad_output,
-        //                                 device float* grad_input,
-        //                                 uint gid [thread_position_in_grid]) {
-        //     grad_input[gid] = activation_derivative(input[gid]) * grad_output[gid];
-        // }
+    fn metalActivationBackwardGPU(self: Backend,
+        act: activation.Activation,
+        input: []const f32, input_buf: ?*const metal.MTLBuffer,
+        grad_output: []const f32, grad_output_buf: ?*const metal.MTLBuffer,
+        grad_input: []f32, grad_input_buf: ?*const metal.MTLBuffer
+    ) !void {
+        const ctx = self.metal_ctx orelse return error.NotAvailable;
 
-        if (input.len != grad_output.len or input.len != grad_input.len) {
-            return error.ShapeMismatch;
+        // Use provided buffers or create temporary ones
+        var buffer_input: metal.MTLBuffer = undefined;
+        var own_input = false;
+        if (input_buf) |buf| {
+            buffer_input = buf.*;
+        } else {
+            buffer_input = try ctx.device.newBufferWithBytes(std.mem.sliceAsBytes(input), .StorageModeShared);
+            own_input = true;
+        }
+        defer if (own_input) buffer_input.release();
+
+        var buffer_grad_output: metal.MTLBuffer = undefined;
+        var own_grad_output = false;
+        if (grad_output_buf) |buf| {
+            buffer_grad_output = buf.*;
+        } else {
+            buffer_grad_output = try ctx.device.newBufferWithBytes(std.mem.sliceAsBytes(grad_output), .StorageModeShared);
+            own_grad_output = true;
+        }
+        defer if (own_grad_output) buffer_grad_output.release();
+
+        var buffer_grad_input: metal.MTLBuffer = undefined;
+        var own_grad_input = false;
+        if (grad_input_buf) |buf| {
+            buffer_grad_input = buf.*;
+        } else {
+            buffer_grad_input = try ctx.device.newBufferWithBytes(std.mem.sliceAsBytes(grad_input), .StorageModeShared);
+            own_grad_input = true;
+        }
+        defer if (own_grad_input) buffer_grad_input.release();
+
+        // Get activation function name based on activation type
+        const pipeline_name = switch (act) {
+            .relu => "relu_backward",
+            .sigmoid => "sigmoid_backward",
+            .tanh => "tanh_backward",
+            .softmax => "softmax_backward",
+            .linear => "linear_backward",
+        };
+
+        const pipeline = ctx.getPipeline(pipeline_name) orelse return error.PipelineNotFound;
+
+        // Create command buffer and encoder
+        var command_buffer = try ctx.command_queue.commandBuffer();
+        defer command_buffer.release();
+
+        var encoder = try command_buffer.computeCommandEncoder();
+        defer encoder.release();
+
+        // Set pipeline and buffers
+        encoder.setComputePipelineState(pipeline);
+        encoder.setBuffer(&buffer_input, 0, 0);
+        encoder.setBuffer(&buffer_grad_output, 0, 1);
+        encoder.setBuffer(&buffer_grad_input, 0, 2);
+
+        // Special handling for softmax (needs num_classes)
+        if (act == .softmax) {
+            const size: u32 = 1; // Per-sample
+            const num_classes = @as(u32, @intCast(input.len));
+            encoder.setBytes(std.mem.asBytes(&size), 3);
+            encoder.setBytes(std.mem.asBytes(&num_classes), 4); // num_classes
+        } else {
+            // Set array size
+            const size = @as(u32, @intCast(input.len));
+            encoder.setBytes(std.mem.asBytes(&size), 3);
         }
 
-        // CPU fallback
-        for (0..input.len) |i| {
-            grad_input[i] = act.backward(input[i], grad_output[i]);
+        // Dispatch threads
+        const threads_per_threadgroup = metal.MTLSize.make(256, 1, 1);
+        const grid_size = metal.MTLSize.make(input.len, 1, 1);
+
+        encoder.dispatchThreads(grid_size, threads_per_threadgroup);
+        encoder.endEncoding();
+
+        // Commit and wait
+        command_buffer.commit();
+        command_buffer.waitUntilCompleted();
+
+        // Copy results back if pointers differ
+        const result_ptr = buffer_grad_input.contents();
+        if (@as(usize, @intFromPtr(result_ptr)) != @as(usize, @intFromPtr(grad_input.ptr))) {
+            @memcpy(grad_input, std.mem.bytesAsSlice(f32, result_ptr[0..grad_input.len * 4]));
         }
     }
 
     /// GPU implementation of loss backward using Metal
-    fn metalLossBackwardGPU(loss_fn: loss.Loss, output: []const f32, target: []const f32, grad_output: []f32) !void {
-        // Metal compute shader for loss gradient computation
-        // Would support MSE, CrossEntropy, BinaryCrossEntropy
+    fn metalLossBackwardGPU(self: Backend,
+        loss_fn: loss.Loss,
+        output: []const f32, output_buf: ?*const metal.MTLBuffer,
+        target: []const f32, target_buf: ?*const metal.MTLBuffer,
+        grad_output: []f32, grad_output_buf: ?*const metal.MTLBuffer
+    ) !void {
+        const ctx = self.metal_ctx orelse return error.NotAvailable;
 
-        if (output.len != target.len or output.len != grad_output.len) {
-            return error.ShapeMismatch;
+        // Use provided buffers or create temporary ones
+        var buffer_output: metal.MTLBuffer = undefined;
+        var own_output = false;
+        if (output_buf) |buf| {
+            buffer_output = buf.*;
+        } else {
+            buffer_output = try ctx.device.newBufferWithBytes(std.mem.sliceAsBytes(output), .StorageModeShared);
+            own_output = true;
+        }
+        defer if (own_output) buffer_output.release();
+
+        var buffer_target: metal.MTLBuffer = undefined;
+        var own_target = false;
+        if (target_buf) |buf| {
+            buffer_target = buf.*;
+        } else {
+            buffer_target = try ctx.device.newBufferWithBytes(std.mem.sliceAsBytes(target), .StorageModeShared);
+            own_target = true;
+        }
+        defer if (own_target) buffer_target.release();
+
+        var buffer_grad_output: metal.MTLBuffer = undefined;
+        var own_grad_output = false;
+        if (grad_output_buf) |buf| {
+            buffer_grad_output = buf.*;
+        } else {
+            buffer_grad_output = try ctx.device.newBufferWithBytes(std.mem.sliceAsBytes(grad_output), .StorageModeShared);
+            own_grad_output = true;
+        }
+        defer if (own_grad_output) buffer_grad_output.release();
+
+        // Get loss function name based on loss type
+        const pipeline_name = switch (loss_fn) {
+            .mse => "mse_backward",
+            .cross_entropy => "cross_entropy_backward",
+            .cross_entropy_logits => "cross_entropy_logits_backward",
+            .binary_cross_entropy => "binary_cross_entropy_backward",
+        };
+
+        const pipeline = ctx.getPipeline(pipeline_name) orelse return error.PipelineNotFound;
+
+        // Create command buffer and encoder
+        var command_buffer = try ctx.command_queue.commandBuffer();
+        defer command_buffer.release();
+
+        var encoder = try command_buffer.computeCommandEncoder();
+        defer encoder.release();
+
+        // Set pipeline and buffers
+        encoder.setComputePipelineState(pipeline);
+        encoder.setBuffer(&buffer_output, 0, 0);
+        encoder.setBuffer(&buffer_target, 0, 1);
+        encoder.setBuffer(&buffer_grad_output, 0, 2);
+
+        // Special handling for cross_entropy (needs num_classes)
+        if (loss_fn == .cross_entropy or loss_fn == .cross_entropy_logits) {
+            const num_samples: u32 = 1; // Per-sample
+            const num_classes = @as(u32, @intCast(output.len));
+            encoder.setBytes(std.mem.asBytes(&num_samples), 3);
+            encoder.setBytes(std.mem.asBytes(&num_classes), 4);
+        } else if (loss_fn == .mse or loss_fn == .binary_cross_entropy) {
+            const size = @as(u32, @intCast(output.len));
+            const n = @as(u32, @intCast(output.len)); // Normalization factor
+            encoder.setBytes(std.mem.asBytes(&size), 3);
+            encoder.setBytes(std.mem.asBytes(&n), 4);
         }
 
-        // CPU fallback with correct gradients
-        switch (loss_fn) {
-            .mse => {
-                // MSE gradient: dL/dy = 2(y - t) / n for average loss
-                const scale = 2.0 / @as(f32, @floatFromInt(output.len));
-                for (0..output.len) |i| {
-                    grad_output[i] = scale * (output[i] - target[i]);
-                }
-            },
-            .cross_entropy => {
-                // Cross-entropy gradient: (p - t) for logits
-                for (0..output.len) |i| {
-                    grad_output[i] = output[i] - target[i];
-                }
-            },
-            .cross_entropy_logits => {
-                // Gradient: softmax(logits) - target
-                // Compute softmax first
-                var max_logit: f32 = output[0];
-                for (output[1..]) |o| {
-                    if (o > max_logit) max_logit = o;
-                }
+        // Dispatch threads
+        const threads_per_threadgroup = metal.MTLSize.make(256, 1, 1);
+        const grid_size = metal.MTLSize.make(output.len, 1, 1);
 
-                var sum_exp: f32 = 0;
-                for (output) |o| {
-                    sum_exp += std.math.exp(o - max_logit);
-                }
+        encoder.dispatchThreads(grid_size, threads_per_threadgroup);
+        encoder.endEncoding();
 
-                for (0..output.len) |i| {
-                    const prob = std.math.exp(output[i] - max_logit) / sum_exp;
-                    grad_output[i] = prob - target[i];
-                }
-            },
-            .binary_cross_entropy => {
-                // BCE gradient: (p - t) for sigmoid output
-                for (0..output.len) |i| {
-                    grad_output[i] = output[i] - target[i];
-                }
-            },
+        // Commit and wait
+        command_buffer.commit();
+        command_buffer.waitUntilCompleted();
+
+        // Copy results back if pointers differ
+        const result_ptr = buffer_grad_output.contents();
+        if (@as(usize, @intFromPtr(result_ptr)) != @as(usize, @intFromPtr(grad_output.ptr))) {
+            @memcpy(grad_output, std.mem.bytesAsSlice(f32, result_ptr[0..grad_output.len * 4]));
         }
     }
 
     // ================== Vulkan implementations ==================
     // ( cross-platform GPU )
 
-    fn vulkanMatMulBatch(a: []const f32, b: []const f32, c: []f32, batch_size: usize, n: usize, k: usize) !void {
+    /// Execute matrix multiplication using Vulkan compute shaders
+    fn vulkanMatMulBatch(self: Backend, a: []const f32, b: []const f32, c: []f32, batch_size: usize, n: usize, k: usize) !void {
+        _ = self;
         // Validate inputs
         if (a.len < batch_size * k) return error.BufferTooSmall;
         if (b.len < k * n) return error.BufferTooSmall;
@@ -374,7 +780,8 @@ pub const Backend = union(enum) {
         try vulkan_module.vulkanMatMulBatch(&device, a, b, c, batch_size, n, k);
     }
 
-    fn vulkanMatMul(a: []const f32, b: []const f32, c: []f32, m: usize, n: usize, k: usize) !void {
+    fn vulkanMatMul(self: Backend, a: []const f32, b: []const f32, c: []f32, m: usize, n: usize, k: usize) !void {
+        _ = self;
         // Validate inputs
         if (a.len < m * k) return error.BufferTooSmall;
         if (b.len < k * n) return error.BufferTooSmall;
@@ -399,7 +806,8 @@ pub const Backend = union(enum) {
         try vulkan_module.vulkanMatMul(&device, a, b, c, m, n, k);
     }
 
-    fn vulkanActivationForward(act: activation.Activation, input: []f32, output: []f32) !void {
+    fn vulkanActivationForward(self: Backend, act: activation.Activation, input: []f32, output: []f32) !void {
+        _ = self;
         // For small arrays, CPU is faster
         if (input.len < 256) {
             cpuActivationForward(act, input, output);
@@ -419,7 +827,8 @@ pub const Backend = union(enum) {
         try vulkan_module.vulkanActivationForward(&device, act, input, output);
     }
 
-    fn vulkanActivationBackward(act: activation.Activation, input: []const f32, grad_output: []const f32, grad_input: []f32) !void {
+    fn vulkanActivationBackward(self: Backend, act: activation.Activation, input: []const f32, grad_output: []const f32, grad_input: []f32) !void {
+        _ = self;
         if (input.len < 256) {
             cpuActivationBackward(act, input, grad_output, grad_input);
             return;
@@ -440,7 +849,8 @@ pub const Backend = union(enum) {
         try vulkan_module.vulkanActivationBackward(&device, act, input, grad_output, grad_input);
     }
 
-    fn vulkanLossBackward(loss_fn: loss.Loss, output: []const f32, target: []const f32, grad_output: []f32) !void {
+    fn vulkanLossBackward(self: Backend, loss_fn: loss.Loss, output: []const f32, target: []const f32, grad_output: []f32) !void {
+        _ = self;
         if (output.len < 256) {
             cpuLossBackward(loss_fn, output, target, grad_output);
             return;
@@ -505,6 +915,20 @@ pub const Backend = union(enum) {
                     }
                     c[i * n + j] = sum;
                 }
+            }
+        }
+    }
+
+    fn cpuMatMulTransposeB(a: []const f32, b: []const f32, c: []f32, m: usize, n: usize, k: usize) void {
+        // C = A * B^T where A is m×k, B is n×k, C is m×n
+        @memset(c, 0);
+        for (0..m) |i| {
+            for (0..n) |j| {
+                var sum: f32 = 0.0;
+                for (0..k) |p| {
+                    sum += a[i * k + p] * b[j * k + p];
+                }
+                c[i * n + j] = sum;
             }
         }
     }
@@ -616,11 +1040,12 @@ pub const Backend = union(enum) {
     }
 
     fn cpuLossBackward(loss_fn: loss.Loss, output: []const f32, target: []const f32, grad_output: []f32) void {
+        const n = @as(f32, @floatFromInt(output.len));
         switch (loss_fn) {
             .mse => {
-                // MSE gradient: dL/dy = 2(y - t)
+                // MSE gradient: dL/dy = 2(y - t) / n
                 for (0..output.len) |i| {
-                    grad_output[i] = 2 * (output[i] - target[i]);
+                    grad_output[i] = 2 * (output[i] - target[i]) / n;
                 }
             },
             .cross_entropy => {
@@ -650,11 +1075,11 @@ pub const Backend = union(enum) {
                 }
             },
             .binary_cross_entropy => {
-                // BCE gradient with sigmoid: (p - t)
+                // BCE gradient with sigmoid: (p - t) / n
                 // The gradient simplifies to prediction - target
                 // This is the correct form when output is passed through sigmoid
                 for (0..output.len) |i| {
-                    grad_output[i] = output[i] - target[i];
+                    grad_output[i] = (output[i] - target[i]) / n;
                 }
             },
         }
@@ -662,9 +1087,8 @@ pub const Backend = union(enum) {
 };
 
 test "backend default detection" {
-    const backend = Backend.default();
-    // Should return either gpu or cpu, not error
-    _ = backend;
+    var backend = try Backend.init(std.testing.allocator);
+    defer backend.deinit();
 }
 
 test "backend matmul cpu fallback" {
@@ -689,7 +1113,8 @@ test "backend matmul cpu fallback" {
         v.* = @as(f32, @floatFromInt((i + 1) % 10)) / 10.0;
     }
 
-    const backend = Backend{ .cpu = {} };
+    var backend = Backend{ .type = .cpu, .metal_ctx = null };
+    defer backend.deinit();
     try backend.matMul(a, b, c, m, n, k);
 
     // Verify result - C[0,0] = sum of a[0,:] * b[:,0]
@@ -704,7 +1129,8 @@ test "backend matmul cpu fallback" {
 }
 
 test "backend activation forward" {
-    const backend = Backend{ .cpu = {} };
+    var backend = Backend{ .type = .cpu, .metal_ctx = null };
+    defer backend.deinit();
     const act = activation.Activation{ .relu = {} };
 
     const allocator = std.testing.allocator;
@@ -729,7 +1155,8 @@ test "backend activation forward" {
 }
 
 test "backend activation backward" {
-    const backend = Backend{ .cpu = {} };
+    var backend = Backend{ .type = .cpu, .metal_ctx = null };
+    defer backend.deinit();
     const act = activation.Activation{ .sigmoid = {} };
 
     const allocator = std.testing.allocator;
@@ -757,7 +1184,8 @@ test "backend activation backward" {
 }
 
 test "backend loss backward mse" {
-    const backend = Backend{ .cpu = {} };
+    var backend = Backend{ .type = .cpu, .metal_ctx = null };
+    defer backend.deinit();
     const loss_fn = loss.Loss{ .mse = {} };
 
     const allocator = std.testing.allocator;

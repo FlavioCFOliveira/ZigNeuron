@@ -5,9 +5,10 @@ pub fn main() !void {
     const allocator = std.heap.page_allocator;
 
     // Get default backend (GPU if available, CPU fallback)
-    const backend = zn.backend.Backend.default();
+    var backend = try zn.backend.Backend.init(allocator);
+    errdefer backend.deinit();
     std.debug.print("Using backend: ", .{});
-    switch (backend) {
+    switch (backend.type) {
         .gpu => |gpu| switch (gpu) {
             .metal => std.debug.print("Metal (Apple Silicon GPU)\n", .{}),
             .vulkan => std.debug.print("Vulkan (Cross-platform GPU)\n", .{}),
@@ -31,11 +32,11 @@ pub fn main() !void {
     const network = try zn.network.Network.init(allocator, backend);
     defer network.deinit();
 
-    _ = try network.addDense(2, 3, .relu);
+    _ = try network.addDense(2, 3, .tanh);
     _ = try network.addDense(3, 1, .sigmoid);
 
-    const epochs: usize = 1000;
-    const learning_rate: f32 = 0.1;
+    const epochs: usize = 5000;
+    const learning_rate: f32 = 0.5;
     const loss_fn = zn.loss.Loss{ .mse = {} };
 
     // Train and print loss each epoch

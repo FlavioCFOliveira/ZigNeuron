@@ -54,11 +54,11 @@ These files document actual test results, including timestamps, environment info
 
 | Component | Status | Notes |
 |-----------|--------|-------|
-| Dense Layer | Done | Forward pass implemented |
-| Activations | Done | ReLU, Sigmoid, Tanh with derivatives |
-| Loss Functions | Partial | MSE only |
-| Backpropagation | Done | Training works with MSE loss |
-| GPU Backend | Stub | Metal/Vulkan stubs ready |
+| Dense Layer | Done | Forward and backward pass implemented |
+| Activations | Done | ReLU, Sigmoid, Tanh with correct derivatives |
+| Loss Functions | Partial | MSE only, correct gradients |
+| Backpropagation | Done | Training works on CPU and Metal |
+| GPU Backend | Done | Metal implemented and synchronized |
 | Vulkan Support | TODO | Needs implementation |
 | Optimizers | TODO | SGD, Adam, RMSprop needed |
 | Unit Tests | TODO | Test coverage needed |
@@ -119,6 +119,40 @@ The library interface must be as simple as possible for human usage:
 - **Avoid unnecessary abstraction** - Don't create abstractions that don't provide value
 
 When adding new features, ask: "Does this make the library easier to use?"
+
+## Multi-Agent Specialist Consensus
+
+All interaction processes—including analysis, development, testing, documentation, and research—must integrate the perspectives of all available specialized agents. No task or development phase is considered complete until consensus is reached among all involved specialists (agents).
+
+### Status Reporting and Specialist Perspectives
+
+Whenever a Status Report (PDS - Ponto de Situação) is requested, specialized agents must be consulted to assess the project state from their respective domains. The resulting output should be a highly professional technical report that clearly outlines each agent's perspective on the current progress, challenges, and next steps.
+
+### Specialized Agent Registry
+
+To ensure high-quality implementations and architectural integrity, the following specialized agents must be involved in their respective domains:
+
+| Agent | Responsibility | Key Interactions |
+|-------|----------------|------------------|
+| **Neural Net Architect** | Design and implementation of core neural network components (layers, activations, backprop). | Consults *Technical Researcher* for formulas; *Zig Performance Architect* for implementation. |
+| **Zig Performance Architect** | Optimization for speed and resource efficiency. Ensures zero-allocation patterns and SIMD usage. | Validates *Neural Net Architect* designs; optimize *Security Architect* audited code. |
+| **Metal Performance Expert** | High-performance GPU acceleration for Apple Silicon. MSL kernels, pipelines, and M-series memory optimization. | Optimizes *Backend* for macOS; collaborates with *Zig Performance Architect* for unified memory. |
+| **CUDA Performance Optimizer** | High-performance GPU acceleration for NVIDIA. CUDA kernels, shared memory, and Tensor Core utilization. | Optimizes *Backend* for Linux/Windows; consults *Security Architect* for kernel safety. |
+| **Security Architect** | Rigorous audit of low-level code: memory management, GPU kernels, and concurrency. | Reviews all *Zig Performance Architect* optimizations and *Backend* changes. |
+| **Technical Researcher** | Mathematical derivations, GPU API documentation (Metal/Vulkan), and state-of-the-art research. | Provides foundations for *Neural Net Architect* and *ML Architecture Expert*. |
+| **ML Architecture Expert** | Designing reference examples, benchmarking scenarios, and validating library usability. | Uses *ML Dataset Fetcher* for data; validates *Neural Net Architect* outputs. |
+| **ML Dataset Fetcher** | Identifying, sourcing, and organizing datasets for training and validation examples. | Supports *ML Architecture Expert* with data pipelines. |
+
+### Interaction Workflow
+
+1.  **Requirement/Research**: *Technical Researcher* provides the theoretical basis.
+2.  **Architecture**: *Neural Net Architect* designs the component logic.
+3.  **GPU Optimization**: *Metal Performance Expert* (Apple) or *CUDA Performance Optimizer* (NVIDIA) implements and optimizes kernels.
+4.  **CPU Optimization**: *Zig Performance Architect* refines the fallback implementation and CPU-GPU data orchestration.
+5.  **Security/Audit**: *Security Architect* performs a final review of low-level and memory-sensitive code.
+6.  **Validation**: *ML Architecture Expert* implements an example to verify end-to-end functionality.
+
+No significant change to core logic or backend should be merged without the explicit consensus of the *Neural Net Architect*, *Zig Performance Architect*, and relevant *GPU Expert*.
 
 ## Performance Requirements
 

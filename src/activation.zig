@@ -18,11 +18,11 @@ pub const Activation = union(enum) {
         };
     }
 
-    pub fn backward(self: Activation, x: f32, grad: f32) f32 {
+    pub fn backward(self: Activation, y: f32, grad: f32) f32 {
         return switch (self) {
-            .relu => reluBackward(x) * grad,
-            .sigmoid => sigmoidBackward(x) * grad,
-            .tanh => tanhBackward(x) * grad,
+            .relu => reluBackward(y) * grad,
+            .sigmoid => sigmoidBackward(y) * grad,
+            .tanh => tanhBackward(y) * grad,
             .softmax => @panic("softmax backward not implemented for single value"),
             .linear => grad, // Derivative of identity is 1
         };
@@ -81,8 +81,8 @@ pub const Activation = union(enum) {
         return if (x > 0) x else 0;
     }
 
-    fn reluBackward(x: f32) f32 {
-        return if (x > 0) 1 else 0;
+    fn reluBackward(y: f32) f32 {
+        return if (y > 0) 1 else 0;
     }
 
     fn sigmoidForward(x: f32) f32 {
@@ -94,17 +94,15 @@ pub const Activation = union(enum) {
         }
     }
 
-    fn sigmoidBackward(x: f32) f32 {
-        const s = sigmoidForward(x);
-        return s * (1 - s);
+    fn sigmoidBackward(y: f32) f32 {
+        return y * (1 - y);
     }
 
     fn tanhForward(x: f32) f32 {
         return std.math.tanh(x);
     }
 
-    fn tanhBackward(x: f32) f32 {
-        const t = tanhForward(x);
-        return 1 - t * t;
+    fn tanhBackward(y: f32) f32 {
+        return 1 - y * y;
     }
 };
