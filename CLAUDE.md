@@ -6,7 +6,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - **Build the library**: `zig build`
 - **Run tests**: `zig build test`
-- **Run examples**: `zig build -Dexamples=true run-examples`
 - **Install to prefix**: `zig build -p <path>`
 
 ## Architecture
@@ -35,7 +34,6 @@ The library is organized into logical components:
   - `loss.zig` - Loss functions (MSE implemented, cross-entropy planned)
   - `network.zig` - Network composition with backpropagation training
 - `build.zig` - Build definition
-- `examples/xor.zig` - XOR neural network example demonstrating training
 - `zig-out/` - Build output directory (created on build)
 
 ## Test Evidence Files
