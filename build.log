@@ -1,0 +1,96 @@
+install
++- install fnn_comprehensive
+   +- compile exe fnn_comprehensive Debug native 1 errors
+src/backend.zig:79:19: error: expected type '*metal.MTLCommandBuffer', found '*const metal.MTLCommandBuffer'
+                cb.commit();
+                ~~^~~~~~~
+src/backend.zig:79:19: note: cast discards const qualifier
+src/metal.zig:249:25: note: parameter type declared here
+    pub fn commit(self: *MTLCommandBuffer) void {
+                        ^~~~~~~~~~~~~~~~~
+referenced by:
+    trainStep: src/network.zig:299:43
+    train: src/network.zig:368:55
+    6 reference(s) hidden; use '-freference-trace=8' to see all references
+error: the following command failed with 1 compilation errors:
+/opt/homebrew/Cellar/zig/0.15.2/bin/zig build-exe -lobjc -ODebug --dep ZigNeuron -Mroot=/Users/flaviocfo/dev/github.com/FlavioCFOliveira/ZigNeuron/examples/fnn_comprehensive.zig -ODebug -MZigNeuron=/Users/flaviocfo/dev/github.com/FlavioCFOliveira/ZigNeuron/src/main.zig -framework Metal -framework Foundation -framework QuartzCore -lc --cache-dir .zig-cache --global-cache-dir /Users/flaviocfo/.cache/zig --name fnn_comprehensive --zig-lib-dir /opt/homebrew/Cellar/zig/0.15.2/lib/zig/ --listen=-
+install
++- install test_all_backends
+   +- compile exe test_all_backends Debug native 1 errors
+src/backend.zig:79:19: error: expected type '*metal.MTLCommandBuffer', found '*const metal.MTLCommandBuffer'
+                cb.commit();
+                ~~^~~~~~~
+src/backend.zig:79:19: note: cast discards const qualifier
+src/metal.zig:249:25: note: parameter type declared here
+    pub fn commit(self: *MTLCommandBuffer) void {
+                        ^~~~~~~~~~~~~~~~~
+referenced by:
+    trainStep: src/network.zig:299:43
+    train: src/network.zig:368:55
+    6 reference(s) hidden; use '-freference-trace=8' to see all references
+error: the following command failed with 1 compilation errors:
+/opt/homebrew/Cellar/zig/0.15.2/bin/zig build-exe -lobjc -ODebug --dep ZigNeuron -Mroot=/Users/flaviocfo/dev/github.com/FlavioCFOliveira/ZigNeuron/src/test_all_backends.zig -ODebug -MZigNeuron=/Users/flaviocfo/dev/github.com/FlavioCFOliveira/ZigNeuron/src/main.zig -framework Metal -framework Foundation -framework QuartzCore -lc --cache-dir .zig-cache --global-cache-dir /Users/flaviocfo/.cache/zig --name test_all_backends --zig-lib-dir /opt/homebrew/Cellar/zig/0.15.2/lib/zig/ --listen=-
+install
++- install test_performance
+   +- compile exe test_performance Debug native 1 errors
+src/backend.zig:79:19: error: expected type '*metal.MTLCommandBuffer', found '*const metal.MTLCommandBuffer'
+                cb.commit();
+                ~~^~~~~~~
+src/backend.zig:79:19: note: cast discards const qualifier
+src/metal.zig:249:25: note: parameter type declared here
+    pub fn commit(self: *MTLCommandBuffer) void {
+                        ^~~~~~~~~~~~~~~~~
+referenced by:
+    trainStep: src/network.zig:299:43
+    train: src/network.zig:368:55
+    6 reference(s) hidden; use '-freference-trace=8' to see all references
+error: the following command failed with 1 compilation errors:
+/opt/homebrew/Cellar/zig/0.15.2/bin/zig build-exe -lobjc -ODebug --dep ZigNeuron -Mroot=/Users/flaviocfo/dev/github.com/FlavioCFOliveira/ZigNeuron/src/test_performance.zig -ODebug -MZigNeuron=/Users/flaviocfo/dev/github.com/FlavioCFOliveira/ZigNeuron/src/main.zig -framework Metal -framework Foundation -framework QuartzCore -lc --cache-dir .zig-cache --global-cache-dir /Users/flaviocfo/.cache/zig --name test_performance --zig-lib-dir /opt/homebrew/Cellar/zig/0.15.2/lib/zig/ --listen=-
+install
++- install xor
+   +- compile exe xor Debug native 1 errors
+src/backend.zig:79:19: error: expected type '*metal.MTLCommandBuffer', found '*const metal.MTLCommandBuffer'
+                cb.commit();
+                ~~^~~~~~~
+src/backend.zig:79:19: note: cast discards const qualifier
+src/metal.zig:249:25: note: parameter type declared here
+    pub fn commit(self: *MTLCommandBuffer) void {
+                        ^~~~~~~~~~~~~~~~~
+referenced by:
+    trainStep: src/network.zig:299:43
+    train: src/network.zig:368:55
+    5 reference(s) hidden; use '-freference-trace=7' to see all references
+error: the following command failed with 1 compilation errors:
+/opt/homebrew/Cellar/zig/0.15.2/bin/zig build-exe -lobjc -ODebug --dep ZigNeuron -Mroot=/Users/flaviocfo/dev/github.com/FlavioCFOliveira/ZigNeuron/examples/xor.zig -ODebug -MZigNeuron=/Users/flaviocfo/dev/github.com/FlavioCFOliveira/ZigNeuron/src/main.zig -framework Metal -framework Foundation -framework QuartzCore -lc --cache-dir .zig-cache --global-cache-dir /Users/flaviocfo/.cache/zig --name xor --zig-lib-dir /opt/homebrew/Cellar/zig/0.15.2/lib/zig/ --listen=-
+install
++- install xor_test
+   +- compile exe xor_test Debug native 1 errors
+src/backend.zig:79:19: error: expected type '*metal.MTLCommandBuffer', found '*const metal.MTLCommandBuffer'
+                cb.commit();
+                ~~^~~~~~~
+src/backend.zig:79:19: note: cast discards const qualifier
+src/metal.zig:249:25: note: parameter type declared here
+    pub fn commit(self: *MTLCommandBuffer) void {
+                        ^~~~~~~~~~~~~~~~~
+referenced by:
+    trainStep: src/network.zig:299:43
+    main: examples/xor_test.zig:46:54
+    4 reference(s) hidden; use '-freference-trace=6' to see all references
+error: the following command failed with 1 compilation errors:
+/opt/homebrew/Cellar/zig/0.15.2/bin/zig build-exe -lobjc -ODebug --dep ZigNeuron -Mroot=/Users/flaviocfo/dev/github.com/FlavioCFOliveira/ZigNeuron/examples/xor_test.zig -ODebug -MZigNeuron=/Users/flaviocfo/dev/github.com/FlavioCFOliveira/ZigNeuron/src/main.zig -framework Metal -framework Foundation -framework QuartzCore -lc --cache-dir .zig-cache --global-cache-dir /Users/flaviocfo/.cache/zig --name xor_test --zig-lib-dir /opt/homebrew/Cellar/zig/0.15.2/lib/zig/ --listen=-
+
+Build Summary: 2/13 steps succeeded; 5 failed
+install transitive failure
++- install xor transitive failure
+|  +- compile exe xor Debug native 1 errors
++- install xor_test transitive failure
+|  +- compile exe xor_test Debug native 1 errors
++- install fnn_comprehensive transitive failure
+|  +- compile exe fnn_comprehensive Debug native 1 errors
++- install test_performance transitive failure
+|  +- compile exe test_performance Debug native 1 errors
++- install test_all_backends transitive failure
+   +- compile exe test_all_backends Debug native 1 errors
+
+error: the following build command failed with exit code 1:
+.zig-cache/o/b9c938e1ebbbfd18d3eb0521661e7878/build /opt/homebrew/Cellar/zig/0.15.2/bin/zig /opt/homebrew/Cellar/zig/0.15.2/lib/zig /Users/flaviocfo/dev/github.com/FlavioCFOliveira/ZigNeuron .zig-cache /Users/flaviocfo/.cache/zig --seed 0x4e408752 -Zbd1b3b2cd21a1d0e -Dexamples=true
