@@ -83,9 +83,7 @@ pub const Dense = struct {
         );
 
         // Add bias
-        for (0..self.output_size) |i| {
-            output[i] += self.bias.slice[i];
-        }
+        try self.backend.addBias(output, output_buf, self.bias.slice, self.bias.getMtlBuffer());
     }
 
     pub fn forward(self: *Dense, input: []const f32, input_buf: ?*const metal.MTLBuffer, output: []f32, output_buf: ?*const metal.MTLBuffer) !void {
@@ -103,9 +101,7 @@ pub const Dense = struct {
         );
 
         // Add bias
-        for (0..self.output_size) |i| {
-            output[i] += self.bias.slice[i];
-        }
+        try self.backend.addBias(output, output_buf, self.bias.slice, self.bias.getMtlBuffer());
 
         // Apply activation
         try self.backend.activationForward(self.act, output, output_buf, output, output_buf);
@@ -148,21 +144,30 @@ pub const Dense = struct {
 
     /// Accumulate gradients for weights and bias from a sample
     /// This is a helper function for backpropagation in networks
-    pub fn accumulateGradients(self: *Dense, input: []const f32, grad_after_act: []const f32) void {
+    pub fn accumulateGradients(self: *Dense,
+        input: []const f32, input_buf: ?*const metal.MTLBuffer,
+        grad_after_act: []const f32, grad_after_act_buf: ?*const metal.MTLBuffer
+    ) !void {
         // Accumulate bias gradient
-        for (0..self.output_size) |i| {
-            self.grad_bias.slice[i] += grad_after_act[i];
-        }
+        try self.backend.accumulateBias(
+            self.grad_bias.slice, self.grad_bias.getMtlBuffer(),
+            grad_after_act, grad_after_act_buf
+        );
 
         // Accumulate weight gradients
-        // Weights are stored as [input_size, output_size] row-major
-        // grad_weights[in_idx, out_idx] += input[in_idx] * grad_after_act[out_idx]
-        for (0..self.input_size) |in_idx| {
-            for (0..self.output_size) |out_idx| {
-                const weight_idx = in_idx * self.output_size + out_idx;
-                self.grad_weights.slice[weight_idx] += input[in_idx] * grad_after_act[out_idx];
-            }
-        }
+        // dW = input^T * grad_after_act
+        // input: [1 x input_size]
+        // grad_after_act: [1 x output_size]
+        // input^T: [input_size x 1]
+        // dW: [input_size x output_size]
+        try self.backend.matMulTransposeA(
+            input, input_buf,
+            grad_after_act, grad_after_act_buf,
+            self.grad_weights.slice, self.grad_weights.getMtlBuffer(),
+            self.input_size,
+            self.output_size,
+            1 // k = 1 for single sample
+        );
     }
 };
 

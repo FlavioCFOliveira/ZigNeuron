@@ -9,6 +9,8 @@ pub const MetalContext = struct {
     command_queue: metal.MTLCommandQueue,
     pipelines: std.StringHashMap(metal.MTLComputePipelineState),
     library: *anyopaque,
+    active_command_buffer: ?metal.MTLCommandBuffer = null,
+    temp_resources: std.ArrayListUnmanaged(metal.MTLBuffer),
 
     pub fn init(allocator: std.mem.Allocator) !*MetalContext {
         const self = try allocator.create(MetalContext);
@@ -21,16 +23,22 @@ pub const MetalContext = struct {
         self.command_queue = try self.device.newCommandQueue();
         errdefer self.command_queue.release();
 
+        self.temp_resources = .{};
+        errdefer self.temp_resources.deinit(self.allocator);
+
         // Load Metal shaders from source (runtime compilation)
         const shader_paths = [_][]const u8{
             "shaders/metal/matmul.metal",
             "shaders/metal/activation.metal",
             "shaders/metal/loss.metal",
+            "shaders/metal/optimizer.metal",
         };
 
-        var sources: [shader_paths.len][]const u8 = undefined;
+        var sources = [_][]const u8{""} ** shader_paths.len;
         defer {
-            for (sources) |s| allocator.free(s);
+            for (sources) |s| {
+                if (s.len > 0) allocator.free(s);
+            }
         }
 
         for (shader_paths, 0..) |path, i| {
@@ -41,6 +49,7 @@ pub const MetalContext = struct {
         defer allocator.free(shader_source);
 
         self.library = try self.device.newLibraryWithSource(shader_source);
+        self.active_command_buffer = null;
 
         self.pipelines = std.StringHashMap(metal.MTLComputePipelineState).init(allocator);
         errdefer {
@@ -51,11 +60,13 @@ pub const MetalContext = struct {
 
         // Pre-compile core kernels
         try self.registerPipeline("matmul");
+        try self.registerPipeline("test_write");
         try self.registerPipeline("matmul_batch");
         try self.registerPipeline("matmul_tiled");
         try self.registerPipeline("matmul_transpose_a");
         try self.registerPipeline("matmul_transpose_b");
         try self.registerPipeline("matmul_batch_transpose_b");
+        try self.registerPipeline("add_bias");
 
         // Activation kernels
         try self.registerPipeline("relu_forward");
@@ -74,10 +85,18 @@ pub const MetalContext = struct {
         try self.registerPipeline("cross_entropy_backward");
         try self.registerPipeline("binary_cross_entropy_backward");
 
+        // Optimizer kernels
+        try self.registerPipeline("sgd_update");
+        try self.registerPipeline("sgd_update_bias");
+        try self.registerPipeline("accumulate_bias");
+
         return self;
     }
 
     pub fn deinit(self: *MetalContext) void {
+        for (self.temp_resources.items) |res| res.release();
+        self.temp_resources.deinit(self.allocator);
+
         var it = self.pipelines.valueIterator();
         while (it.next()) |p| p.release();
         self.pipelines.deinit();
@@ -99,5 +118,16 @@ pub const MetalContext = struct {
 
     pub fn getPipeline(self: *const MetalContext, name: []const u8) ?*const metal.MTLComputePipelineState {
         return self.pipelines.getPtr(name);
+    }
+
+    pub fn registerTempResource(self: *MetalContext, resource: metal.MTLBuffer) !void {
+        try self.temp_resources.append(self.allocator, resource);
+    }
+
+    pub fn clearTempResources(self: *MetalContext) void {
+        for (self.temp_resources.items) |res| {
+            res.release();
+        }
+        self.temp_resources.clearRetainingCapacity();
     }
 };
