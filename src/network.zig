@@ -27,6 +27,7 @@ const optimizer = @import("optimizer.zig");
 const backend_module = @import("backend.zig");
 const tensor = @import("tensor.zig");
 const metal = @import("metal.zig");
+const recurrent = @import("recurrent.zig");
 
 /// Cached values needed for backpropagation
 const LayerCache = struct {
@@ -35,7 +36,7 @@ const LayerCache = struct {
 };
 
 pub const Network = struct {
-    layers: std.array_list.Managed(*layer.Dense),
+    layers: std.array_list.Managed(layer.Layer),
     allocator: std.mem.Allocator,
     caches: std.array_list.Managed(?LayerCache), // Cache for each layer's backprop values
     backend: backend_module.Backend,
@@ -54,7 +55,7 @@ pub const Network = struct {
         const self = try allocator.create(Network);
         errdefer allocator.destroy(self);
 
-        self.layers = std.array_list.Managed(*layer.Dense).init(allocator);
+        self.layers = std.array_list.Managed(layer.Layer).init(allocator);
         self.allocator = allocator;
         self.caches = std.array_list.Managed(?LayerCache).init(allocator);
         self.backend = backend;
@@ -101,73 +102,238 @@ pub const Network = struct {
 
     pub fn addDense(self: *Network, input_size: usize, output_size: usize, act: activation.Activation) !*layer.Dense {
         const l = try layer.Dense.init(self.allocator, input_size, output_size, act, self.backend);
-        try self.layers.append(l);
-        try self.caches.append(null); // No cache initially
+        try self.layers.append(.{ .dense = l });
+        try self.caches.append(null);
 
         // Update max layer size for buffer pre-allocation
         const layer_max = @max(input_size, output_size);
         if (layer_max > self.max_layer_size) {
             self.max_layer_size = layer_max;
-
-            // Re-allocate work buffers if needed
-            if (self.backend.type == .gpu) {
-                if (self.work_buffer) |buf| self.allocator.free(buf);
-                self.work_buffer = try self.allocator.alloc(f32, layer_max);
-
-                if (self.grad_work_1) |*t| t.deinit();
-                if (self.grad_work_2) |*t| t.deinit();
-                if (self.grad_after_act_work) |*t| t.deinit();
-
-                self.grad_work_1 = try tensor.Tensor.init(self.allocator, layer_max, self.backend);
-                self.grad_work_2 = try tensor.Tensor.init(self.allocator, layer_max, self.backend);
-                self.grad_after_act_work = try tensor.Tensor.init(self.allocator, layer_max, self.backend);
-            }
+            try self.reallocateWorkBuffers(layer_max);
         }
 
-        // Initialize optimizer state for this layer (default SGD)
         try self.optimizers.append(null);
-
         return l;
     }
 
+    pub fn addSampling(self: *Network, input_size: usize) !*layer.SamplingLayer {
+        const l = try layer.SamplingLayer.init(self.allocator, input_size, self.backend);
+        try self.layers.append(.{ .sampling = l });
+        try self.caches.append(null);
+        try self.optimizers.append(null);
+        return l;
+    }
+
+    pub fn addConv1D(self: *Network, in_channels: usize, out_channels: usize, kernel_size: usize, input_len: usize, act: activation.Activation) !*layer.Conv1D {
+        const l = try layer.Conv1D.init(self.allocator, in_channels, out_channels, kernel_size, input_len, act, self.backend);
+        try self.layers.append(.{ .conv1d = l });
+        try self.caches.append(null);
+        const layer_max = @max(in_channels * input_len, out_channels * ((input_len - kernel_size) + 1));
+        if (layer_max > self.max_layer_size) {
+            self.max_layer_size = layer_max;
+            try self.reallocateWorkBuffers(layer_max);
+        }
+        try self.optimizers.append(null);
+        return l;
+    }
+
+    pub fn addLayerNorm(self: *Network, size: usize) !*layer.LayerNorm {
+        const l = try layer.LayerNorm.init(self.allocator, size, self.backend);
+        try self.layers.append(.{ .layer_norm = l });
+        try self.caches.append(null);
+        if (size > self.max_layer_size) {
+            self.max_layer_size = size;
+            try self.reallocateWorkBuffers(size);
+        }
+        try self.optimizers.append(null);
+        return l;
+    }
+
+    pub fn addDropout(self: *Network, size: usize, rate: f32) !*layer.Dropout {
+        const l = try layer.Dropout.init(self.allocator, size, rate, self.backend);
+        try self.layers.append(.{ .dropout = l });
+        try self.caches.append(null);
+        if (size > self.max_layer_size) {
+            self.max_layer_size = size;
+            try self.reallocateWorkBuffers(size);
+        }
+        try self.optimizers.append(null);
+        return l;
+    }
+
+    pub fn addRNN(self: *Network, input_size: usize, hidden_size: usize, act: activation.Activation) !*recurrent.VanillaRNN {
+        const l = try recurrent.VanillaRNN.init(self.allocator, input_size, hidden_size, act, self.backend);
+        try self.layers.append(.{ .rnn = l });
+        try self.caches.append(null);
+
+        // Update max layer size for buffer pre-allocation
+        const layer_max = @max(input_size, hidden_size);
+        if (layer_max > self.max_layer_size) {
+            self.max_layer_size = layer_max;
+            try self.reallocateWorkBuffers(layer_max);
+        }
+
+        try self.optimizers.append(null);
+        return l;
+    }
+
+    pub fn addLSTM(self: *Network, input_size: usize, hidden_size: usize, max_seq_len: usize) !*recurrent.LSTM {
+        const l = try recurrent.LSTM.init(self.allocator, input_size, hidden_size, max_seq_len, self.backend);
+        try self.layers.append(.{ .lstm = l });
+        try self.caches.append(null);
+
+        // Update max layer size for buffer pre-allocation
+        // LSTM has internal gate activations of 4 * hidden_size
+        const layer_max = @max(input_size, 4 * hidden_size);
+        if (layer_max > self.max_layer_size) {
+            self.max_layer_size = layer_max;
+            try self.reallocateWorkBuffers(layer_max);
+        }
+
+        try self.optimizers.append(null);
+        return l;
+    }
+
+    pub fn addGRU(self: *Network, input_size: usize, hidden_size: usize, max_seq_len: usize) !*recurrent.GRU {
+        const l = try recurrent.GRU.init(self.allocator, input_size, hidden_size, max_seq_len, self.backend);
+        try self.layers.append(.{ .gru = l });
+        try self.caches.append(null);
+
+        // Update max layer size for buffer pre-allocation
+        // GRU has internal gate activations of 3 * hidden_size
+        const layer_max = @max(input_size, 3 * hidden_size);
+        if (layer_max > self.max_layer_size) {
+            self.max_layer_size = layer_max;
+            try self.reallocateWorkBuffers(layer_max);
+        }
+
+        try self.optimizers.append(null);
+        return l;
+    }
+
+    pub fn addBidirectional(self: *Network, layer_type: recurrent.RecurrentLayerType, input_size: usize, hidden_size: usize, max_seq_len: usize, act: activation.Activation) !*recurrent.Bidirectional {
+        const l = try recurrent.Bidirectional.init(self.allocator, layer_type, input_size, hidden_size, max_seq_len, act, self.backend);
+        try self.layers.append(.{ .bidirectional = l });
+        try self.caches.append(null);
+
+        // Update max layer size for buffer pre-allocation
+        // Bidirectional output is 2 * hidden_size. Internal layers might have larger gate activations.
+        var layer_max = @max(input_size, 2 * hidden_size);
+        switch (layer_type) {
+            .rnn => layer_max = @max(layer_max, hidden_size),
+            .lstm => layer_max = @max(layer_max, 4 * hidden_size),
+            .gru => layer_max = @max(layer_max, 3 * hidden_size),
+        }
+
+        if (layer_max > self.max_layer_size) {
+            self.max_layer_size = layer_max;
+            try self.reallocateWorkBuffers(layer_max);
+        }
+
+        try self.optimizers.append(null);
+        return l;
+    }
+
+    pub fn addTwoPath(self: *Network, layer_type1: recurrent.RecurrentLayerType, hidden_size1: usize, layer_type2: recurrent.RecurrentLayerType, hidden_size2: usize, input_size: usize, max_seq_len: usize, act: activation.Activation) !*recurrent.TwoPath {
+        const l = try recurrent.TwoPath.init(self.allocator, layer_type1, hidden_size1, layer_type2, hidden_size2, input_size, max_seq_len, act, self.backend);
+        try self.layers.append(.{ .twopath = l });
+        try self.caches.append(null);
+
+        // Update max layer size
+        var layer_max = @max(input_size, hidden_size1 + hidden_size2);
+        // Check internal gate sizes for path1
+        switch (layer_type1) {
+            .rnn => layer_max = @max(layer_max, hidden_size1),
+            .lstm => layer_max = @max(layer_max, 4 * hidden_size1),
+            .gru => layer_max = @max(layer_max, 3 * hidden_size1),
+        }
+        // Check internal gate sizes for path2
+        switch (layer_type2) {
+            .rnn => layer_max = @max(layer_max, hidden_size2),
+            .lstm => layer_max = @max(layer_max, 4 * hidden_size2),
+            .gru => layer_max = @max(layer_max, 3 * hidden_size2),
+        }
+
+        if (layer_max > self.max_layer_size) {
+            self.max_layer_size = layer_max;
+            try self.reallocateWorkBuffers(layer_max);
+        }
+
+        try self.optimizers.append(null);
+        return l;
+    }
+
+    pub fn addAttention(self: *Network, size: usize) !layer.Layer {
+        const l = try layer.Attention.init(self.allocator, size, self.backend);
+        const layer_obj = layer.Layer{ .attention = l };
+        try self.layers.append(layer_obj);
+        try self.caches.append(null);
+
+        if (size > self.max_layer_size) {
+            self.max_layer_size = size;
+            try self.reallocateWorkBuffers(size);
+        }
+
+        try self.optimizers.append(null);
+        return layer_obj;
+    }
+
+    fn reallocateWorkBuffers(self: *Network, size: usize) !void {
+        if (self.backend.type == .gpu) {
+            if (self.work_buffer) |buf| self.allocator.free(buf);
+            self.work_buffer = try self.allocator.alloc(f32, size);
+
+            if (self.grad_work_1) |*t| t.deinit();
+            if (self.grad_work_2) |*t| t.deinit();
+            if (self.grad_after_act_work) |*t| t.deinit();
+
+            self.grad_work_1 = try tensor.Tensor.init(self.allocator, &.{size}, self.backend);
+            self.grad_work_2 = try tensor.Tensor.init(self.allocator, &.{size}, self.backend);
+            self.grad_after_act_work = try tensor.Tensor.init(self.allocator, &.{size}, self.backend);
+        }
+    }
+
     pub fn forward(self: *Network, input: []const f32, output: []f32) !void {
+        // Use batching for forward pass too to minimize synchronization
+        try self.backend.beginCommandBatch();
+        errdefer self.backend.endCommandBatch() catch {};
+
         var current_slice = input;
         var current_buf: ?*const metal.MTLBuffer = null;
 
         for (self.layers.items, 0..) |l, i| {
-            // Check if we already have a cache for this layer from a previous forward pass
-            if (self.caches.items[i]) |*old_cache| {
-                old_cache.activated_output.deinit();
-                old_cache.input.deinit();
+            // Reuse cache if it exists and has the correct size
+            if (self.caches.items[i]) |*cache| {
+                if (cache.input.slice.len != current_slice.len) {
+                    cache.input.deinit();
+                    cache.input = try tensor.Tensor.init(self.allocator, &.{current_slice.len}, self.backend);
+                }
+                if (cache.activated_output.slice.len != l.outputSize()) {
+                    cache.activated_output.deinit();
+                    cache.activated_output = try tensor.Tensor.init(self.allocator, &.{l.outputSize()}, self.backend);
+                }
+            } else {
+                self.caches.items[i] = LayerCache{
+                    .input = try tensor.Tensor.init(self.allocator, &.{current_slice.len}, self.backend),
+                    .activated_output = try tensor.Tensor.init(self.allocator, &.{l.outputSize()}, self.backend),
+                };
             }
 
-            // Create new tensors for cache (MUST use Metal-backed tensors if GPU enabled)
-            // Store the input to this layer
-            var cache_input = try tensor.Tensor.init(self.allocator, current_slice.len, self.backend);
-            errdefer cache_input.deinit();
+            var cache = &self.caches.items[i].?;
 
             if (current_buf) |buf| {
                 // GPU to GPU copy (using linear activation as a copy kernel)
-                try self.backend.activationForward(.linear, current_slice, buf, cache_input.slice, cache_input.getMtlBuffer());
+                try self.backend.activationForward(.linear, current_slice, buf, cache.input.slice, cache.input.getMtlBuffer());
             } else {
                 // CPU to GPU copy
-                @memcpy(cache_input.slice, current_slice);
+                @memcpy(cache.input.slice, current_slice);
             }
 
-            var activated_output = try tensor.Tensor.init(self.allocator, l.output_size, self.backend);
-            errdefer activated_output.deinit();
-
             // Run layer forward pass
-            try l.forward(cache_input.slice, cache_input.getMtlBuffer(), activated_output.slice, activated_output.getMtlBuffer());
+            try l.forward(cache.input.slice, cache.input.getMtlBuffer(), cache.activated_output.slice, cache.activated_output.getMtlBuffer());
 
-            // Store in cache
-            self.caches.items[i] = LayerCache{
-                .activated_output = activated_output,
-                .input = cache_input,
-            };
-
-            current_slice = activated_output.slice;
-            current_buf = activated_output.getMtlBuffer();
+            current_slice = cache.activated_output.slice;
+            current_buf = cache.activated_output.getMtlBuffer();
         }
 
         // Copy final output to provided buffer
@@ -178,8 +344,8 @@ pub const Network = struct {
 
     pub fn clearGradients(self: *Network) void {
         for (self.layers.items) |l| {
-            @memset(l.grad_weights.slice, 0);
-            @memset(l.grad_bias.slice, 0);
+            @memset(l.getGradWeights().slice, 0);
+            @memset(l.getGradBias().slice, 0);
         }
     }
 
@@ -194,16 +360,16 @@ pub const Network = struct {
         // Use pre-allocated work tensors
         if (self.grad_work_1 == null) {
             // If they weren't allocated in addDense (CPU mode), allocate them here
-            self.grad_work_1 = try tensor.Tensor.init(self.allocator, self.max_layer_size, self.backend);
-            self.grad_work_2 = try tensor.Tensor.init(self.allocator, self.max_layer_size, self.backend);
-            self.grad_after_act_work = try tensor.Tensor.init(self.allocator, self.max_layer_size, self.backend);
+            self.grad_work_1 = try tensor.Tensor.init(self.allocator, &.{self.max_layer_size}, self.backend);
+            self.grad_work_2 = try tensor.Tensor.init(self.allocator, &.{self.max_layer_size}, self.backend);
+            self.grad_after_act_work = try tensor.Tensor.init(self.allocator, &.{self.max_layer_size}, self.backend);
         }
 
         var grad = self.grad_work_1.?;
         var next_grad = self.grad_work_2.?;
         var grad_after_act = self.grad_after_act_work.?;
 
-        const output_size = self.layers.items[last_layer_idx].output_size;
+        const output_size = self.layers.items[last_layer_idx].outputSize();
 
         // Compute gradient of loss w.r.t output
         try self.backend.lossBackward(loss_fn, output, output_buf, target, null, grad.slice[0..output_size], grad.getMtlBuffer());
@@ -216,9 +382,9 @@ pub const Network = struct {
             const cache = self.caches.items[i] orelse return error.NoCache;
 
             // Compute gradient after activation
-            try self.backend.activationBackward(l.act,
+            try self.backend.activationBackward(l.getActivation(),
                 cache.activated_output.slice, cache.activated_output.getMtlBuffer(),
-                grad.slice[0..l.output_size], grad.getMtlBuffer(),
+                grad.slice[0..l.outputSize()], grad.getMtlBuffer(),
                 grad_after_act.slice, grad_after_act.getMtlBuffer()
             );
 
@@ -231,13 +397,14 @@ pub const Network = struct {
             // Compute gradient for previous layer
             if (i > 0) {
                 // Compute gradient for previous layer: grad_input = grad_after_act * weights^T
+                const weights = l.getWeights();
                 try self.backend.matMulTransposeB(
                     grad_after_act.slice, grad_after_act.getMtlBuffer(),
-                    l.weights.slice, l.weights.getMtlBuffer(),
+                    weights.slice, weights.getMtlBuffer(),
                     next_grad.slice, next_grad.getMtlBuffer(),
                     1, // batch_size
-                    l.input_size,
-                    l.output_size
+                    l.inputSize(),
+                    l.outputSize()
                 );
 
                 // Swap grad and next_grad for the next iteration
@@ -257,7 +424,7 @@ pub const Network = struct {
         // Clear previous gradients
         self.clearGradients();
 
-        const output_size = self.layers.items[self.layers.items.len - 1].output_size;
+        const output_size = self.layers.items[self.layers.items.len - 1].outputSize();
         if (target.len != output_size) return error.OutputSizeMismatch;
 
         const output = try self.allocator.alloc(f32, output_size);
@@ -271,21 +438,7 @@ pub const Network = struct {
         // Update weights using GPU-accelerated SGD if available
         const weight_decay: f32 = 0.0;
         for (self.layers.items) |l| {
-            try self.backend.sgdUpdate(
-                l.weights.slice,
-                l.weights.getMtlBuffer(),
-                l.grad_weights.slice,
-                l.grad_weights.getMtlBuffer(),
-                learning_rate,
-                weight_decay,
-            );
-            try self.backend.sgdUpdateBias(
-                l.bias.slice,
-                l.bias.getMtlBuffer(),
-                l.grad_bias.slice,
-                l.grad_bias.getMtlBuffer(),
-                learning_rate,
-            );
+            try l.updateWeights(learning_rate, weight_decay);
         }
 
         // End command batch and wait for completion BEFORE calculating loss
