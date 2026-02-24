@@ -44,6 +44,10 @@ pub const MetalContext = struct {
             "shaders/metal/loss.metal",
             "shaders/metal/optimizer.metal",
             "shaders/metal/recurrent.metal",
+            "shaders/metal/normalization.metal",
+            "shaders/metal/convolution.metal",
+            "shaders/metal/attention.metal",
+            "shaders/metal/auxiliary.metal",
         };
 
         var sources = [_][]const u8{""} ** shader_paths.len;
@@ -102,6 +106,29 @@ pub const MetalContext = struct {
         try self.registerPipeline("sgd_update");
         try self.registerPipeline("sgd_update_bias");
         try self.registerPipeline("accumulate_bias");
+        try self.registerPipeline("adam_update");
+        try self.registerPipeline("rmsprop_update");
+
+        // Normalization kernels
+        try self.registerPipeline("layernorm_forward_optimized");
+        try self.registerPipeline("layernorm_backward");
+
+        // Convolution kernels
+        try self.registerPipeline("conv1d_forward");
+        try self.registerPipeline("conv1d_backward");
+
+        // Attention kernels
+        try self.registerPipeline("attention_forward");
+
+        // Auxiliary kernels
+        try self.registerPipeline("dropout_forward");
+        try self.registerPipeline("vae_sampling_forward");
+        try self.registerPipeline("vae_sampling_backward");
+        try self.registerPipeline("fill_constant");
+        try self.registerPipeline("scale_buffer");
+        try self.registerPipeline("reverse_sequence");
+        try self.registerPipeline("concat_buffers");
+        try self.registerPipeline("split_buffer");
 
         // Recurrent kernels
         try self.registerPipeline("lstm_forward_step");

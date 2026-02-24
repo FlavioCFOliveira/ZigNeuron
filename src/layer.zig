@@ -184,119 +184,19 @@ pub const Layer = union(enum) {
         }
     }
 
-    pub fn updateWeights(self: Layer, learning_rate: f32, weight_decay: f32) !void {
+    pub fn getBackendFromLayer(self: Layer) backend_module.Backend {
         switch (self) {
-            .dense => |d| {
-                try d.backend.sgdUpdate(
-                    d.weights.slice,
-                    d.weights.getMtlBuffer(),
-                    d.grad_weights.slice,
-                    d.grad_weights.getMtlBuffer(),
-                    learning_rate,
-                    weight_decay,
-                );
-                try d.backend.sgdUpdateBias(
-                    d.bias.slice,
-                    d.bias.getMtlBuffer(),
-                    d.grad_bias.slice,
-                    d.grad_bias.getMtlBuffer(),
-                    learning_rate,
-                );
-            },
-            .rnn => |r| {
-                try r.backend.sgdUpdate(
-                    r.weights_ih.slice,
-                    r.weights_ih.getMtlBuffer(),
-                    r.grad_weights_ih.slice,
-                    r.grad_weights_ih.getMtlBuffer(),
-                    learning_rate,
-                    weight_decay,
-                );
-                try r.backend.sgdUpdate(
-                    r.weights_hh.slice,
-                    r.weights_hh.getMtlBuffer(),
-                    r.grad_weights_hh.slice,
-                    r.grad_weights_hh.getMtlBuffer(),
-                    learning_rate,
-                    weight_decay,
-                );
-                try r.backend.sgdUpdateBias(
-                    r.bias.slice,
-                    r.bias.getMtlBuffer(),
-                    r.grad_bias.slice,
-                    r.grad_bias.getMtlBuffer(),
-                    learning_rate,
-                );
-            },
-            .lstm => |l| {
-                try l.backend.sgdUpdate(
-                    l.weights_ih.slice,
-                    l.weights_ih.getMtlBuffer(),
-                    l.grad_weights_ih.slice,
-                    l.grad_weights_ih.getMtlBuffer(),
-                    learning_rate,
-                    weight_decay,
-                );
-                try l.backend.sgdUpdate(
-                    l.weights_hh.slice,
-                    l.weights_hh.getMtlBuffer(),
-                    l.grad_weights_hh.slice,
-                    l.grad_weights_hh.getMtlBuffer(),
-                    learning_rate,
-                    weight_decay,
-                );
-                try l.backend.sgdUpdateBias(
-                    l.bias.slice,
-                    l.bias.getMtlBuffer(),
-                    l.grad_bias.slice,
-                    l.grad_bias.getMtlBuffer(),
-                    learning_rate,
-                );
-            },
-            .gru => |g| {
-                try g.backend.sgdUpdate(
-                    g.weights_ih.slice,
-                    g.weights_ih.getMtlBuffer(),
-                    g.grad_weights_ih.slice,
-                    g.grad_weights_ih.getMtlBuffer(),
-                    learning_rate,
-                    weight_decay,
-                );
-                try g.backend.sgdUpdate(
-                    g.weights_hh.slice,
-                    g.weights_hh.getMtlBuffer(),
-                    g.grad_weights_hh.slice,
-                    g.grad_weights_hh.getMtlBuffer(),
-                    learning_rate,
-                    weight_decay,
-                );
-                try g.backend.sgdUpdateBias(
-                    g.bias.slice,
-                    g.bias.getMtlBuffer(),
-                    g.grad_bias.slice,
-                    g.grad_bias.getMtlBuffer(),
-                    learning_rate,
-                );
-            },
-            .sampling => {},
-            .conv1d => |c| {
-                try c.backend.sgdUpdate(c.weights.slice, c.weights.getMtlBuffer(), c.grad_weights.slice, c.grad_weights.getMtlBuffer(), learning_rate, weight_decay);
-                try c.backend.sgdUpdateBias(c.bias.slice, c.bias.getMtlBuffer(), c.grad_bias.slice, c.grad_bias.getMtlBuffer(), learning_rate);
-            },
-            .layer_norm => |ln| {
-                try ln.backend.sgdUpdate(ln.gamma.slice, ln.gamma.getMtlBuffer(), ln.grad_gamma.slice, ln.grad_gamma.getMtlBuffer(), learning_rate, weight_decay);
-                try ln.backend.sgdUpdateBias(ln.beta.slice, ln.beta.getMtlBuffer(), ln.grad_beta.slice, ln.grad_beta.getMtlBuffer(), learning_rate);
-            },
-            .dropout => {},
-            .attention => {},
-            .bidirectional => |b| {
-                try b.fw_layer.updateWeights(learning_rate, weight_decay);
-                try b.bw_layer.updateWeights(learning_rate, weight_decay);
-            },
-            .twopath => |t| {
-                try t.path1.updateWeights(learning_rate, weight_decay);
-                try t.path2.updateWeights(learning_rate, weight_decay);
-            },
+            .dense => |d| return d.backend,
+            .rnn => |r| return r.backend,
+            .lstm => |l| return l.backend,
+            .gru => |g| return g.backend,
+            .sampling => |s| return s.backend,
+            .conv1d => |c| return c.backend,
+            .layer_norm => |ln| return ln.backend,
+            .dropout => |dr| return dr.backend,
+            .attention => |a| return a.backend,
+            .bidirectional => |b| return b.fw_layer.getBackend(),
+            .twopath => |t| return t.path1.getBackend(),
         }
     }
 };
@@ -380,6 +280,7 @@ pub const Dense = struct {
             batch_size,
             self.output_size,
             self.input_size,
+            false
         );
 
         // Add bias
@@ -397,6 +298,7 @@ pub const Dense = struct {
             batch_size,
             self.output_size,
             self.input_size,
+            false
         );
 
         // Add bias (broadcasted over batch)
@@ -422,14 +324,15 @@ pub const Dense = struct {
         grad_input: []f32, grad_input_buf: ?*const metal.MTLBuffer,
         activated_output: []const f32, activated_output_buf: ?*const metal.MTLBuffer
     ) !void {
-        const batch_size = input.len / self.input_size;
+        const batch_size = if (self.input_size > 0) input.len / self.input_size else 1;
+        const total_output_size = batch_size * self.output_size;
 
         // Ensure grad_after_act is large enough for the batch
-        if (self.grad_after_act.slice.len < batch_size * self.output_size) {
+        if (self.grad_after_act.slice.len < total_output_size) {
             self.grad_after_act.deinit();
-            self.grad_after_act = try tensor.Tensor.init(self.allocator, &.{ batch_size * self.output_size }, self.backend);
+            self.grad_after_act = try tensor.Tensor.init(self.allocator, &.{total_output_size}, self.backend);
         }
-        const gaa = self.grad_after_act.slice[0 .. batch_size * self.output_size];
+        const gaa = self.grad_after_act.slice[0..total_output_size];
         const gaa_buf = self.grad_after_act.getMtlBuffer();
 
         // Apply activation derivative to grad_output
@@ -459,6 +362,7 @@ pub const Dense = struct {
             batch_size,
             self.input_size,
             self.output_size,
+            false
         );
 
         // Accumulate bias gradient (sum over batch)
@@ -475,7 +379,8 @@ pub const Dense = struct {
             self.grad_weights.slice, self.grad_weights.getMtlBuffer(),
             self.input_size,
             self.output_size,
-            batch_size
+            batch_size,
+            false
         );
     }
 };
@@ -505,30 +410,8 @@ pub const SamplingLayer = struct {
     }
 
     pub fn forward(self: *SamplingLayer, input: []const f32, input_buf: ?*const metal.MTLBuffer, output: []f32, output_buf: ?*const metal.MTLBuffer) !void {
-        _ = input_buf; _ = output_buf;
         const latent_dim = self.input_size / 2;
-        const mu = input[0..latent_dim];
-        const log_var = input[latent_dim..];
-
-        // 1. Generate epsilon ~ N(0, 1)
-        try self.backend.fillRandomNormal(self.epsilon.slice, self.epsilon.getMtlBuffer(), 0.0, 1.0, @intCast(std.time.timestamp()));
-
-        // 2. exp_log_var = exp(0.5 * log_var)
-        // We use map to compute 0.5 * log_var and then exp, or just use scale + exp
-        for (0..latent_dim) |i| {
-            self.exp_log_var.slice[i] = std.math.exp(0.5 * log_var[i]);
-        }
-        // Sync to GPU if needed
-        if (self.backend.type == .gpu) {
-             // In a real implementation we'd have a kernel for this.
-             // For now, let's use the CPU fallback for this specific step or implement a custom kernel if needed.
-             // Actually, let's just use what we have.
-        }
-
-        // 3. z = mu + epsilon * exp_log_var
-        for (0..latent_dim) |i| {
-            output[i] = mu[i] + self.epsilon.slice[i] * self.exp_log_var.slice[i];
-        }
+        try self.backend.vaeSamplingForward(input, input_buf, output, output_buf, self.epsilon.slice, self.epsilon.getMtlBuffer(), @intCast(std.time.timestamp()), latent_dim);
     }
 
     pub fn backward(self: *SamplingLayer,
@@ -537,18 +420,9 @@ pub const SamplingLayer = struct {
         grad_input: []f32, grad_input_buf: ?*const metal.MTLBuffer,
         activated_output: []const f32, activated_output_buf: ?*const metal.MTLBuffer
     ) !void {
-        _ = activated_output; _ = activated_output_buf; _ = input_buf; _ = grad_output_buf; _ = grad_input_buf;
+        _ = activated_output; _ = activated_output_buf;
         const latent_dim = self.input_size / 2;
-        const log_var = input[latent_dim..];
-        const grad_mu = grad_input[0..latent_dim];
-        const grad_log_var = grad_input[latent_dim..];
-
-        for (0..latent_dim) |i| {
-            // dz/dmu = 1 => grad_mu = grad_output
-            grad_mu[i] = grad_output[i];
-            // dz/dlog_var = epsilon * exp(0.5 * log_var) * 0.5
-            grad_log_var[i] = grad_output[i] * self.epsilon.slice[i] * std.math.exp(0.5 * log_var[i]) * 0.5;
-        }
+        try self.backend.vaeSamplingBackward(input, input_buf, grad_output, grad_output_buf, grad_input, grad_input_buf, self.epsilon.slice, self.epsilon.getMtlBuffer(), latent_dim);
     }
 };
 
@@ -611,52 +485,22 @@ pub const Conv1D = struct {
     }
 
     pub fn forward(self: *Conv1D, input: []const f32, input_buf: ?*const metal.MTLBuffer, output: []f32, output_buf: ?*const metal.MTLBuffer) !void {
-        _ = input_buf;
         const in_len = input.len / self.in_channels;
         const out_len = (in_len - self.kernel_size) / self.stride + 1;
 
-        @memset(output, 0);
-        for (0..self.out_channels) |oc| {
-            for (0..out_len) |t| {
-                var sum: f32 = 0;
-                for (0..self.in_channels) |ic| {
-                    for (0..self.kernel_size) |k| {
-                        const in_idx = ic * in_len + (t * self.stride + k * self.dilation);
-                        const w_idx = (oc * self.in_channels + ic) * self.kernel_size + k;
-                        sum += input[in_idx] * self.weights.slice[w_idx];
-                    }
-                }
-                output[oc * out_len + t] = sum + self.bias.slice[oc];
-            }
-        }
+        try self.backend.conv1dForward(input, input_buf, self.weights.slice, self.weights.getMtlBuffer(), self.bias.slice, self.bias.getMtlBuffer(), output, output_buf, self.in_channels, self.out_channels, self.kernel_size, in_len, out_len);
         try self.backend.activationForward(self.act, output, output_buf, output, output_buf);
     }
 
     pub fn backward(self: *Conv1D, input: []const f32, input_buf: ?*const metal.MTLBuffer, grad_output: []const f32, grad_output_buf: ?*const metal.MTLBuffer, grad_input: []f32, grad_input_buf: ?*const metal.MTLBuffer, activated_output: []const f32, activated_output_buf: ?*const metal.MTLBuffer) !void {
-        _ = input_buf; _ = grad_input_buf;
         const in_len = input.len / self.in_channels;
         const out_len = grad_output.len / self.out_channels;
 
-        // 1. Activation backward using pre-allocated buffer
+        // 1. Activation backward
         try self.backend.activationBackward(self.act, activated_output, activated_output_buf, grad_output, grad_output_buf, self.grad_after_act.slice, self.grad_after_act.getMtlBuffer());
-        const gaa = self.grad_after_act.slice;
 
-        // 2. Compute grad_input and accumulate grad_weights/bias
-        @memset(grad_input, 0);
-        for (0..self.out_channels) |oc| {
-            for (0..out_len) |t| {
-                const go = gaa[oc * out_len + t];
-                self.grad_bias.slice[oc] += go;
-                for (0..self.in_channels) |ic| {
-                    for (0..self.kernel_size) |k| {
-                        const in_idx = ic * in_len + (t * self.stride + k * self.dilation);
-                        const w_idx = (oc * self.in_channels + ic) * self.kernel_size + k;
-                        self.grad_weights.slice[w_idx] += input[in_idx] * go;
-                        grad_input[in_idx] += self.weights.slice[w_idx] * go;
-                    }
-                }
-            }
-        }
+        // 2. Conv backward
+        try self.backend.conv1dBackward(input, input_buf, self.weights.slice, self.weights.getMtlBuffer(), self.grad_after_act.slice, self.grad_after_act.getMtlBuffer(), grad_input, grad_input_buf, self.grad_weights.slice, self.grad_weights.getMtlBuffer(), self.grad_bias.slice, self.grad_bias.getMtlBuffer(), self.in_channels, self.out_channels, self.kernel_size, in_len, out_len);
     }
 };
 
@@ -696,39 +540,12 @@ pub const LayerNorm = struct {
     }
 
     pub fn forward(self: *LayerNorm, input: []const f32, input_buf: ?*const metal.MTLBuffer, output: []f32, output_buf: ?*const metal.MTLBuffer) !void {
-        _ = input_buf; _ = output_buf;
-        var mean: f32 = 0;
-        for (input) |x| mean += x;
-        mean /= @as(f32, @floatFromInt(input.len));
-
-        var variance: f32 = 0;
-        for (input) |x| variance += (x - mean) * (x - mean);
-        variance /= @as(f32, @floatFromInt(input.len));
-
-        const std_inv = 1.0 / @sqrt(variance + self.eps);
-        for (input, 0..) |x, i| {
-            output[i] = (x - mean) * std_inv * self.gamma.slice[i] + self.beta.slice[i];
-        }
+        try self.backend.layerNormForward(input, input_buf, output, output_buf, self.gamma.slice, self.gamma.getMtlBuffer(), self.beta.slice, self.beta.getMtlBuffer(), self.eps);
     }
 
     pub fn backward(self: *LayerNorm, input: []const f32, input_buf: ?*const metal.MTLBuffer, grad_output: []const f32, grad_output_buf: ?*const metal.MTLBuffer, grad_input: []f32, grad_input_buf: ?*const metal.MTLBuffer, activated_output: []const f32, activated_output_buf: ?*const metal.MTLBuffer) !void {
-        _ = input_buf; _ = grad_output_buf; _ = grad_input_buf; _ = activated_output; _ = activated_output_buf;
-        // Simplified LN backward
-        var mean: f32 = 0;
-        for (input) |x| mean += x;
-        mean /= @as(f32, @floatFromInt(input.len));
-        var variance: f32 = 0;
-        for (input) |x| variance += (x - mean) * (x - mean);
-        variance /= @as(f32, @floatFromInt(input.len));
-        const std_inv = 1.0 / @sqrt(variance + self.eps);
-
-        for (input, grad_output, 0..) |x, go, i| {
-            const x_hat = (x - mean) * std_inv;
-            self.grad_gamma.slice[i] += go * x_hat;
-            self.grad_beta.slice[i] += go;
-            // Simple approximation for grad_input
-            grad_input[i] = go * self.gamma.slice[i] * std_inv;
-        }
+        _ = activated_output; _ = activated_output_buf;
+        try self.backend.layerNormBackward(input, input_buf, grad_output, grad_output_buf, grad_input, grad_input_buf, self.gamma.slice, self.gamma.getMtlBuffer(), self.grad_gamma.slice, self.grad_gamma.getMtlBuffer(), self.grad_beta.slice, self.grad_beta.getMtlBuffer(), self.eps);
     }
 };
 
@@ -757,31 +574,21 @@ pub const Dropout = struct {
     }
 
     pub fn forward(self: *Dropout, input: []const f32, input_buf: ?*const metal.MTLBuffer, output: []f32, output_buf: ?*const metal.MTLBuffer) !void {
-        _ = input_buf; _ = output_buf;
         if (!self.training) {
-            @memcpy(output, input);
+            try self.backend.copyData(input, input_buf, output, output_buf);
             return;
         }
 
-        var prng = std.Random.DefaultPrng.init(@intCast(std.time.timestamp()));
         const scale = 1.0 / (1.0 - self.rate);
-        for (0..self.size) |i| {
-            if (prng.random().float(f32) > self.rate) {
-                self.mask.slice[i] = 1.0;
-                output[i] = input[i] * scale;
-            } else {
-                self.mask.slice[i] = 0.0;
-                output[i] = 0.0;
-            }
-        }
+        try self.backend.dropoutForward(input, input_buf, output, output_buf, self.mask.slice, self.mask.getMtlBuffer(), self.rate, scale, @intCast(std.time.timestamp()));
     }
 
     pub fn backward(self: *Dropout, input: []const f32, input_buf: ?*const metal.MTLBuffer, grad_output: []const f32, grad_output_buf: ?*const metal.MTLBuffer, grad_input: []f32, grad_input_buf: ?*const metal.MTLBuffer, activated_output: []const f32, activated_output_buf: ?*const metal.MTLBuffer) !void {
-        _ = input; _ = input_buf; _ = grad_output_buf; _ = grad_input_buf; _ = activated_output; _ = activated_output_buf;
+        _ = input; _ = input_buf; _ = activated_output; _ = activated_output_buf;
         const scale = 1.0 / (1.0 - self.rate);
-        for (0..self.size) |i| {
-            grad_input[i] = grad_output[i] * self.mask.slice[i] * scale;
-        }
+        // grad_input = grad_output * mask * scale
+        try self.backend.elementWise(.mul, grad_output, grad_output_buf, self.mask.slice, self.mask.getMtlBuffer(), grad_input, grad_input_buf);
+        try self.backend.scale(grad_input, grad_input_buf, scale);
     }
 };
 
@@ -818,16 +625,14 @@ pub const Attention = struct {
     }
 
     pub fn forward(self: *Attention, input: []const f32, input_buf: ?*const metal.MTLBuffer, output: []f32, output_buf: ?*const metal.MTLBuffer) !void {
-        _ = self; _ = input_buf; _ = output_buf;
-        // Simplified Dot-Product Attention forward
-        // In a real Transformer, this would be Q*K^T / sqrt(d) * V
-        // For now, we'll just do a identity-like pass for the example
-        @memcpy(output, input);
+        const seq_len = input.len / self.size;
+        const scale = 1.0 / @sqrt(@as(f32, @floatFromInt(self.size)));
+        try self.backend.attentionForward(input, input_buf, input, input_buf, input, input_buf, output, output_buf, seq_len, self.size, scale);
     }
 
     pub fn backward(self: *Attention, input: []const f32, input_buf: ?*const metal.MTLBuffer, grad_output: []const f32, grad_output_buf: ?*const metal.MTLBuffer, grad_input: []f32, grad_input_buf: ?*const metal.MTLBuffer, activated_output: []const f32, activated_output_buf: ?*const metal.MTLBuffer) !void {
-        _ = self; _ = input; _ = input_buf; _ = grad_output_buf; _ = grad_input_buf; _ = activated_output; _ = activated_output_buf;
-        @memcpy(grad_input, grad_output);
+        _ = input; _ = input_buf; _ = activated_output; _ = activated_output_buf;
+        try self.backend.copyData(grad_output, grad_output_buf, grad_input, grad_input_buf);
     }
 };
 

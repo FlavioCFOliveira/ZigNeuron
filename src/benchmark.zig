@@ -199,7 +199,7 @@ pub fn benchmarkMatrixMul(allocator: std.mem.Allocator, backend: backend_module.
 
     const start = nanoTimestamp();
     for (0..iterations) |_| {
-        backend.matMul(a, b, c, m, n, k) catch unreachable;
+        backend.matMul(a, null, b, null, c, null, m, n, k, false) catch unreachable;
     }
     const end = nanoTimestamp();
 

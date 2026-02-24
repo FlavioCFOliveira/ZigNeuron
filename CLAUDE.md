@@ -54,13 +54,13 @@ These files document actual test results, including timestamps, environment info
 |-----------|--------|-------|
 | Dense Layer | Done | Forward and backward pass implemented |
 | Activations | Done | ReLU, Sigmoid, Tanh with correct derivatives |
-| Loss Functions | Partial | MSE only, correct gradients |
+| Loss Functions | Done | MSE, Cross-Entropy, KL-Divergence |
 | Backpropagation | Done | Training works on CPU and Metal |
 | GPU Backend | Done | Metal implemented and synchronized |
-| Vulkan Support | TODO | Needs implementation |
-| Optimizers | TODO | SGD, Adam, RMSprop needed |
-| Unit Tests | TODO | Test coverage needed |
-| Performance Benchmarks | TODO | Benchmark suite needed |
+| Vulkan Support | Partial | Shader base in place |
+| Optimizers | Partial | SGD, Adam, RMSprop basic structs |
+| Unit Tests | Done | Coverage for FNN, RNN, VAE, CNN |
+| Performance Benchmarks | Done | Benchmark suite available |
 
 ## Testing Requirements
 

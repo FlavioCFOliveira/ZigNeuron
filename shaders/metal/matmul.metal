@@ -16,6 +16,7 @@ kernel void matmul(
     constant uint& M [[buffer(3)]],
     constant uint& N [[buffer(4)]],
     constant uint& K [[buffer(5)]],
+    constant uint& accumulate [[buffer(6)]],
     uint3 gid [[thread_position_in_grid]])
 {
     uint row = gid.y;
@@ -26,7 +27,11 @@ kernel void matmul(
         for (uint k = 0; k < K; k++) {
             sum += A[row * K + k] * B[k * N + col];
         }
-        C[row * N + col] = sum;
+        if (accumulate) {
+            C[row * N + col] += sum;
+        } else {
+            C[row * N + col] = sum;
+        }
     }
 }
 
@@ -39,6 +44,7 @@ kernel void matmul_batch(
     constant uint& batch_size [[buffer(3)]],
     constant uint& N [[buffer(4)]],
     constant uint& K [[buffer(5)]],
+    constant uint& accumulate [[buffer(6)]],
     uint3 gid [[thread_position_in_grid]])
 {
     uint batch = gid.z;
@@ -49,7 +55,11 @@ kernel void matmul_batch(
         for (uint k = 0; k < K; k++) {
             sum += A[batch * K + k] * B[k * N + col];
         }
-        C[batch * N + col] = sum;
+        if (accumulate) {
+            C[batch * N + col] += sum;
+        } else {
+            C[batch * N + col] = sum;
+        }
     }
 }
 
@@ -62,6 +72,7 @@ kernel void matmul_tiled(
     constant uint& M [[buffer(3)]],
     constant uint& N [[buffer(4)]],
     constant uint& K [[buffer(5)]],
+    constant uint& accumulate [[buffer(6)]],
     uint3 gid [[thread_position_in_grid]],
     uint3 tid [[thread_position_in_threadgroup]],
     uint3 tg_pos [[threadgroup_position_in_grid]])
@@ -108,7 +119,11 @@ kernel void matmul_tiled(
 
     // Store result
     if (row < M && col < N) {
-        C[row * N + col] = sum;
+        if (accumulate) {
+            C[row * N + col] += sum;
+        } else {
+            C[row * N + col] = sum;
+        }
     }
 }
 
@@ -122,6 +137,7 @@ kernel void matmul_transpose_b(
     constant uint& M [[buffer(3)]],
     constant uint& N [[buffer(4)]],
     constant uint& K [[buffer(5)]],
+    constant uint& accumulate [[buffer(6)]],
     uint3 gid [[thread_position_in_grid]])
 {
     uint row = gid.y;
@@ -135,7 +151,11 @@ kernel void matmul_transpose_b(
             // Since B_T[k, col] = B[col, k]
             sum += A[row * K + k] * B[col * K + k];
         }
-        C[row * N + col] = sum;
+        if (accumulate) {
+            C[row * N + col] += sum;
+        } else {
+            C[row * N + col] = sum;
+        }
     }
 }
 
@@ -149,6 +169,7 @@ kernel void matmul_transpose_a(
     constant uint& M [[buffer(3)]],
     constant uint& N [[buffer(4)]],
     constant uint& K [[buffer(5)]],
+    constant uint& accumulate [[buffer(6)]],
     uint3 gid [[thread_position_in_grid]])
 {
     uint row = gid.y;
@@ -162,7 +183,11 @@ kernel void matmul_transpose_a(
             // Since A_T[row, k] = A[k * M + row]
             sum += A[k * M + row] * B[k * N + col];
         }
-        C[row * N + col] = sum;
+        if (accumulate) {
+            C[row * N + col] += sum;
+        } else {
+            C[row * N + col] = sum;
+        }
     }
 }
 
@@ -187,6 +212,7 @@ kernel void matmul_batch_transpose_b(
     constant uint& batch_size [[buffer(3)]],
     constant uint& N [[buffer(4)]],
     constant uint& K [[buffer(5)]],
+    constant uint& accumulate [[buffer(6)]],
     uint3 gid [[thread_position_in_grid]])
 {
     uint batch = gid.z;
@@ -197,6 +223,10 @@ kernel void matmul_batch_transpose_b(
         for (uint k = 0; k < K; k++) {
             sum += A[batch * K + k] * B[col * K + k];
         }
-        C[batch * N + col] = sum;
+        if (accumulate) {
+            C[batch * N + col] += sum;
+        } else {
+            C[batch * N + col] = sum;
+        }
     }
 }

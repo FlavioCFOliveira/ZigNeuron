@@ -333,6 +333,17 @@ pub const MTLComputeCommandEncoder = struct {
         }
     }
 
+    /// Dispatch threadgroups
+    pub fn dispatchThreadgroups(self: *MTLComputeCommandEncoder,
+        threadgroupsPerGrid: MTLSize,
+        threadsPerThreadgroup: MTLSize
+    ) void {
+        const sel = objc.sel("dispatchThreadgroups:threadsPerThreadgroup:");
+        if (sel) |s| {
+            objc.msgSendSize2(self.encoder, s, threadgroupsPerGrid, threadsPerThreadgroup);
+        }
+    }
+
     /// End encoding
     pub fn endEncoding(self: *MTLComputeCommandEncoder) void {
         const sel = objc.sel("endEncoding");

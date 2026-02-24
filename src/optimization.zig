@@ -344,21 +344,28 @@ pub const Threading = struct {
         m: usize,
         n: usize,
         k: usize,
+        accumulate: bool,
     ) !void {
         const pool = self.thread_pool orelse {
             // Fallback to sequential
+            if (!accumulate) @memset(c, 0);
             for (0..m) |i| {
                 for (0..n) |j| {
                     var sum: f32 = 0;
                     for (0..k) |p| {
                         sum += a[i * k + p] * b[p * n + j];
                     }
-                    c[i * n + j] = sum;
+                    if (accumulate) {
+                        c[i * n + j] += sum;
+                    } else {
+                        c[i * n + j] = sum;
+                    }
                 }
             }
             return;
         };
 
+        if (!accumulate) @memset(c, 0);
         const num_threads = pool.threads.len;
         const chunk_size = (m + num_threads - 1) / num_threads;
 
@@ -380,18 +387,24 @@ pub const Threading = struct {
                     inner: usize,
                     row_start: usize,
                     row_end: usize,
+                    acc: bool,
                 ) void {
+                    _ = rows;
                     for (row_start..row_end) |i| {
                         for (0..cols) |j| {
                             var sum: f32 = 0;
                             for (0..inner) |p| {
                                 sum += A[i * inner + p] * B[p * cols + j];
                             }
-                            C[i * cols + j] = sum;
+                            if (acc) {
+                                C[i * cols + j] += sum;
+                            } else {
+                                C[i * cols + j] = sum;
+                            }
                         }
                     }
                 }
-            }.worker, .{ a, b, c, m, n, k, start, end });
+            }.worker, .{ a, b, c, m, n, k, start, end, accumulate });
         }
 
         wait_group.wait();

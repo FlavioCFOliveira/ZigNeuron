@@ -310,11 +310,11 @@ pub const Network = struct {
 
             // Reuse cache if it exists and has the correct size
             if (self.caches.items[i]) |*cache| {
-                if (cache.input.slice.len != current_slice.len) {
+                if (cache.input.slice.len < current_slice.len) {
                     cache.input.deinit();
                     cache.input = try tensor.Tensor.init(self.allocator, &.{current_slice.len}, self.backend);
                 }
-                if (cache.activated_output.slice.len != total_output_size) {
+                if (cache.activated_output.slice.len < total_output_size) {
                     cache.activated_output.deinit();
                     cache.activated_output = try tensor.Tensor.init(self.allocator, &.{total_output_size}, self.backend);
                 }
@@ -329,44 +329,47 @@ pub const Network = struct {
 
             if (current_buf) |buf| {
                 // GPU to GPU copy
-                try self.backend.copyData(current_slice, buf, cache.input.slice, cache.input.getMtlBuffer());
+                try self.backend.copyData(current_slice, buf, cache.input.slice[0..current_slice.len], cache.input.getMtlBuffer());
             } else {
                 // CPU to GPU copy
-                @memcpy(cache.input.slice, current_slice);
-                try self.backend.copyData(cache.input.slice, null, cache.input.slice, cache.input.getMtlBuffer());
+                @memcpy(cache.input.slice[0..current_slice.len], current_slice);
+                try self.backend.copyData(cache.input.slice[0..current_slice.len], null, cache.input.slice[0..current_slice.len], cache.input.getMtlBuffer());
             }
 
             // Run layer forward pass
-            try l.forward(cache.input.slice, cache.input.getMtlBuffer(), cache.activated_output.slice, cache.activated_output.getMtlBuffer());
+            try l.forward(
+                cache.input.slice[0..current_slice.len], cache.input.getMtlBuffer(),
+                cache.activated_output.slice[0..total_output_size], cache.activated_output.getMtlBuffer()
+            );
 
-            current_slice = cache.activated_output.slice;
+            current_slice = cache.activated_output.slice[0..total_output_size];
             current_buf = cache.activated_output.getMtlBuffer();
         }
 
         // Copy final output to provided buffer
         const last_cache = self.caches.items[self.layers.items.len - 1].?;
-        const final_slice = last_cache.activated_output.slice;
-        const last_layer_output_size = self.layers.items[self.layers.items.len - 1].outputSize();
-        const final_seq_len = final_slice.len / last_layer_output_size;
+        const final_layer_output_size = self.layers.items[self.layers.items.len - 1].outputSize();
+        const total_final_size = current_slice.len;
+        const final_seq_len = total_final_size / final_layer_output_size;
 
         // Sync final output from GPU to CPU slice
         // Only wait for completion IF we are not in a larger batch
         if (self.backend.metal_ctx) |ctx| {
             if (ctx.active_command_buffer == null) {
                 try self.backend.endCommandBatch();
-                try self.backend.copyData(final_slice, last_cache.activated_output.getMtlBuffer(), final_slice, null);
+                try self.backend.copyData(@constCast(current_slice), last_cache.activated_output.getMtlBuffer(), @constCast(current_slice), null);
             }
         } else {
             // CPU mode or already in a batch - the caller will call endCommandBatch
         }
 
-        const out_len = @min(output.len, final_slice.len);
-        if (final_seq_len > 1 and output.len == last_layer_output_size) {
+        const out_len = @min(output.len, total_final_size);
+        if (final_seq_len > 1 and output.len == final_layer_output_size) {
             // Many-to-one: only copy the last step of the sequence
-            const last_step_start = (final_seq_len - 1) * last_layer_output_size;
-            @memcpy(output, final_slice[last_step_start .. last_step_start + last_layer_output_size]);
+            const last_step_start = (final_seq_len - 1) * final_layer_output_size;
+            @memcpy(output, current_slice[last_step_start .. last_step_start + final_layer_output_size]);
         } else {
-            @memcpy(output[0..out_len], final_slice[0..out_len]);
+            @memcpy(output[0..out_len], current_slice[0..out_len]);
         }
     }
 
@@ -405,8 +408,32 @@ pub const Network = struct {
         var grad = self.grad_work_1.?;
         var next_grad = self.grad_work_2.?;
 
-        // Compute gradient of loss w.r.t output for the entire sequence
-        try self.backend.lossBackward(loss_fn, output, output_buf, target, null, grad.slice[0..output.len], grad.getMtlBuffer());
+        // Compute gradient of loss w.r.t output
+        // Handle many-to-one vs sequence-to-sequence
+        const final_layer = self.layers.items[last_layer_idx];
+        const final_layer_output_size = final_layer.outputSize();
+        const total_output_size = output.len;
+        const final_seq_len = total_output_size / final_layer_output_size;
+
+        if (final_seq_len > 1 and target.len == final_layer_output_size) {
+            // Many-to-one: only compute gradient for the last step
+            @memset(grad.slice[0..total_output_size], 0);
+            const last_step_start = (final_seq_len - 1) * final_layer_output_size;
+            try self.backend.lossBackward(
+                loss_fn,
+                output[last_step_start .. last_step_start + final_layer_output_size],
+                output_buf, // Offset handled by getBuffer if possible, but wait...
+                target,
+                null,
+                grad.slice[last_step_start .. last_step_start + final_layer_output_size],
+                grad.getMtlBuffer()
+            );
+            // Sync back to GPU if necessary
+            try self.backend.copyData(grad.slice[0..total_output_size], null, grad.slice[0..total_output_size], grad.getMtlBuffer());
+        } else {
+            // Sequence-to-sequence or single output
+            try self.backend.lossBackward(loss_fn, output, output_buf, target, null, grad.slice[0..output.len], grad.getMtlBuffer());
+        }
 
         // Backpropagate through layers in reverse order
         var i: usize = self.layers.items.len;
@@ -458,19 +485,69 @@ pub const Network = struct {
         // Compute gradients
         try self.computeGradients(target, loss_fn);
 
-        // Update weights using GPU-accelerated SGD if available
-        const weight_decay: f32 = 0.0;
+        // End command batch and wait for completion BEFORE gradient clipping
+        try self.backend.endCommandBatch();
+
+        // Optional: Gradient clipping to prevent explosion (common in RNNs)
+        const max_norm: f32 = 1.0;
+        var total_norm: f32 = 0.0;
         for (self.layers.items) |l| {
-            try l.updateWeights(learning_rate, weight_decay);
+            const gw = l.getGradWeights();
+            const gb = l.getGradBias();
+            for (gw.slice) |g| total_norm += g * g;
+            for (gb.slice) |g| total_norm += g * g;
+        }
+        total_norm = @sqrt(total_norm);
+
+        if (total_norm > max_norm) {
+            const clip_factor = max_norm / (total_norm + 1e-6);
+            for (self.layers.items) |l| {
+                const gw = l.getGradWeights();
+                const gb = l.getGradBias();
+                for (gw.slice) |*g| g.* *= clip_factor;
+                for (gb.slice) |*g| g.* *= clip_factor;
+                // Sync clipped gradients back to GPU if necessary
+                try self.backend.copyData(gw.slice, null, gw.slice, gw.getMtlBuffer());
+                try self.backend.copyData(gb.slice, null, gb.slice, gb.getMtlBuffer());
+            }
+        }
+
+        // Start a new batch for weight updates
+        try self.backend.beginCommandBatch();
+
+        // Update weights using optimizers
+        for (self.layers.items, 0..) |*l, i| {
+            if (self.optimizers.items[i]) |*opt| {
+                try opt.step(l, learning_rate);
+            } else {
+                // Default to SGD if no optimizer is set
+                var opt = optimizer.Optimizer{ .sgd = .{ .momentum = 0.0 } };
+                try opt.step(l, learning_rate);
+            }
         }
 
         // End command batch and wait for completion BEFORE calculating loss
         try self.backend.endCommandBatch();
 
-        // Sync output after batch completion
-        // Note: forward() already handled the sync if it was in a batch,
-        // and also handled many-to-one mapping if output.len < final_slice.len.
-        // No need to sync again here with potentially mismatched sizes.
+        // Sync final output from GPU to CPU to ensure loss calculation is accurate
+        if (self.backend.type == .gpu and self.backend.type.gpu == .metal) {
+            const last_cache = self.caches.items[self.layers.items.len - 1].?;
+            const last_layer_output_size = self.layers.items[self.layers.items.len - 1].outputSize();
+            const total_final_size = last_cache.activated_output.slice.len;
+            const final_seq_len = total_final_size / last_layer_output_size;
+
+            // Sync the GPU buffer to the Tensor's CPU slice
+            try self.backend.copyData(last_cache.activated_output.slice, last_cache.activated_output.getMtlBuffer(), last_cache.activated_output.slice, null);
+
+            // Update the output buffer provided to trainStep
+            if (final_seq_len > 1 and output.len == last_layer_output_size) {
+                const last_step_start = (final_seq_len - 1) * last_layer_output_size;
+                @memcpy(output, last_cache.activated_output.slice[last_step_start .. last_step_start + last_layer_output_size]);
+            } else {
+                const out_len = @min(output.len, total_final_size);
+                @memcpy(output[0..out_len], last_cache.activated_output.slice[0..out_len]);
+            }
+        }
 
         const l_val = try loss_fn.forward(output, target);
         if (std.math.isNan(l_val)) {

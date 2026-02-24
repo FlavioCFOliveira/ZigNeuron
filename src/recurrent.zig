@@ -104,7 +104,7 @@ pub const VanillaRNN = struct {
         const batch_size = 1;
 
         // Initial hidden state h_0 is all zeros
-        @memset(self.h_prev_work.slice, 0);
+        try self.backend.clear(self.h_prev_work.slice, self.h_prev_work.getMtlBuffer());
 
         for (0..seq_len) |t| {
             // If output buffer is large enough, store all hidden states (many-to-many)
@@ -124,7 +124,8 @@ pub const VanillaRNN = struct {
                 x_t, input_buf,
                 self.weights_ih.slice, self.weights_ih.getMtlBuffer(),
                 h_t, output_buf,
-                batch_size, hidden_size, self.input_size
+                batch_size, hidden_size, self.input_size,
+                false
             );
 
             // 2. tmp_hh = W_hh * h_{t-1}
@@ -132,7 +133,8 @@ pub const VanillaRNN = struct {
                 self.h_prev_work.slice, self.h_prev_work.getMtlBuffer(),
                 self.weights_hh.slice, self.weights_hh.getMtlBuffer(),
                 self.tmp_hh_work.slice, self.tmp_hh_work.getMtlBuffer(),
-                batch_size, hidden_size, hidden_size
+                batch_size, hidden_size, hidden_size,
+                false
             );
 
             // 3. h_t = tanh(h_t + tmp_hh + bias)
@@ -159,7 +161,7 @@ pub const VanillaRNN = struct {
         const hidden_size = self.hidden_size;
 
         // Reset grad_h_next for the beginning of BPTT
-        @memset(self.grad_h_next.slice, 0);
+        try self.backend.clear(self.grad_h_next.slice, self.grad_h_next.getMtlBuffer());
 
         var i: usize = seq_len;
         while (i > 0) {
@@ -185,7 +187,8 @@ pub const VanillaRNN = struct {
                 x_t, input_buf,
                 self.grad_after_act_work.slice, self.grad_after_act_work.getMtlBuffer(),
                 self.grad_weights_ih.slice, self.grad_weights_ih.getMtlBuffer(),
-                self.input_size, hidden_size, 1
+                self.input_size, hidden_size, 1,
+                true
             );
 
             try self.backend.accumulateBias(
@@ -199,7 +202,8 @@ pub const VanillaRNN = struct {
                     hp, h_states_buf,
                     self.grad_after_act_work.slice, self.grad_after_act_work.getMtlBuffer(),
                     self.grad_weights_hh.slice, self.grad_weights_hh.getMtlBuffer(),
-                    hidden_size, hidden_size, 1
+                    hidden_size, hidden_size, 1,
+                    true
                 );
 
                 // grad_h_prev = grad_after_act * W_hh^T
@@ -207,10 +211,12 @@ pub const VanillaRNN = struct {
                     self.grad_after_act_work.slice, self.grad_after_act_work.getMtlBuffer(),
                     self.weights_hh.slice, self.weights_hh.getMtlBuffer(),
                     self.grad_h_next.slice, self.grad_h_next.getMtlBuffer(),
-                    1, hidden_size, hidden_size
+                    1, hidden_size, hidden_size,
+                    false
                 );
             } else {
                 @memset(self.grad_h_next.slice, 0);
+                try self.backend.copyData(self.grad_h_next.slice, null, self.grad_h_next.slice, self.grad_h_next.getMtlBuffer());
             }
 
             // 4. Compute grad_input_t = grad_after_act * W_ih^T
@@ -219,7 +225,8 @@ pub const VanillaRNN = struct {
                 self.grad_after_act_work.slice, self.grad_after_act_work.getMtlBuffer(),
                 self.weights_ih.slice, self.weights_ih.getMtlBuffer(),
                 gi_t, grad_input_buf,
-                1, self.input_size, hidden_size
+                1, self.input_size, hidden_size,
+                false
             );
         }
     }
@@ -352,12 +359,13 @@ pub const LSTM = struct {
             input, input_buf,
             self.weights_ih.slice, self.weights_ih.getMtlBuffer(),
             self.gate_activations.slice, self.gate_activations.getMtlBuffer(),
-            seq_len, 4 * hidden_size, self.input_size
+            seq_len, 4 * hidden_size, self.input_size,
+            false
         );
 
         // Initial states are zero
-        @memset(self.cell_states.slice[0..hidden_size], 0);
-        @memset(self.h_prev_work.slice, 0);
+        try self.backend.clear(self.cell_states.slice[0..hidden_size], self.cell_states.getMtlBuffer());
+        try self.backend.clear(self.h_prev_work.slice, self.h_prev_work.getMtlBuffer());
 
         for (0..seq_len) |t| {
             const gates_t = self.gate_activations.slice[t * 4 * hidden_size .. (t + 1) * 4 * hidden_size];
@@ -380,7 +388,8 @@ pub const LSTM = struct {
                 self.h_prev_work.slice, self.h_prev_work.getMtlBuffer(),
                 self.weights_hh.slice, self.weights_hh.getMtlBuffer(),
                 self.gates_hh_work.slice, self.gates_hh_work.getMtlBuffer(),
-                batch_size, 4 * hidden_size, hidden_size
+                batch_size, 4 * hidden_size, hidden_size,
+                false
             );
 
             // 3. Combined LSTM step
@@ -410,8 +419,8 @@ pub const LSTM = struct {
         const seq_len = input.len / self.input_size;
         const hidden_size = self.hidden_size;
 
-        @memset(self.grad_h_next.slice, 0);
-        @memset(self.grad_c_next.slice, 0);
+        try self.backend.clear(self.grad_h_next.slice, self.grad_h_next.getMtlBuffer());
+        try self.backend.clear(self.grad_c_next.slice, self.grad_c_next.getMtlBuffer());
 
         var i: usize = seq_len;
         while (i > 0) {
@@ -441,18 +450,18 @@ pub const LSTM = struct {
             );
 
             // 2. Accumulate gradients for W_ih, W_hh, bias
-            try self.backend.matMulTransposeA(x_t, input_buf, d_gates, self.grad_gates_work.getMtlBuffer(), self.grad_weights_ih.slice, self.grad_weights_ih.getMtlBuffer(), self.input_size, 4 * hidden_size, 1);
+            try self.backend.matMulTransposeA(x_t, input_buf, d_gates, self.grad_gates_work.getMtlBuffer(), self.grad_weights_ih.slice, self.grad_weights_ih.getMtlBuffer(), self.input_size, 4 * hidden_size, 1, true);
             if (h_prev) |hp| {
-                try self.backend.matMulTransposeA(hp, h_states_buf, d_gates, self.grad_gates_work.getMtlBuffer(), self.grad_weights_hh.slice, self.grad_weights_hh.getMtlBuffer(), hidden_size, 4 * hidden_size, 1);
+                try self.backend.matMulTransposeA(hp, h_states_buf, d_gates, self.grad_gates_work.getMtlBuffer(), self.grad_weights_hh.slice, self.grad_weights_hh.getMtlBuffer(), hidden_size, 4 * hidden_size, 1, true);
             }
             try self.backend.accumulateBias(self.grad_bias.slice, self.grad_bias.getMtlBuffer(), d_gates, self.grad_gates_work.getMtlBuffer());
 
             // 3. Compute grad_h_next for next BPTT iteration: d_h_prev = d_gates * W_hh^T
-            try self.backend.matMulTransposeB(d_gates, self.grad_gates_work.getMtlBuffer(), self.weights_hh.slice, self.weights_hh.getMtlBuffer(), self.grad_h_next.slice, self.grad_h_next.getMtlBuffer(), 1, hidden_size, 4 * hidden_size);
+            try self.backend.matMulTransposeB(d_gates, self.grad_gates_work.getMtlBuffer(), self.weights_hh.slice, self.weights_hh.getMtlBuffer(), self.grad_h_next.slice, self.grad_h_next.getMtlBuffer(), 1, hidden_size, 4 * hidden_size, false);
 
             // 4. Compute grad_input_t = d_gates * W_ih^T
             const gi_t = grad_input[t * self.input_size .. (t + 1) * self.input_size];
-            try self.backend.matMulTransposeB(d_gates, self.grad_gates_work.getMtlBuffer(), self.weights_ih.slice, self.weights_ih.getMtlBuffer(), gi_t, grad_input_buf, 1, self.input_size, 4 * hidden_size);
+            try self.backend.matMulTransposeB(d_gates, self.grad_gates_work.getMtlBuffer(), self.weights_ih.slice, self.weights_ih.getMtlBuffer(), gi_t, grad_input_buf, 1, self.input_size, 4 * hidden_size, false);
         }
     }
 };
@@ -568,7 +577,7 @@ pub const GRU = struct {
         const hidden_size = self.hidden_size;
         const batch_size = 1;
 
-        @memset(self.h_prev_work.slice, 0);
+        try self.backend.clear(self.h_prev_work.slice, self.h_prev_work.getMtlBuffer());
 
         for (0..seq_len) |t| {
             const h_t = if (output.len >= seq_len * hidden_size)
@@ -589,11 +598,12 @@ pub const GRU = struct {
                 x_t, input_buf,
                 self.weights_ih.slice, self.weights_ih.getMtlBuffer(),
                 gates_t, self.gate_activations.getMtlBuffer(),
-                batch_size, 3 * hidden_size, self.input_size
+                batch_size, 3 * hidden_size, self.input_size,
+                false
             );
 
             // 2. gates_hh = W_hh * h_{t-1}
-            try self.backend.matMul(self.h_prev_work.slice, self.h_prev_work.getMtlBuffer(), self.weights_hh.slice, self.weights_hh.getMtlBuffer(), self.gates_hh_work.slice, self.gates_hh_work.getMtlBuffer(), batch_size, 3 * hidden_size, hidden_size);
+            try self.backend.matMul(self.h_prev_work.slice, self.h_prev_work.getMtlBuffer(), self.weights_hh.slice, self.weights_hh.getMtlBuffer(), self.gates_hh_work.slice, self.gates_hh_work.getMtlBuffer(), batch_size, 3 * hidden_size, hidden_size, false);
 
             // 3. Combined GRU forward step
             // Note: gates_t already contains W_ih * x_t
@@ -622,7 +632,7 @@ pub const GRU = struct {
         const seq_len = input.len / self.input_size;
         const hidden_size = self.hidden_size;
 
-        @memset(self.grad_h_next.slice, 0);
+        try self.backend.clear(self.grad_h_next.slice, self.grad_h_next.getMtlBuffer());
 
         var i: usize = seq_len;
         while (i > 0) {
@@ -654,15 +664,15 @@ pub const GRU = struct {
             );
 
             // Accumulate gradients for W_ih, W_hh, bias
-            try self.backend.matMulTransposeA(x_t, input_buf, d_gates, self.grad_gates_work.getMtlBuffer(), self.grad_weights_ih.slice, self.grad_weights_ih.getMtlBuffer(), self.input_size, 3 * hidden_size, 1);
+            try self.backend.matMulTransposeA(x_t, input_buf, d_gates, self.grad_gates_work.getMtlBuffer(), self.grad_weights_ih.slice, self.grad_weights_ih.getMtlBuffer(), self.input_size, 3 * hidden_size, 1, true);
             if (h_prev) |hp| {
-                try self.backend.matMulTransposeA(hp, h_prev_buf, d_gates_hh, self.grad_gates_hh_work.getMtlBuffer(), self.grad_weights_hh.slice, self.grad_weights_hh.getMtlBuffer(), hidden_size, 3 * hidden_size, 1);
+                try self.backend.matMulTransposeA(hp, h_prev_buf, d_gates_hh, self.grad_gates_hh_work.getMtlBuffer(), self.grad_weights_hh.slice, self.grad_weights_hh.getMtlBuffer(), hidden_size, 3 * hidden_size, 1, true);
             }
             try self.backend.accumulateBias(self.grad_bias.slice, self.grad_bias.getMtlBuffer(), d_gates, self.grad_gates_work.getMtlBuffer());
 
             // Compute grad_input_t = d_gates * W_ih^T
             const gi_t = grad_input[t * self.input_size .. (t + 1) * self.input_size];
-            try self.backend.matMulTransposeB(d_gates, self.grad_gates_work.getMtlBuffer(), self.weights_ih.slice, self.weights_ih.getMtlBuffer(), gi_t, grad_input_buf, 1, self.input_size, 3 * hidden_size);
+            try self.backend.matMulTransposeB(d_gates, self.grad_gates_work.getMtlBuffer(), self.weights_ih.slice, self.weights_ih.getMtlBuffer(), gi_t, grad_input_buf, 1, self.input_size, 3 * hidden_size, false);
         }
     }
 };
@@ -684,6 +694,14 @@ pub const RecurrentLayer = union(RecurrentLayerType) {
             .rnn => |l| l.deinit(),
             .lstm => |l| l.deinit(),
             .gru => |l| l.deinit(),
+        }
+    }
+
+    pub fn getBackend(self: RecurrentLayer) backend_module.Backend {
+        switch (self) {
+            .rnn => |l| return l.backend,
+            .lstm => |l| return l.backend,
+            .gru => |l| return l.backend,
         }
     }
 
@@ -874,8 +892,7 @@ pub const Seq2seq = struct {
 
         // 3. Decoder forward
         const dec_input = self.dec_input_work.slice[0 .. dec_seq_len * hidden_size];
-        @memset(dec_input, 0);
-        try self.backend.copyData(dec_input, null, dec_input, self.dec_input_work.getMtlBuffer());
+        try self.backend.clear(dec_input, self.dec_input_work.getMtlBuffer());
 
         try self.decoder.forward(dec_input, self.dec_input_work.getMtlBuffer(), output, output_buf);
     }
@@ -981,37 +998,26 @@ pub const Bidirectional = struct {
 
         // 2. Backward pass for backward layer (process reversed input)
         const reversed_input = self.reversed_input_work.slice[0..input.len];
-        for (0..seq_len) |t| {
-            const src_t = seq_len - 1 - t;
-            @memcpy(reversed_input[t * self.input_size .. (t + 1) * self.input_size], input[src_t * self.input_size .. (src_t + 1) * self.input_size]);
-        }
-        // Sync to GPU if needed
-        try self.backend.copyData(reversed_input, null, reversed_input, self.reversed_input_work.getMtlBuffer());
+        try self.backend.reverse(input, input_buf, reversed_input, self.reversed_input_work.getMtlBuffer(), seq_len, self.input_size);
 
         const bw_output_raw = self.bw_output_raw_work.slice[0 .. seq_len * hidden_size];
         try self.bw_layer.forward(reversed_input, self.reversed_input_work.getMtlBuffer(), bw_output_raw, self.bw_output_raw_work.getMtlBuffer());
 
         // 3. Reverse backward output and concatenate
-        // Sync back to CPU for concatenation if needed (if output_buf is null)
-        if (output_buf == null) {
-            try self.backend.copyData(fw_output, self.fw_output_work.getMtlBuffer(), fw_output, null);
-            try self.backend.copyData(bw_output_raw, self.bw_output_raw_work.getMtlBuffer(), bw_output_raw, null);
-        }
+        // Re-use reversed_input_work as a temporary buffer for reversed bw_output if needed,
+        // but we can just use another temporary from our pool if we want to be clean.
+        // Actually, we added a concat kernel that handles the reversing or we can just reverse first.
+        // Let's reverse bw_output_raw into another buffer first.
+        // We can reuse grad_bw_rev_work as it's not used in forward.
+        const bw_output_reversed = self.grad_bw_rev_work.slice[0 .. seq_len * hidden_size];
+        try self.backend.reverse(bw_output_raw, self.bw_output_raw_work.getMtlBuffer(), bw_output_reversed, self.grad_bw_rev_work.getMtlBuffer(), seq_len, hidden_size);
 
-        for (0..seq_len) |t| {
-            const fw_t = fw_output[t * hidden_size .. (t + 1) * hidden_size];
-            const src_t = seq_len - 1 - t;
-            const bw_t = bw_output_raw[src_t * hidden_size .. (src_t + 1) * hidden_size];
-
-            const out_t = output[t * 2 * hidden_size .. (t + 1) * 2 * hidden_size];
-            @memcpy(out_t[0..hidden_size], fw_t);
-            @memcpy(out_t[hidden_size .. 2 * hidden_size], bw_t);
-        }
-
-        // Sync concatenated output to GPU if needed
-        if (output_buf != null) {
-            try self.backend.copyData(output, null, output, output_buf);
-        }
+        try self.backend.concat(
+            fw_output, self.fw_output_work.getMtlBuffer(),
+            bw_output_reversed, self.grad_bw_rev_work.getMtlBuffer(),
+            output, output_buf,
+            hidden_size, hidden_size, seq_len
+        );
     }
 
     pub fn backward(self: *Bidirectional,
@@ -1024,71 +1030,53 @@ pub const Bidirectional = struct {
         const hidden_size = self.hidden_size;
 
         // 1. Split grad_output and h_states
-        // Sync from GPU if needed
-        if (grad_output_buf != null) {
-             // We need to work on slices, so sync to local buffer first
-             try self.backend.copyData(grad_output, grad_output_buf, @constCast(grad_output), null);
-        }
-        if (h_states_buf != null) {
-             try self.backend.copyData(h_states, h_states_buf, @constCast(h_states), null);
-        }
-
         const grad_fw = self.grad_fw_work.slice[0 .. seq_len * hidden_size];
+        const grad_bw_rev_tmp = self.bw_h_states_rev_work.slice[0 .. seq_len * hidden_size]; // Reuse as temp
+        try self.backend.split(
+            grad_output, grad_output_buf,
+            grad_fw, self.grad_fw_work.getMtlBuffer(),
+            grad_bw_rev_tmp, self.bw_h_states_rev_work.getMtlBuffer(),
+            hidden_size, hidden_size, seq_len
+        );
+
+        // Reverse bw gradient part
         const grad_bw_rev = self.grad_bw_rev_work.slice[0 .. seq_len * hidden_size];
+        try self.backend.reverse(grad_bw_rev_tmp, self.bw_h_states_rev_work.getMtlBuffer(), grad_bw_rev, self.grad_bw_rev_work.getMtlBuffer(), seq_len, hidden_size);
+
         const fw_h_states = self.fw_h_states_work.slice[0 .. seq_len * hidden_size];
+        const bw_h_states_tmp = self.grad_input_bw_rev_work.slice[0 .. seq_len * hidden_size]; // Reuse as temp
+        try self.backend.split(
+            h_states, h_states_buf,
+            fw_h_states, self.fw_h_states_work.getMtlBuffer(),
+            bw_h_states_tmp, self.grad_input_bw_rev_work.getMtlBuffer(),
+            hidden_size, hidden_size, seq_len
+        );
+
+        // Reverse bw hidden states part
         const bw_h_states_rev = self.bw_h_states_rev_work.slice[0 .. seq_len * hidden_size];
-
-        for (0..seq_len) |t| {
-            const g_out_t = grad_output[t * 2 * hidden_size .. (t + 1) * 2 * hidden_size];
-            @memcpy(grad_fw[t * hidden_size .. (t + 1) * hidden_size], g_out_t[0..hidden_size]);
-
-            const bw_t = seq_len - 1 - t;
-            @memcpy(grad_bw_rev[bw_t * hidden_size .. (bw_t + 1) * hidden_size], g_out_t[hidden_size .. 2 * hidden_size]);
-
-            const h_t = h_states[t * 2 * hidden_size .. (t + 1) * 2 * hidden_size];
-            @memcpy(fw_h_states[t * hidden_size .. (t + 1) * hidden_size], h_t[0..hidden_size]);
-            @memcpy(bw_h_states_rev[bw_t * hidden_size .. (bw_t + 1) * hidden_size], h_t[hidden_size .. 2 * hidden_size]);
-        }
-
-        // Sync split buffers to GPU
-        try self.backend.copyData(grad_fw, null, grad_fw, self.grad_fw_work.getMtlBuffer());
-        try self.backend.copyData(grad_bw_rev, null, grad_bw_rev, self.grad_bw_rev_work.getMtlBuffer());
-        try self.backend.copyData(fw_h_states, null, fw_h_states, self.fw_h_states_work.getMtlBuffer());
-        try self.backend.copyData(bw_h_states_rev, null, bw_h_states_rev, self.bw_h_states_rev_work.getMtlBuffer());
+        try self.backend.reverse(bw_h_states_tmp, self.grad_input_bw_rev_work.getMtlBuffer(), bw_h_states_rev, self.bw_h_states_rev_work.getMtlBuffer(), seq_len, hidden_size);
 
         // 3. Reversed input for backward layer
         const reversed_input = self.reversed_input_work.slice[0..input.len];
-        for (0..seq_len) |t| {
-            const src_t = seq_len - 1 - t;
-            @memcpy(reversed_input[t * self.input_size .. (t + 1) * self.input_size], input[src_t * self.input_size .. (src_t + 1) * self.input_size]);
-        }
-        try self.backend.copyData(reversed_input, null, reversed_input, self.reversed_input_work.getMtlBuffer());
+        try self.backend.reverse(input, input_buf, reversed_input, self.reversed_input_work.getMtlBuffer(), seq_len, self.input_size);
 
         // 4. Backprop through both layers
         const grad_input_fw = self.grad_input_fw_work.slice[0..input.len];
         try self.fw_layer.backward(input, input_buf, grad_fw, self.grad_fw_work.getMtlBuffer(), grad_input_fw, self.grad_input_fw_work.getMtlBuffer(), fw_h_states, self.fw_h_states_work.getMtlBuffer());
 
-        const grad_input_bw_rev = self.grad_input_bw_rev_work.slice[0..input.len];
-        try self.bw_layer.backward(reversed_input, self.reversed_input_work.getMtlBuffer(), grad_bw_rev, self.grad_bw_rev_work.getMtlBuffer(), grad_input_bw_rev, self.grad_input_bw_rev_work.getMtlBuffer(), bw_h_states_rev, self.bw_h_states_rev_work.getMtlBuffer());
+        const grad_input_bw_rev = self.bw_h_states_rev_work.slice[0..input.len]; // Reuse bw_h_states_rev_work for raw bw input grad
+        try self.bw_layer.backward(reversed_input, self.reversed_input_work.getMtlBuffer(), grad_bw_rev, self.grad_bw_rev_work.getMtlBuffer(), grad_input_bw_rev, self.bw_h_states_rev_work.getMtlBuffer(), bw_h_states_rev, self.bw_h_states_rev_work.getMtlBuffer());
 
-        // 5. Combine grad_input
-        // Sync back to CPU for combination
-        try self.backend.copyData(grad_input_fw, self.grad_input_fw_work.getMtlBuffer(), grad_input_fw, null);
-        try self.backend.copyData(grad_input_bw_rev, self.grad_input_bw_rev_work.getMtlBuffer(), grad_input_bw_rev, null);
+        // Reverse back grad_input_bw_rev
+        const grad_input_bw = self.grad_input_bw_rev_work.slice[0..input.len];
+        try self.backend.reverse(grad_input_bw_rev, self.bw_h_states_rev_work.getMtlBuffer(), grad_input_bw, self.grad_input_bw_rev_work.getMtlBuffer(), seq_len, self.input_size);
 
-        for (0..seq_len) |t| {
-            const fw_gi_t = grad_input_fw[t * self.input_size .. (t + 1) * self.input_size];
-            const bw_t = seq_len - 1 - t;
-            const bw_gi_t = grad_input_bw_rev[bw_t * self.input_size .. (bw_t + 1) * self.input_size];
-
-            const gi_t = grad_input[t * self.input_size .. (t + 1) * self.input_size];
-            for (gi_t, fw_gi_t, bw_gi_t) |*out, f, b| out.* = f + b;
-        }
-
-        // Sync final grad_input to GPU
-        if (grad_input_buf != null) {
-            try self.backend.copyData(grad_input, null, grad_input, grad_input_buf);
-        }
+        // 5. Combine grad_input: grad_input = grad_input_fw + grad_input_bw
+        try self.backend.elementWise(.add,
+            grad_input_fw, self.grad_input_fw_work.getMtlBuffer(),
+            grad_input_bw, self.grad_input_bw_rev_work.getMtlBuffer(),
+            grad_input, grad_input_buf
+        );
     }
 };
 
@@ -1187,21 +1175,12 @@ pub const TwoPath = struct {
         const out2 = self.out2_work.slice[0 .. seq_len * self.hidden_size2];
         try self.path2.forward(input, input_buf, out2, self.out2_work.getMtlBuffer());
 
-        // Sync back to CPU for concatenation if needed
-        if (output_buf == null) {
-            try self.backend.copyData(out1, self.out1_work.getMtlBuffer(), out1, null);
-            try self.backend.copyData(out2, self.out2_work.getMtlBuffer(), out2, null);
-        }
-
-        for (0..seq_len) |t| {
-            const out_t = output[t * (self.hidden_size1 + self.hidden_size2) .. (t + 1) * (self.hidden_size1 + self.hidden_size2)];
-            @memcpy(out_t[0..self.hidden_size1], out1[t * self.hidden_size1 .. (t + 1) * self.hidden_size1]);
-            @memcpy(out_t[self.hidden_size1..], out2[t * self.hidden_size2 .. (t + 1) * self.hidden_size2]);
-        }
-
-        if (output_buf != null) {
-            try self.backend.copyData(output, null, output, output_buf);
-        }
+        try self.backend.concat(
+            out1, self.out1_work.getMtlBuffer(),
+            out2, self.out2_work.getMtlBuffer(),
+            output, output_buf,
+            self.hidden_size1, self.hidden_size2, seq_len
+        );
     }
 
     pub fn backward(self: *TwoPath,
@@ -1213,33 +1192,23 @@ pub const TwoPath = struct {
         const seq_len = input.len / self.input_size;
 
         // Split grad_output and h_states
-        if (grad_output_buf != null) {
-             try self.backend.copyData(grad_output, grad_output_buf, @constCast(grad_output), null);
-        }
-        if (h_states_buf != null) {
-             try self.backend.copyData(h_states, h_states_buf, @constCast(h_states), null);
-        }
-
         const grad_h1 = self.grad_h1_work.slice[0 .. seq_len * self.hidden_size1];
         const grad_h2 = self.grad_h2_work.slice[0 .. seq_len * self.hidden_size2];
+        try self.backend.split(
+            grad_output, grad_output_buf,
+            grad_h1, self.grad_h1_work.getMtlBuffer(),
+            grad_h2, self.grad_h2_work.getMtlBuffer(),
+            self.hidden_size1, self.hidden_size2, seq_len
+        );
+
         const h1_states = self.h1_states_work.slice[0 .. seq_len * self.hidden_size1];
         const h2_states = self.h2_states_work.slice[0 .. seq_len * self.hidden_size2];
-
-        for (0..seq_len) |t| {
-            const g_out_t = grad_output[t * (self.hidden_size1 + self.hidden_size2) .. (t + 1) * (self.hidden_size1 + self.hidden_size2)];
-            @memcpy(grad_h1[t * self.hidden_size1 .. (t + 1) * self.hidden_size1], g_out_t[0..self.hidden_size1]);
-            @memcpy(grad_h2[t * self.hidden_size2 .. (t + 1) * self.hidden_size2], g_out_t[self.hidden_size1..]);
-
-            const h_t = h_states[t * (self.hidden_size1 + self.hidden_size2) .. (t + 1) * (self.hidden_size1 + self.hidden_size2)];
-            @memcpy(h1_states[t * self.hidden_size1 .. (t + 1) * self.hidden_size1], h_t[0..self.hidden_size1]);
-            @memcpy(h2_states[t * self.hidden_size2 .. (t + 1) * self.hidden_size2], h_t[self.hidden_size1..]);
-        }
-
-        // Sync to GPU
-        try self.backend.copyData(grad_h1, null, grad_h1, self.grad_h1_work.getMtlBuffer());
-        try self.backend.copyData(grad_h2, null, grad_h2, self.grad_h2_work.getMtlBuffer());
-        try self.backend.copyData(h1_states, null, h1_states, self.h1_states_work.getMtlBuffer());
-        try self.backend.copyData(h2_states, null, h2_states, self.h2_states_work.getMtlBuffer());
+        try self.backend.split(
+            h_states, h_states_buf,
+            h1_states, self.h1_states_work.getMtlBuffer(),
+            h2_states, self.h2_states_work.getMtlBuffer(),
+            self.hidden_size1, self.hidden_size2, seq_len
+        );
 
         const gi1 = self.gi1_work.slice[0..input.len];
         try self.path1.backward(input, input_buf, grad_h1, self.grad_h1_work.getMtlBuffer(), gi1, self.gi1_work.getMtlBuffer(), h1_states, self.h1_states_work.getMtlBuffer());
@@ -1247,14 +1216,11 @@ pub const TwoPath = struct {
         const gi2 = self.gi2_work.slice[0..input.len];
         try self.path2.backward(input, input_buf, grad_h2, self.grad_h2_work.getMtlBuffer(), gi2, self.gi2_work.getMtlBuffer(), h2_states, self.h2_states_work.getMtlBuffer());
 
-        // Sync back to CPU for combination
-        try self.backend.copyData(gi1, self.gi1_work.getMtlBuffer(), gi1, null);
-        try self.backend.copyData(gi2, self.gi2_work.getMtlBuffer(), gi2, null);
-
-        for (grad_input, gi1, gi2) |*out, g1, g2| out.* = g1 + g2;
-
-        if (grad_input_buf != null) {
-            try self.backend.copyData(grad_input, null, grad_input, grad_input_buf);
-        }
+        // Combine grad_input: grad_input = gi1 + gi2
+        try self.backend.elementWise(.add,
+            gi1, self.gi1_work.getMtlBuffer(),
+            gi2, self.gi2_work.getMtlBuffer(),
+            grad_input, grad_input_buf
+        );
     }
 };

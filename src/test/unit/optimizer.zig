@@ -23,22 +23,23 @@ test "optimizer sgd with momentum" {
     const allocator = testing.allocator;
     var lyr = try layer.Dense.init(allocator, 2, 1, .relu, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer lyr.deinit();
+    var l = layer.Layer{ .dense = lyr };
 
-    try sgd.init(allocator, lyr);
+    try sgd.init(allocator, &l);
 
     lyr.grad_weights.slice[0] = 0.1;
     lyr.weights.slice[0] = 0.5;
 
-    sgd.step(lyr, 0.01);
+    try sgd.step(&l, 0.01);
 
     try expectNear(lyr.weights.slice[0], 0.499, 0.0001);
 
     lyr.grad_weights.slice[0] = 0.2;
-    sgd.step(lyr, 0.01);
+    try sgd.step(&l, 0.01);
 
     try expectNear(lyr.weights.slice[0], 0.4961, 0.001);
 
-    sgd.deinit(allocator);
+    sgd.deinit();
 }
 
 test "optimizer adam basic" {
@@ -47,19 +48,20 @@ test "optimizer adam basic" {
     const allocator = testing.allocator;
     var lyr = try layer.Dense.init(allocator, 2, 1, .relu, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer lyr.deinit();
+    var l = layer.Layer{ .dense = lyr };
 
-    try adam.init(allocator, lyr);
+    try adam.init(allocator, &l);
 
     try testing.expect(adam.t == 0);
 
     lyr.grad_weights.slice[0] = 0.1;
     lyr.weights.slice[0] = 0.5;
 
-    adam.step(lyr, 0.001);
+    try adam.step(&l, 0.001);
 
     try testing.expect(adam.t == 1);
 
-    adam.deinit(allocator);
+    adam.deinit();
 }
 
 test "optimizer adam with known values" {
@@ -72,14 +74,15 @@ test "optimizer adam with known values" {
     const allocator = testing.allocator;
     var lyr = try layer.Dense.init(allocator, 1, 1, .relu, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer lyr.deinit();
+    var l = layer.Layer{ .dense = lyr };
 
-    try adam.init(allocator, lyr);
-    defer adam.deinit(allocator);
+    try adam.init(allocator, &l);
+    defer adam.deinit();
 
     lyr.weights.slice[0] = 0.5;
     lyr.grad_weights.slice[0] = 0.1;
 
-    adam.step(lyr, 0.001);
+    try adam.step(&l, 0.001);
 
     try testing.expect(lyr.weights.slice[0] < 0.5);
 }
@@ -89,24 +92,20 @@ test "optimizer rmsprop basic" {
 
     var lyr = try layer.Dense.init(allocator, 2, 1, .relu, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer lyr.deinit();
+    var l = layer.Layer{ .dense = lyr };
 
-    var rmsprop: optimizer.Rmsprop = .{
-        .g_weights = &.{},
-        .g_bias = &.{},
-    };
+    var rmsprop: optimizer.Rmsprop = .{};
 
-    try rmsprop.init(allocator, lyr);
-
-    try testing.expect(rmsprop.t == 0);
+    try rmsprop.init(allocator, &l);
 
     lyr.grad_weights.slice[0] = 0.1;
     lyr.weights.slice[0] = 0.5;
 
-    rmsprop.step(lyr, 0.001);
+    try rmsprop.step(&l, 0.001);
 
     try testing.expect(lyr.weights.slice[0] != 0.5);
 
-    rmsprop.deinit(allocator);
+    rmsprop.deinit();
 }
 
 test "optimizer sgd clears gradients after step" {
@@ -115,22 +114,23 @@ test "optimizer sgd clears gradients after step" {
 
     var lyr = try layer.Dense.init(allocator, 2, 1, .relu, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer lyr.deinit();
+    var l = layer.Layer{ .dense = lyr };
 
-    try sgd.init(allocator, lyr);
+    try sgd.init(allocator, &l);
 
     lyr.grad_weights.slice[0] = 0.5;
     lyr.weights.slice[0] = 1.0;
 
-    sgd.step(lyr, 0.1);
+    try sgd.step(&l, 0.1);
     const w1 = lyr.weights.slice[0];
 
     lyr.grad_weights.slice[0] = 0.3;
-    sgd.step(lyr, 0.1);
+    try sgd.step(&l, 0.1);
     const w2 = lyr.weights.slice[0];
 
     try testing.expect(w1 != w2);
 
-    sgd.deinit(allocator);
+    sgd.deinit();
 }
 
 test "optimizer adam: adaptive learning rate" {
@@ -139,21 +139,22 @@ test "optimizer adam: adaptive learning rate" {
 
     var lyr = try layer.Dense.init(allocator, 1, 1, .relu, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer lyr.deinit();
+    var l = layer.Layer{ .dense = lyr };
 
-    try adam.init(allocator, lyr);
+    try adam.init(allocator, &l);
 
     lyr.weights.slice[0] = 0.0;
     lyr.grad_weights.slice[0] = 0.1;
 
-    adam.step(lyr, 0.01);
+    try adam.step(&l, 0.01);
     const w1 = lyr.weights.slice[0];
 
-    adam.step(lyr, 0.01);
+    try adam.step(&l, 0.01);
     const w2 = lyr.weights.slice[0];
 
     try testing.expect(w1 != w2);
 
-    adam.deinit(allocator);
+    adam.deinit();
 }
 
 test "optimizer sgd vs no momentum" {
@@ -162,30 +163,32 @@ test "optimizer sgd vs no momentum" {
     var sgd_no_mom: optimizer.Sgd = .{};
     var lyr1 = try layer.Dense.init(allocator, 1, 1, .relu, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer lyr1.deinit();
+    var l1 = layer.Layer{ .dense = lyr1 };
 
-    try sgd_no_mom.init(allocator, lyr1);
+    try sgd_no_mom.init(allocator, &l1);
     lyr1.weights.slice[0] = 1.0;
     lyr1.grad_weights.slice[0] = 0.1;
 
-    sgd_no_mom.step(lyr1, 0.1);
+    try sgd_no_mom.step(&l1, 0.1);
     const w1_after = lyr1.weights.slice[0];
 
     var sgd_mom: optimizer.Sgd = .{ .momentum = 0.9 };
     var lyr2 = try layer.Dense.init(allocator, 1, 1, .relu, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer lyr2.deinit();
+    var l2 = layer.Layer{ .dense = lyr2 };
 
-    try sgd_mom.init(allocator, lyr2);
+    try sgd_mom.init(allocator, &l2);
     lyr2.weights.slice[0] = 1.0;
     lyr2.grad_weights.slice[0] = 0.1;
 
-    sgd_mom.step(lyr2, 0.1);
+    try sgd_mom.step(&l2, 0.1);
     const w2_after = lyr2.weights.slice[0];
 
     try testing.expect(w1_after != 1.0);
     try testing.expect(w2_after != 1.0);
 
-    sgd_no_mom.deinit(allocator);
-    sgd_mom.deinit(allocator);
+    sgd_no_mom.deinit();
+    sgd_mom.deinit();
 }
 
 test "optimizer: step interface" {
@@ -194,15 +197,16 @@ test "optimizer: step interface" {
 
     var lyr = try layer.Dense.init(allocator, 2, 1, .relu, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer lyr.deinit();
+    var l = layer.Layer{ .dense = lyr };
 
-    try opt.init(allocator, lyr);
+    try opt.init(allocator, &l);
     lyr.grad_weights.slice[0] = 0.1;
     lyr.weights.slice[0] = 0.5;
-    opt.step(lyr, 0.01);
+    try opt.step(&l, 0.01);
 
     try testing.expect(lyr.weights.slice[0] != 0.5);
 
-    opt.deinit(allocator, lyr);
+    opt.deinit();
 }
 
 test "optimizer: multiple layers with different sizes" {
@@ -211,18 +215,20 @@ test "optimizer: multiple layers with different sizes" {
 
     var lyr1 = try layer.Dense.init(allocator, 2, 3, .relu, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer lyr1.deinit();
+    var l1 = layer.Layer{ .dense = lyr1 };
 
     var lyr2 = try layer.Dense.init(allocator, 3, 1, .sigmoid, backend.Backend{ .type = .cpu, .metal_ctx = null });
     defer lyr2.deinit();
+    var l2 = layer.Layer{ .dense = lyr2 };
 
-    try sgd.init(allocator, lyr1);
-    try sgd.init(allocator, lyr2);
+    try sgd.init(allocator, &l1);
+    try sgd.init(allocator, &l2);
 
     @memset(lyr1.grad_weights.slice, 0.1);
     @memset(lyr2.grad_weights.slice, 0.1);
 
-    sgd.step(lyr1, 0.01);
-    sgd.step(lyr2, 0.01);
+    try sgd.step(&l1, 0.01);
+    try sgd.step(&l2, 0.01);
 
     var changed = false;
     for (lyr1.weights.slice) |w| {
@@ -242,5 +248,5 @@ test "optimizer: multiple layers with different sizes" {
     }
     try testing.expect(changed);
 
-    sgd.deinit(allocator);
+    sgd.deinit();
 }

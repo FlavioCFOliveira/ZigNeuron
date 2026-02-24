@@ -38,7 +38,7 @@ test "backend matmul cpu" {
     var cpu_backend = try backend.Backend.init(allocator);
     cpu_backend.type = .cpu;
     defer cpu_backend.deinit();
-    try cpu_backend.matMul(a, null, b, null, c, null, m, n, k);
+    try cpu_backend.matMul(a, null, b, null, c, null, m, n, k, false);
 
     var expected: f32 = 0;
     for (0..k) |p| {
@@ -217,7 +217,7 @@ test "backend matmul correctness" {
     const c = try testing.allocator.alloc(f32, 4);
     defer testing.allocator.free(c);
 
-    try cpu_backend.matMul(a, null, b, null, c, null, 2, 2, 3);
+    try cpu_backend.matMul(a, null, b, null, c, null, 2, 2, 3, false);
 
     for (c, expected) |actual, exp| {
         try expectNear(actual, exp, 0.0001);
@@ -242,7 +242,7 @@ test "backend matmul large matrix" {
     @memset(a_data, 1.0);
     @memset(b_data, 1.0);
 
-    try cpu_backend.matMul(a_data, null, b_data, null, c_data, null, size, size, size);
+    try cpu_backend.matMul(a_data, null, b_data, null, c_data, null, size, size, size, false);
 
     for (c_data) |val| {
         try expectNear(val, @as(f32, @floatFromInt(size)), 0.0001);

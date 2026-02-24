@@ -52,8 +52,8 @@ test "backend parity: matmul" {
     @memcpy(a_m.slice, a.slice);
     @memcpy(b_m.slice, b.slice);
 
-    try cpu_backend.matMul(a.slice, a.getMtlBuffer(), b.slice, b.getMtlBuffer(), c_cpu.slice, c_cpu.getMtlBuffer(), m, n, k);
-    try metal_backend.matMul(a_m.slice, a_m.getMtlBuffer(), b_m.slice, b_m.getMtlBuffer(), c_metal.slice, c_metal.getMtlBuffer(), m, n, k);
+    try cpu_backend.matMul(a.slice, a.getMtlBuffer(), b.slice, b.getMtlBuffer(), c_cpu.slice, c_cpu.getMtlBuffer(), m, n, k, false);
+    try metal_backend.matMul(a_m.slice, a_m.getMtlBuffer(), b_m.slice, b_m.getMtlBuffer(), c_metal.slice, c_metal.getMtlBuffer(), m, n, k, false);
 
     try compareSlices(c_cpu.slice, c_metal.slice, 1e-4);
 }
