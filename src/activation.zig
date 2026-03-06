@@ -46,9 +46,15 @@ pub const Activation = union(enum) {
             sum += output[i];
         }
 
-        // Normalize
-        for (0..output.len) |i| {
-            output[i] /= sum;
+        // Normalize with protection against division by zero
+        if (sum > 0) {
+            for (0..output.len) |i| {
+                output[i] /= sum;
+            }
+        } else {
+            // If sum is 0 (e.g., all inputs were -inf), set uniform distribution
+            const uniform_val = 1.0 / @as(f32, @floatFromInt(output.len));
+            @memset(output, uniform_val);
         }
     }
 

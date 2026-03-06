@@ -78,9 +78,10 @@ pub const Backend = struct {
     /// End a batch of commands and execute them (Metal only)
     pub fn endCommandBatch(self: Backend) !void {
         if (self.metal_ctx) |ctx| {
-            if (ctx.active_command_buffer) |*cb| {
-                cb.commit();
-                cb.waitUntilCompleted();
+            if (ctx.active_command_buffer) |cb| {
+                var mutable_cb = cb;
+                mutable_cb.commit();
+                mutable_cb.waitUntilCompleted();
                 ctx.active_command_buffer = null;
                 ctx.clearTempResources();
             }

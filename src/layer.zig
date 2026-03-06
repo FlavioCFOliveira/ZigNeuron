@@ -214,6 +214,9 @@ pub const Dense = struct {
     allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator, input_size: usize, output_size: usize, act: activation.Activation, backend: backend_module.Backend) !*Dense {
+        if (input_size == 0) return error.InvalidInputSize;
+        if (output_size == 0) return error.InvalidOutputSize;
+
         const self = allocator.create(Dense) catch return error.OutOfMemory;
         errdefer allocator.destroy(self);
 
@@ -631,8 +634,81 @@ pub const Attention = struct {
     }
 
     pub fn backward(self: *Attention, input: []const f32, input_buf: ?*const metal.MTLBuffer, grad_output: []const f32, grad_output_buf: ?*const metal.MTLBuffer, grad_input: []f32, grad_input_buf: ?*const metal.MTLBuffer, activated_output: []const f32, activated_output_buf: ?*const metal.MTLBuffer) !void {
-        _ = input; _ = input_buf; _ = activated_output; _ = activated_output_buf;
-        try self.backend.copyData(grad_output, grad_output_buf, grad_input, grad_input_buf);
+        _ = input_buf; _ = activated_output; _ = activated_output_buf;
+        _ = grad_output_buf; _ = grad_input_buf;
+        const seq_len = input.len / self.size;
+        const d_k = self.size;
+        const scale = 1.0 / @sqrt(@as(f32, @floatFromInt(d_k)));
+
+        // Allocate temporary buffers for intermediate computations
+        var attention_weights = try self.allocator.alloc(f32, seq_len * seq_len);
+        defer self.allocator.free(attention_weights);
+
+        // 1. Recompute attention scores and weights (forward pass values needed for backward)
+        for (0..seq_len) |i| {
+            // Compute scores for position i
+            var max_score: f32 = -std.math.inf(f32);
+            for (0..seq_len) |j| {
+                var score: f32 = 0.0;
+                for (0..d_k) |k| {
+                    score += input[i * d_k + k] * input[j * d_k + k];
+                }
+                score *= scale;
+                attention_weights[i * seq_len + j] = score;
+                if (score > max_score) max_score = score;
+            }
+
+            // Softmax
+            var sum_exp: f32 = 0.0;
+            for (0..seq_len) |j| {
+                const exp_val = @exp(attention_weights[i * seq_len + j] - max_score);
+                attention_weights[i * seq_len + j] = exp_val;
+                sum_exp += exp_val;
+            }
+            for (0..seq_len) |j| {
+                attention_weights[i * seq_len + j] /= sum_exp;
+            }
+        }
+
+        // Suppress unused parameter warnings (used in GPU path)
+        _ = grad_input_buf;
+
+        // 2. Backward pass: compute gradient w.r.t. input
+        // dL/dInput = dL/dOutput @ dOutput/dInput
+        // For self-attention: output = softmax(Q*K^T/sqrt(d)) * V
+        @memset(grad_input, 0);
+
+        for (0..seq_len) |i| {
+            // Gradient contribution from position i
+            for (0..seq_len) |j| {
+                const a_ij = attention_weights[i * seq_len + j];
+                // Contribution through V path
+                for (0..d_k) |k| {
+                    grad_input[j * d_k + k] += grad_output[i * d_k + k] * a_ij;
+                }
+
+                // Contribution through attention weights (simplified)
+                const grad_a_ij: f32 = blk: {
+                    var sum: f32 = 0.0;
+                    for (0..d_k) |k| {
+                        sum += grad_output[i * d_k + k] * input[j * d_k + k];
+                    }
+                    break :blk sum;
+                };
+
+                // Backprop through softmax and Q*K^T
+                for (0..seq_len) |m| {
+                    const a_im = attention_weights[i * seq_len + m];
+                    const d_softmax = if (m == j) a_ij * (1.0 - a_ij) else -a_ij * a_im;
+                    const d_score = grad_a_ij * d_softmax * scale;
+
+                    for (0..d_k) |k| {
+                        grad_input[i * d_k + k] += d_score * input[m * d_k + k];
+                        grad_input[m * d_k + k] += d_score * input[i * d_k + k];
+                    }
+                }
+            }
+        }
     }
 };
 

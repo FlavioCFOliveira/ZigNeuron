@@ -13,7 +13,12 @@ pub const Tensor = struct {
 
     pub fn init(allocator: std.mem.Allocator, shape: []const usize, backend: backend_module.Backend) !Tensor {
         var size: usize = 1;
-        for (shape) |dim| size *= dim;
+        for (shape) |dim| {
+            if (dim > 0 and size > std.math.maxInt(usize) / dim) {
+                return error.TensorSizeOverflow;
+            }
+            size *= dim;
+        }
 
         const shape_copy = try allocator.alloc(usize, shape.len);
         @memcpy(shape_copy, shape);
@@ -87,9 +92,14 @@ pub const Tensor = struct {
     }
 
     /// Helper for 3D indexing: [batch, seq, feature]
-    pub fn index3D(self: *const Tensor, b: usize, s: usize, f: usize) usize {
+    pub fn index3D(self: *const Tensor, b: usize, s: usize, f: usize) !usize {
         std.debug.assert(self.shape.len == 3);
-        return (b * self.shape[1] * self.shape[2]) + (s * self.shape[2]) + f;
+        // Check for overflow in each multiplication
+        const dim1_dim2 = try std.math.mul(usize, self.shape[1], self.shape[2]);
+        const term1 = try std.math.mul(usize, b, dim1_dim2);
+        const term2 = try std.math.mul(usize, s, self.shape[2]);
+        const sum1 = try std.math.add(usize, term1, term2);
+        return try std.math.add(usize, sum1, f);
     }
 
     /// Helper for 2D indexing: [rows, cols]

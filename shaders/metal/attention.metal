@@ -23,6 +23,9 @@ kernel void attention_forward(
     uint j = gid.x; // feature_idx
 
     if (i < seq_len && j < d_k) {
+        // Guard against stack overflow - skip if seq_len too large
+        if (seq_len > 1024) return;
+
         // 1. Compute Q_i * K^T_m for all m (attention scores)
         float thread_scores[1024]; // Max seq_len for now
         float max_score = -INFINITY;
