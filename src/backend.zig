@@ -695,11 +695,29 @@ pub const Backend = struct {
         a: []const f32, b: []const f32, c: []f32
     ) !void {
         _ = self;
+        const Vec4 = @Vector(4, f32);
+        const vec_len = (a.len / 4) * 4;
+
+        // Process 4 elements at a time using SIMD
+        var i: usize = 0;
+        while (i < vec_len) : (i += 4) {
+            const va: Vec4 = @as(*const Vec4, @ptrCast(@alignCast(a.ptr + i))).*;
+            const vb: Vec4 = @as(*const Vec4, @ptrCast(@alignCast(b.ptr + i))).*;
+            const vc = switch (op) {
+                .add => va + vb,
+                .sub => va - vb,
+                .mul => va * vb,
+                .div => va / vb,
+            };
+            @as(*Vec4, @ptrCast(@alignCast(c.ptr + i))).* = vc;
+        }
+
+        // Process remaining elements
         switch (op) {
-            .add => for (a, b, c) |av, bv, *cv| { cv.* = av + bv; },
-            .sub => for (a, b, c) |av, bv, *cv| { cv.* = av - bv; },
-            .mul => for (a, b, c) |av, bv, *cv| { cv.* = av * bv; },
-            .div => for (a, b, c) |av, bv, *cv| { cv.* = av / bv; },
+            .add => for (a[i..], b[i..], c[i..]) |av, bv, *cv| { cv.* = av + bv; },
+            .sub => for (a[i..], b[i..], c[i..]) |av, bv, *cv| { cv.* = av - bv; },
+            .mul => for (a[i..], b[i..], c[i..]) |av, bv, *cv| { cv.* = av * bv; },
+            .div => for (a[i..], b[i..], c[i..]) |av, bv, *cv| { cv.* = av / bv; },
         }
     }
 
@@ -769,7 +787,21 @@ pub const Backend = struct {
                 .metal => try self.metalScaleBuffer(data, data_buf, factor),
                 .vulkan => for (data) |*v| { v.* *= factor; },
             },
-            .cpu => for (data) |*v| { v.* *= factor; },
+            .cpu => {
+                const Vec4 = @Vector(4, f32);
+                const vec_factor: Vec4 = @splat(factor);
+                const vec_len = (data.len / 4) * 4;
+
+                // Process 4 elements at a time using SIMD
+                var i: usize = 0;
+                while (i < vec_len) : (i += 4) {
+                    const v: Vec4 = @as(*const Vec4, @ptrCast(@alignCast(data.ptr + i))).*;
+                    @as(*Vec4, @ptrCast(@alignCast(data.ptr + i))).* = v * vec_factor;
+                }
+
+                // Process remaining elements
+                for (data[i..]) |*v| { v.* *= factor; }
+            },
         }
     }
 
@@ -1272,7 +1304,11 @@ pub const Backend = struct {
         encoder.setBytes(std.mem.asBytes(&k_u32), 5);
         encoder.setBytes(std.mem.asBytes(&acc_u32), 6);
 
-        encoder.dispatchThreads(metal.MTLSize.make(n, 1, batch_size), metal.MTLSize.make(16, 1, 16));
+        // Optimize threadgroup size for Apple GPU (SIMD width = 32)
+        // Use multiples of 32 for better occupancy
+        const max_threads = pipeline.maxTotalThreadsPerThreadgroup();
+        const tg_size = @min(32, max_threads);
+        encoder.dispatchThreads(metal.MTLSize.make(n, 1, batch_size), metal.MTLSize.make(tg_size, 1, tg_size));
         encoder.endEncoding();
 
         if (ctx.active_command_buffer == null) {
@@ -1731,7 +1767,9 @@ pub const Backend = struct {
         encoder.setBytes(std.mem.asBytes(&params[4]), 8);
 
         const batch_size = input.len / (in_channels * in_len);
-        encoder.dispatchThreads(metal.MTLSize.make(out_len, out_channels, batch_size), metal.MTLSize.make(16, 16, 1));
+        // Use threadgroup size that's a multiple of SIMD width (32)
+        // 8x4x1 = 32 threads per threadgroup
+        encoder.dispatchThreads(metal.MTLSize.make(out_len, out_channels, batch_size), metal.MTLSize.make(8, 4, 1));
         encoder.endEncoding();
         if (ctx.active_command_buffer == null) { cb.commit(); cb.waitUntilCompleted(); }
     }
@@ -2248,9 +2286,11 @@ pub const Backend = struct {
 
     fn cpuAttentionForward(self: Backend, q: []const f32, k: []const f32, v: []const f32, output: []f32, seq_len: usize, d_k: usize, scaling_factor: f32) !void {
         _ = self;
+        // Pre-allocate scores buffer once (avoid allocation in hot loop)
+        var scores = try std.heap.page_allocator.alloc(f32, seq_len);
+        defer std.heap.page_allocator.free(scores);
+
         for (0..seq_len) |i| {
-            var scores = try std.heap.page_allocator.alloc(f32, seq_len);
-            defer std.heap.page_allocator.free(scores);
             var max_score: f32 = -std.math.inf(f32);
             for (0..seq_len) |m| {
                 var score: f32 = 0;
