@@ -1,5 +1,13 @@
 /// Optimizers for neural network training
 /// Provides different optimization algorithms for gradient descent
+///
+/// References:
+/// - Adam: Kingma, D. P., & Ba, J. (2014). Adam: A method for stochastic optimization.
+///   arXiv preprint arXiv:1412.6980.
+/// - SGD with Momentum: Sutskever, I., et al. (2013). On the importance of initialization
+///   and momentum in deep learning. ICML.
+/// - RMSprop: Tieleman, T., & Hinton, G. (2012). Lecture 6.5-rmsprop: Divide the gradient
+///   by a running average of its recent magnitude.
 const std = @import("std");
 const layer_module = @import("layer.zig");
 const tensor = @import("tensor.zig");

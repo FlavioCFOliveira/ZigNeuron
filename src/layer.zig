@@ -1,4 +1,52 @@
 /// Neural network layers
+///
+/// References:
+/// - Dense Layer: Goodfellow, I., et al. (2016). Deep Learning. MIT Press.
+/// - Batch Normalization: Ioffe, S., & Szegedy, C. (2015). Batch normalization:
+///   Accelerating deep network training by reducing internal covariate shift. ICML.
+/// - Layer Normalization: Ba, J. L., et al. (2016). Layer normalization. arXiv:1607.06450.
+/// - Dropout: Srivastava, N., et al. (2014). Dropout: A simple way to prevent neural
+///   networks from overfitting. JMLR, 15(1), 1929-1958.
+/// - Xavier Initialization: Glorot, X., & Bengio, Y. (2010). Understanding the difficulty
+///   of training deep feedforward neural networks. AISTATS.
+/// - He Initialization: He, K., et al. (2015). Delving deep into rectifiers: Surpassing
+///   human-level performance on ImageNet classification. ICCV.
+///
+/// Neural network layers implementation
+///
+/// References:
+/// - Dense Layer with Xavier/Glorot initialization:
+///   Glorot, X., & Bengio, Y. (2010). Understanding the difficulty of training deep
+///   feedforward neural networks. AISTATS.
+/// - He initialization: He, K., et al. (2015). Delving deep into rectifiers: Surpassing
+///   human-level performance on ImageNet classification. ICCV.
+/// - LSTM: Hochreiter, S., & Schmidhuber, J. (1997). Long short-term memory. Neural
+///   Computation, 9(8), 1735-1780.
+/// - GRU: Cho, K., et al. (2014). Learning phrase representations using RNN encoder-decoder
+///   for statistical machine translation. EMNLP.
+/// - Batch Normalization: Ioffe, S., & Szegedy, C. (2015). Batch normalization: Accelerating
+///   deep network training by reducing internal covariate shift. ICML.
+/// - Layer Normalization: Ba, J. L., et al. (2016). Layer normalization. arXiv:1607.06450.
+/// - Dropout: Srivastava, N., et al. (2014). Dropout: A simple way to prevent neural
+///   networks from overfitting. JMLR, 15(1), 1929-1958.
+/// - Attention: Vaswani, A., et al. (2017). Attention is all you need. NeurIPS.
+///
+/// Generate a cryptographically secure random seed
+/// Uses getrandom() when available, falls back to timestamp + counter
+var seed_counter: u64 = 0;
+fn secureRandomSeed() u64 {
+    seed_counter +%= 1;
+
+    // Try to get random bytes from OS
+    var buf: [8]u8 = undefined;
+    const got_random = std.posix.getrandom(&buf);
+    if (got_random) {
+        return std.mem.readInt(u64, &buf, .little) +% seed_counter;
+    } else |_| {
+        // Fallback to timestamp + counter
+        return @as(u64, @bitCast(std.time.timestamp())) +% seed_counter;
+    }
+}
 const std = @import("std");
 const activation = @import("activation.zig");
 const backend_module = @import("backend.zig");
@@ -248,7 +296,7 @@ pub const Dense = struct {
         errdefer self.grad_after_act.deinit();
 
         // Xavier/He initialization based on activation function
-        var prng = std.Random.DefaultPrng.init(@intCast(@as(u64, @bitCast(std.time.timestamp())) +% input_size +% output_size));
+        var prng = std.Random.DefaultPrng.init(secureRandomSeed());
         const random = prng.random();
 
         const scale = switch (act) {
@@ -425,7 +473,7 @@ pub const SamplingLayer = struct {
 
     pub fn forward(self: *SamplingLayer, input: []const f32, input_buf: ?*const metal.MTLBuffer, output: []f32, output_buf: ?*const metal.MTLBuffer) !void {
         const latent_dim = self.input_size / 2;
-        try self.backend.vaeSamplingForward(input, input_buf, output, output_buf, self.epsilon.slice, self.epsilon.getMtlBuffer(), @intCast(std.time.timestamp()), latent_dim);
+        try self.backend.vaeSamplingForward(input, input_buf, output, output_buf, self.epsilon.slice, self.epsilon.getMtlBuffer(), secureRandomSeed(), latent_dim);
     }
 
     pub fn backward(self: *SamplingLayer,
@@ -482,7 +530,7 @@ pub const Conv1D = struct {
 
         // Kaiming initialization
         const scale = @sqrt(2.0 / @as(f32, @floatFromInt(in_channels * kernel_size)));
-        var prng = std.Random.DefaultPrng.init(@intCast(std.time.timestamp()));
+        var prng = std.Random.DefaultPrng.init(secureRandomSeed());
         for (self.weights.slice) |*w| w.* = (prng.random().float(f32) * 2.0 - 1.0) * scale;
         @memset(self.bias.slice, 0);
 
@@ -518,6 +566,175 @@ pub const Conv1D = struct {
 
         // 2. Conv backward
         try self.backend.conv1dBackward(input, input_buf, self.weights.slice, self.weights.getMtlBuffer(), self.grad_after_act.slice, self.grad_after_act.getMtlBuffer(), grad_input, grad_input_buf, self.grad_weights.slice, self.grad_weights.getMtlBuffer(), self.grad_bias.slice, self.grad_bias.getMtlBuffer(), self.in_channels, self.out_channels, self.kernel_size, in_len, out_len);
+    }
+};
+
+/// Conv2D Layer for image processing
+/// Performs 2D convolution on input images
+///
+/// Reference:
+/// - LeCun, Y., et al. (1998). Gradient-based learning applied to document recognition.
+///   Proceedings of the IEEE, 86(11), 2278-2324.
+pub const Conv2D = struct {
+    weights: tensor.Tensor, // [out_channels, in_channels, kernel_h, kernel_w]
+    bias: tensor.Tensor,    // [out_channels]
+    grad_weights: tensor.Tensor,
+    grad_bias: tensor.Tensor,
+    grad_after_act: tensor.Tensor,
+    in_channels: usize,
+    out_channels: usize,
+    kernel_h: usize,
+    kernel_w: usize,
+    stride_h: usize,
+    stride_w: usize,
+    padding_h: usize,
+    padding_w: usize,
+    input_h: usize,
+    input_w: usize,
+    output_h: usize,
+    output_w: usize,
+    act: activation.Activation,
+    backend: backend_module.Backend,
+    allocator: std.mem.Allocator,
+
+    pub fn init(allocator: std.mem.Allocator, in_channels: usize, out_channels: usize, kernel_h: usize, kernel_w: usize, input_h: usize, input_w: usize, act: activation.Activation, backend: backend_module.Backend) !*Conv2D {
+        if (kernel_h == 0 or kernel_w == 0) return error.InvalidKernelSize;
+        if (kernel_h > input_h or kernel_w > input_w) return error.KernelLargerThanInput;
+
+        const self = try allocator.create(Conv2D);
+        self.in_channels = in_channels;
+        self.out_channels = out_channels;
+        self.kernel_h = kernel_h;
+        self.kernel_w = kernel_w;
+        self.stride_h = 1;
+        self.stride_w = 1;
+        self.padding_h = 0;
+        self.padding_w = 0;
+        self.input_h = input_h;
+        self.input_w = input_w;
+
+        // Calculate output dimensions
+        self.output_h = (input_h - kernel_h) / self.stride_h + 1;
+        self.output_w = (input_w - kernel_w) / self.stride_w + 1;
+
+        self.weights = try tensor.Tensor.init(allocator, &.{ out_channels, in_channels, kernel_h, kernel_w }, backend);
+        self.bias = try tensor.Tensor.init(allocator, &.{out_channels}, backend);
+        self.grad_weights = try tensor.Tensor.init(allocator, &.{ out_channels, in_channels, kernel_h, kernel_w }, backend);
+        self.grad_bias = try tensor.Tensor.init(allocator, &.{out_channels}, backend);
+        errdefer self.grad_bias.deinit();
+
+        self.grad_after_act = try tensor.Tensor.init(allocator, &.{ out_channels * self.output_h * self.output_w }, backend);
+        errdefer self.grad_after_act.deinit();
+
+        // Kaiming initialization
+        const scale = @sqrt(2.0 / @as(f32, @floatFromInt(in_channels * kernel_h * kernel_w)));
+        var prng = std.Random.DefaultPrng.init(secureRandomSeed());
+        for (self.weights.slice) |*w| w.* = (prng.random().float(f32) * 2.0 - 1.0) * scale;
+        @memset(self.bias.slice, 0);
+
+        self.act = act;
+        self.backend = backend;
+        self.allocator = allocator;
+        return self;
+    }
+
+    pub fn deinit(self: *Conv2D) void {
+        self.weights.deinit();
+        self.bias.deinit();
+        self.grad_weights.deinit();
+        self.grad_bias.deinit();
+        self.grad_after_act.deinit();
+        self.allocator.destroy(self);
+    }
+
+    pub fn forward(self: *Conv2D, input: []const f32, input_buf: ?*const metal.MTLBuffer, output: []f32, output_buf: ?*const metal.MTLBuffer) !void {
+        _ = input_buf; // TODO: Use GPU buffer when implemented
+        // TODO: Implement conv2dForward in backend
+        // For now, use CPU implementation directly
+        try self.cpuConv2dForward(input, output);
+        try self.backend.activationForward(self.act, output, output_buf, output, output_buf);
+    }
+
+    fn cpuConv2dForward(self: *Conv2D, input: []const f32, output: []f32) !void {
+        // Input: [in_channels, input_h, input_w]
+        // Output: [out_channels, output_h, output_w]
+        // Weights: [out_channels, in_channels, kernel_h, kernel_w]
+
+        const out_size = self.out_channels * self.output_h * self.output_w;
+        @memset(output[0..out_size], 0);
+
+        for (0..self.out_channels) |oc| {
+            for (0..self.output_h) |oh| {
+                for (0..self.output_w) |ow| {
+                    var sum: f32 = 0;
+                    for (0..self.in_channels) |ic| {
+                        for (0..self.kernel_h) |kh| {
+                            for (0..self.kernel_w) |kw| {
+                                const ih = oh * self.stride_h + kh;
+                                const iw = ow * self.stride_w + kw;
+                                if (ih < self.input_h and iw < self.input_w) {
+                                    const in_idx = ic * self.input_h * self.input_w + ih * self.input_w + iw;
+                                    const w_idx = ((oc * self.in_channels + ic) * self.kernel_h + kh) * self.kernel_w + kw;
+                                    sum += input[in_idx] * self.weights.slice[w_idx];
+                                }
+                            }
+                        }
+                    }
+                    const out_idx = oc * self.output_h * self.output_w + oh * self.output_w + ow;
+                    output[out_idx] = sum + self.bias.slice[oc];
+                }
+            }
+        }
+    }
+
+    pub fn backward(self: *Conv2D, input: []const f32, input_buf: ?*const metal.MTLBuffer, grad_output: []const f32, grad_output_buf: ?*const metal.MTLBuffer, grad_input: []f32, grad_input_buf: ?*const metal.MTLBuffer, activated_output: []const f32, activated_output_buf: ?*const metal.MTLBuffer) !void {
+        _ = input_buf;
+        _ = grad_input_buf;
+        // 1. Activation backward
+        try self.backend.activationBackward(self.act, activated_output, activated_output_buf, grad_output, grad_output_buf, self.grad_after_act.slice, self.grad_after_act.getMtlBuffer());
+
+        // 2. Conv2D backward (CPU fallback for now)
+        try self.cpuConv2dBackward(input, self.grad_after_act.slice, grad_input);
+    }
+
+    fn cpuConv2dBackward(self: *Conv2D, input: []const f32, grad_output: []const f32, grad_input: []f32) !void {
+        // Zero out gradients
+        const in_size = self.in_channels * self.input_h * self.input_w;
+        @memset(grad_input[0..in_size], 0);
+        @memset(self.grad_weights.slice, 0);
+        @memset(self.grad_bias.slice, 0);
+
+        // Compute gradients
+        for (0..self.out_channels) |oc| {
+            for (0..self.output_h) |oh| {
+                for (0..self.output_w) |ow| {
+                    const out_idx = oc * self.output_h * self.output_w + oh * self.output_w + ow;
+                    const go = grad_output[out_idx];
+
+                    // Gradient w.r.t bias
+                    self.grad_bias.slice[oc] += go;
+
+                    for (0..self.in_channels) |ic| {
+                        for (0..self.kernel_h) |kh| {
+                            for (0..self.kernel_w) |kw| {
+                                const ih = oh * self.stride_h + kh;
+                                const iw = ow * self.stride_w + kw;
+                                if (ih < self.input_h and iw < self.input_w) {
+                                    const in_idx = ic * self.input_h * self.input_w + ih * self.input_w + iw;
+                                    const w_idx = ((oc * self.in_channels + ic) * self.kernel_h + kh) * self.kernel_w + kw;
+
+                                    // Gradient w.r.t weights
+                                    self.grad_weights.slice[w_idx] += input[in_idx] * go;
+
+                                    // Gradient w.r.t input
+                                    grad_input[in_idx] += self.weights.slice[w_idx] * go;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 };
 
@@ -667,7 +884,7 @@ pub const Dropout = struct {
         }
 
         const scale = 1.0 / (1.0 - self.rate);
-        try self.backend.dropoutForward(input, input_buf, output, output_buf, self.mask.slice, self.mask.getMtlBuffer(), self.rate, scale, @intCast(std.time.timestamp()));
+        try self.backend.dropoutForward(input, input_buf, output, output_buf, self.mask.slice, self.mask.getMtlBuffer(), self.rate, scale, @intCast(secureRandomSeed()));
     }
 
     pub fn backward(self: *Dropout, input: []const f32, input_buf: ?*const metal.MTLBuffer, grad_output: []const f32, grad_output_buf: ?*const metal.MTLBuffer, grad_input: []f32, grad_input_buf: ?*const metal.MTLBuffer, activated_output: []const f32, activated_output_buf: ?*const metal.MTLBuffer) !void {

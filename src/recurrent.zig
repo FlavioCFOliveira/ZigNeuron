@@ -1,9 +1,34 @@
 /// Recurrent Neural Network layers
+///
+/// References:
+/// - LSTM: Hochreiter, S., & Schmidhuber, J. (1997). Long short-term memory.
+///   Neural computation, 9(8), 1735-1780.
+/// - GRU: Cho, K., et al. (2014). Learning phrase representations using RNN encoder-decoder
+///   for statistical machine translation. arXiv preprint arXiv:1406.1078.
+/// - Vanilla RNN: Elman, J. L. (1990). Finding structure in time.
+///   Cognitive science, 14(2), 179-211.
 const std = @import("std");
 const activation = @import("activation.zig");
 const backend_module = @import("backend.zig");
 const tensor = @import("tensor.zig");
 const metal = @import("metal.zig");
+
+/// Generate a cryptographically secure random seed
+/// Uses getrandom() when available, falls back to timestamp + counter
+var seed_counter: u64 = 0;
+fn secureRandomSeed() u64 {
+    seed_counter +%= 1;
+
+    // Try to get random bytes from OS
+    var buf: [8]u8 = undefined;
+    const got_random = std.posix.getrandom(&buf);
+    if (got_random) {
+        return std.mem.readInt(u64, &buf, .little) +% seed_counter;
+    } else |_| {
+        // Fallback to timestamp + counter
+        return @as(u64, @bitCast(std.time.timestamp())) +% seed_counter;
+    }
+}
 
 /// Vanilla RNN Layer
 /// h_t = tanh(W_ih * x_t + b_ih + W_hh * h_{t-1} + b_hh)
@@ -63,7 +88,7 @@ pub const VanillaRNN = struct {
         errdefer self.grad_after_act_work.deinit();
 
         // Xavier/He initialization
-        var prng = std.Random.DefaultPrng.init(@intCast(@as(u64, @bitCast(std.time.timestamp())) +% input_size +% hidden_size));
+        var prng = std.Random.DefaultPrng.init(secureRandomSeed());
         const random = prng.random();
         const scale = @sqrt(2.0 / @as(f32, @floatFromInt(input_size + hidden_size)));
 
@@ -301,7 +326,7 @@ pub const LSTM = struct {
         errdefer self.total_grad_h_work.deinit();
 
         // Xavier/He initialization
-        var prng = std.Random.DefaultPrng.init(@intCast(@as(u64, @bitCast(std.time.timestamp())) +% input_size +% hidden_size));
+        var prng = std.Random.DefaultPrng.init(secureRandomSeed());
         const random = prng.random();
         const scale = @sqrt(2.0 / @as(f32, @floatFromInt(input_size + hidden_size)));
 
@@ -532,7 +557,7 @@ pub const GRU = struct {
         errdefer self.gates_hh_work.deinit();
 
         // Xavier/He initialization
-        var prng = std.Random.DefaultPrng.init(@intCast(@as(u64, @bitCast(std.time.timestamp())) +% input_size +% hidden_size));
+        var prng = std.Random.DefaultPrng.init(secureRandomSeed());
         const random = prng.random();
         const scale = @sqrt(2.0 / @as(f32, @floatFromInt(input_size + hidden_size)));
 

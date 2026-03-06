@@ -1,4 +1,14 @@
 /// Activation functions and their derivatives
+///
+/// References:
+/// - ReLU: Nair, V., & Hinton, G. E. (2010). Rectified linear units improve restricted
+///   Boltzmann machines. ICML.
+/// - Sigmoid & Tanh: Traditional activation functions, see Haykin, S. (1998). Neural
+///   Networks: A Comprehensive Foundation (2nd ed.).
+/// - Softmax: Bridle, J. S. (1990). Probabilistic interpretation of feedforward
+///   classification network outputs. Neurocomputing.
+/// - GELU: Hendrycks, D., & Gimpel, K. (2016). Gaussian error linear units (GELUs).
+///   arXiv:1606.08415.
 const std = @import("std");
 
 pub const Activation = union(enum) {

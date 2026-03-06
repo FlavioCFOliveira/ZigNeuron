@@ -1,15 +1,27 @@
 /// Loss functions for neural network training
+///
+/// References:
+/// - MSE: Standard L2 loss, see any machine learning textbook.
+/// - Cross-Entropy: Standard classification loss, see Bishop (2006) Pattern Recognition
+///   and Machine Learning, Chapter 4.
+/// - Binary Cross-Entropy: Same as above for binary classification.
+/// - KL Divergence: Kullback-Leibler divergence for variational autoencoders.
+///   Kingma, D. P., & Welling, M. (2013). Auto-encoding variational Bayes. ICLR.
 const std = @import("std");
 
 pub const Loss = union(enum) {
     mse, // Mean Squared Error
     cross_entropy, // Cross-entropy (expects pre-computed probabilities)
     cross_entropy_logits, // Cross-entropy with logits (combined softmax + cross-entropy)
+    /// Binary Cross-Entropy (BCE) for binary classification
+    /// IMPORTANT: This expects sigmoid-activated outputs (probabilities in [0, 1])
+    /// For numerical stability, combine with sigmoid: use BCE loss after sigmoid activation
+    /// The gradient computation assumes sigmoid output: dL/dx = (p - t) / n
     binary_cross_entropy,
     kl_divergence, // KL Divergence for VAE
 
-    /// Whether the loss gradient is already computed w.r.t. pre-activation (logits)
-    /// For cross-entropy with log-softmax, the gradient is (softmax - target) which is w.r.t. logits
+    /// Whether the loss gradient is already computed w.r.t pre-activation (logits)
+    /// For cross-entropy with log-softmax, the gradient is (softmax - target) which is w.r.t logits
     /// For MSE and BCE, the gradient needs to be multiplied by activation derivative
     pub fn isLogitsGradient(self: Loss) bool {
         return switch (self) {
@@ -246,6 +258,8 @@ pub const Loss = union(enum) {
         var sum: f32 = 0;
         const eps: f32 = 1e-7;
         for (output, target) |o, t| {
+            // NOTE: 'output' here must be sigmoid-activated (probabilities in [0, 1])
+            // This is NOT raw logits. For logits, use cross_entropy_logits.
             // Clamp output for numerical stability
             var p = o;
             if (p < eps) p = eps;
@@ -260,18 +274,29 @@ pub const Loss = union(enum) {
         return sum / @as(f32, @floatFromInt(output.len));
     }
 
+    /// Binary Cross-Entropy backward pass
+    ///
+    /// Parameters:
+    ///   - output: Predicted probabilities from sigmoid activation (values in [0, 1])
+    ///   - target: Ground truth labels (0 or 1)
+    ///   - grad_output: Output buffer for gradients (dL/dx where x is pre-sigmoid logit)
+    ///
+    /// IMPORTANT: The gradient formula used here assumes the previous layer used sigmoid.
+    /// For sigmoid followed by BCE: dL/dx = (p - t) / n where p = sigmoid(x)
+    /// This is the simplified gradient that results from the sigmoid-BCE combination.
     fn binaryCrossEntropyBackward(self: Loss, output: []const f32, target: []const f32, grad_output: []f32) !void {
         _ = self;
-        // For BCE with sigmoid output, the gradient simplifies to (p - t)
-        // because the sigmoid derivative cancels with the denominator
-        // Use clipping for numerical stability
+        // For BCE with sigmoid output, the gradient simplifies to (p - t) / n
+        // This is because: d(sigmoid)/dx = sigmoid(x) * (1 - sigmoid(x))
+        // And: d(BCE)/dp = (p - t) / (p * (1-p))
+        // Combined: d(BCE)/dx = d(BCE)/dp * d(p)/dx = (p - t) / n
         const n: f32 = @floatFromInt(output.len);
         const eps: f32 = 1e-7;
         for (output, target, grad_output) |o, t, *go| {
             var p = o;
             if (p < eps) p = eps;
             if (p > 1.0 - eps) p = 1.0 - eps;
-            // Gradient of BCE with sigmoid is simply (prediction - target)
+            // Simplified gradient for sigmoid-BCE combination: (p - t) / n
             go.* = (p - t) / n;
         }
     }
