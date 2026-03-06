@@ -447,6 +447,9 @@ pub const Conv1D = struct {
     allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator, in_channels: usize, out_channels: usize, kernel_size: usize, input_len: usize, act: activation.Activation, backend: backend_module.Backend) !*Conv1D {
+        if (kernel_size == 0) return error.InvalidKernelSize;
+        if (kernel_size > input_len) return error.KernelLargerThanInput;
+
         const self = try allocator.create(Conv1D);
         self.in_channels = in_channels;
         self.out_channels = out_channels;

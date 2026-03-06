@@ -325,7 +325,7 @@ pub const Network = struct {
                 };
             }
 
-            var cache = &self.caches.items[i].?;
+            var cache = &(self.caches.items[i] orelse return error.MissingCache);
 
             if (current_buf) |buf| {
                 // GPU to GPU copy
@@ -347,7 +347,7 @@ pub const Network = struct {
         }
 
         // Copy final output to provided buffer
-        const last_cache = self.caches.items[self.layers.items.len - 1].?;
+        const last_cache = self.caches.items[self.layers.items.len - 1] orelse return error.MissingCache;
         const final_layer_output_size = self.layers.items[self.layers.items.len - 1].outputSize();
         const total_final_size = current_slice.len;
         const final_seq_len = total_final_size / final_layer_output_size;
@@ -531,7 +531,7 @@ pub const Network = struct {
 
         // Sync final output from GPU to CPU to ensure loss calculation is accurate
         if (self.backend.type == .gpu and self.backend.type.gpu == .metal) {
-            const last_cache = self.caches.items[self.layers.items.len - 1].?;
+            const last_cache = self.caches.items[self.layers.items.len - 1] orelse return error.MissingCache;
             const last_layer_output_size = self.layers.items[self.layers.items.len - 1].outputSize();
             const total_final_size = last_cache.activated_output.slice.len;
             const final_seq_len = total_final_size / last_layer_output_size;
