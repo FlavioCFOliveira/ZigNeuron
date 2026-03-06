@@ -71,10 +71,53 @@ pub const Sgd = struct {
         const backend = lyr.getBackendFromLayer();
 
         if (self.momentum > 0) {
-            // Simplified: use SGD update without momentum for now, or implement momentum kernel
-            try backend.sgdUpdate(w.slice, w.getMtlBuffer(), gw.slice, gw.getMtlBuffer(), learning_rate, 0.0);
-            try backend.sgdUpdateBias(b.slice, b.getMtlBuffer(), gb.slice, gb.getMtlBuffer(), learning_rate);
+            // SGD with momentum: v = momentum * v - lr * grad; w = w + v
+            const vw = self.velocity_weights.?;
+            const vb = self.velocity_bias.?;
+            const allocator = self.velocity_weights.?.allocator;
+
+            // Allocate temp buffers for intermediate results
+            const temp_vw = try allocator.alloc(f32, vw.slice.len);
+            defer allocator.free(temp_vw);
+            const temp_vb = try allocator.alloc(f32, vb.slice.len);
+            defer allocator.free(temp_vb);
+
+            // Step 1: Scale velocity by momentum: v = momentum * v
+            @memcpy(temp_vw, vw.slice);
+            try backend.scale(temp_vw, vw.getMtlBuffer(), self.momentum);
+
+            @memcpy(temp_vb, vb.slice);
+            try backend.scale(temp_vb, vb.getMtlBuffer(), self.momentum);
+
+            // Step 2: Scale gradients: grad_scaled = lr * grad
+            const grad_scaled_w = try allocator.alloc(f32, gw.slice.len);
+            defer allocator.free(grad_scaled_w);
+            @memcpy(grad_scaled_w, gw.slice);
+            try backend.scale(grad_scaled_w, gw.getMtlBuffer(), learning_rate);
+
+            const grad_scaled_b = try allocator.alloc(f32, gb.slice.len);
+            defer allocator.free(grad_scaled_b);
+            @memcpy(grad_scaled_b, gb.slice);
+            try backend.scale(grad_scaled_b, gb.getMtlBuffer(), learning_rate);
+
+            // Step 3: Update velocity: v = v - lr*grad (using element-wise subtraction)
+            // Store result in velocity tensors
+            try backend.elementWise(.sub, temp_vw, vw.getMtlBuffer(), grad_scaled_w, gw.getMtlBuffer(), vw.slice, vw.getMtlBuffer());
+            try backend.elementWise(.sub, temp_vb, vb.getMtlBuffer(), grad_scaled_b, gb.getMtlBuffer(), vb.slice, vb.getMtlBuffer());
+
+            // Step 4: Update weights: w = w + v
+            const temp_w = try allocator.alloc(f32, w.slice.len);
+            defer allocator.free(temp_w);
+            @memcpy(temp_w, w.slice);
+
+            const temp_b = try allocator.alloc(f32, b.slice.len);
+            defer allocator.free(temp_b);
+            @memcpy(temp_b, b.slice);
+
+            try backend.elementWise(.add, temp_w, w.getMtlBuffer(), vw.slice, vw.getMtlBuffer(), w.slice, w.getMtlBuffer());
+            try backend.elementWise(.add, temp_b, b.getMtlBuffer(), vb.slice, vb.getMtlBuffer(), b.slice, b.getMtlBuffer());
         } else {
+            // Standard SGD without momentum
             try backend.sgdUpdate(w.slice, w.getMtlBuffer(), gw.slice, gw.getMtlBuffer(), learning_rate, 0.0);
             try backend.sgdUpdateBias(b.slice, b.getMtlBuffer(), gb.slice, gb.getMtlBuffer(), learning_rate);
         }
