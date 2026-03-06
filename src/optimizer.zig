@@ -4,6 +4,33 @@ const std = @import("std");
 const layer_module = @import("layer.zig");
 const tensor = @import("tensor.zig");
 
+/// Learning rate schedulers for adjusting learning rate during training
+pub const LRScheduler = union(enum) {
+    /// Constant learning rate (no change)
+    constant: void,
+    /// Step decay: lr = initial_lr * decay_rate ^ (epoch / step_size)
+    step: struct { step_size: usize, decay_rate: f32 },
+    /// Exponential decay: lr = initial_lr * decay_rate ^ epoch
+    exponential: struct { decay_rate: f32 },
+    /// Cosine annealing: lr = min_lr + 0.5 * (initial_lr - min_lr) * (1 + cos(pi * epoch / max_epochs))
+    cosine: struct { min_lr: f32, max_epochs: usize },
+
+    /// Get the learning rate for the current epoch
+    pub fn getLearningRate(self: LRScheduler, initial_lr: f32, epoch: usize) f32 {
+        return switch (self) {
+            .constant => initial_lr,
+            .step => |s| initial_lr * std.math.pow(f32, s.decay_rate, @as(f32, @floatFromInt(epoch / s.step_size))),
+            .exponential => |e| initial_lr * std.math.pow(f32, e.decay_rate, @floatFromInt(epoch)),
+            .cosine => |c| {
+                if (epoch >= c.max_epochs) return c.min_lr;
+                const progress = @as(f32, @floatFromInt(epoch)) / @as(f32, @floatFromInt(c.max_epochs));
+                const cosine_val = std.math.cos(std.math.pi * progress);
+                return c.min_lr + 0.5 * (initial_lr - c.min_lr) * (1.0 + cosine_val);
+            },
+        };
+    }
+};
+
 /// Base optimizer interface
 pub const Optimizer = union(enum) {
     sgd: Sgd,

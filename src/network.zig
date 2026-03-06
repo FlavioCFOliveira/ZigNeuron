@@ -151,6 +151,18 @@ pub const Network = struct {
         return l;
     }
 
+    pub fn addBatchNorm(self: *Network, size: usize) !*layer.BatchNorm {
+        const l = try layer.BatchNorm.init(self.allocator, size, self.backend);
+        try self.layers.append(.{ .batch_norm = l });
+        try self.caches.append(null);
+        if (size > self.max_layer_size) {
+            self.max_layer_size = size;
+            try self.reallocateWorkBuffers(size);
+        }
+        try self.optimizers.append(null);
+        return l;
+    }
+
     pub fn addDropout(self: *Network, size: usize, rate: f32) !*layer.Dropout {
         const l = try layer.Dropout.init(self.allocator, size, rate, self.backend);
         try self.layers.append(.{ .dropout = l });
@@ -556,15 +568,165 @@ pub const Network = struct {
         return l_val;
     }
 
-    pub fn train(self: *Network, inputs: []const []const f32, targets: []const []const f32, epochs: usize, learning_rate: f32, loss_fn: loss.Loss) !void {
+/// Early stopping configuration
+pub const EarlyStopping = struct {
+    patience: usize, // Number of epochs to wait before stopping
+    min_delta: f32, // Minimum change to qualify as improvement
+    restore_best_weights: bool, // Whether to restore weights from best epoch
+
+    pub fn init(patience: usize, min_delta: f32, restore_best_weights: bool) EarlyStopping {
+        return .{
+            .patience = patience,
+            .min_delta = min_delta,
+            .restore_best_weights = restore_best_weights,
+        };
+    }
+};
+
+    pub fn train(self: *Network, inputs: []const []const f32, targets: []const []const f32, epochs: usize, learning_rate: f32, loss_fn: loss.Loss, scheduler: ?optimizer.LRScheduler, early_stopping: ?EarlyStopping) !void {
+        const lr_scheduler = scheduler orelse optimizer.LRScheduler{ .constant = {} };
+
+        // Early stopping state
+        var best_loss: f32 = std.math.inf(f32);
+        var best_weights: ?std.array_list.Managed(tensor.Tensor) = null;
+        var epochs_without_improvement: usize = 0;
+        const es = early_stopping;
+
+        if (es != null and es.?.restore_best_weights) {
+            // Pre-allocate storage for best weights
+            best_weights = std.array_list.Managed(tensor.Tensor).init(self.allocator);
+        }
+
         for (0..epochs) |epoch| {
+            const current_lr = lr_scheduler.getLearningRate(learning_rate, epoch);
             var total_loss: f32 = 0;
             for (inputs, targets) |input, target| {
-                total_loss += try self.trainStep(input, target, learning_rate, loss_fn);
+                total_loss += try self.trainStep(input, target, current_lr, loss_fn);
             }
-            if (epoch % 100 == 0 or epoch == epochs - 1) {
-                std.debug.print("Epoch {}: Loss = {d:.4}\n", .{ epoch, total_loss / @as(f32, @floatFromInt(inputs.len)) });
+            const avg_loss = total_loss / @as(f32, @floatFromInt(inputs.len));
+
+            // Check early stopping
+            if (es) |config| {
+                const improvement = best_loss - avg_loss;
+                if (improvement > config.min_delta) {
+                    // Improvement found
+                    best_loss = avg_loss;
+                    epochs_without_improvement = 0;
+
+                    // Save best weights if requested
+                    if (config.restore_best_weights) {
+                        // Clear previous best weights
+                        if (best_weights) |*bw| {
+                            for (bw.items) |*t| {
+                                t.deinit();
+                            }
+                            bw.clearRetainingCapacity();
+                        }
+
+                        // Save current weights
+                        for (self.layers.items) |l| {
+                            const weights = l.getWeights();
+                            const weights_copy = try tensor.Tensor.init(self.allocator, &.{weights.slice.len}, self.backend);
+                            @memcpy(weights_copy.slice, weights.slice);
+                            try best_weights.?.append(weights_copy);
+                        }
+                    }
+                } else {
+                    epochs_without_improvement += 1;
+                    if (epochs_without_improvement >= config.patience) {
+                        std.debug.print("Early stopping triggered after {} epochs\n", .{epoch + 1});
+
+                        // Restore best weights if requested
+                        if (config.restore_best_weights and best_weights != null) {
+                            var i: usize = 0;
+                            for (self.layers.items) |l| {
+                                const layer_weights = l.getWeights();
+                                @memcpy(layer_weights.slice, best_weights.?.items[i].slice);
+                                i += 1;
+                            }
+                            std.debug.print("Restored weights from best epoch (loss: {d:.4})\n", .{best_loss});
+                        }
+
+                        // Clean up
+                        if (best_weights) |*bw| {
+                            for (bw.items) |*t| {
+                                t.deinit();
+                            }
+                            bw.deinit();
+                        }
+                        return;
+                    }
+                }
+            }
+
+            if (epoch % 10 == 0 or epoch == epochs - 1) {
+                std.debug.print("Epoch {}: Loss = {d:.4}, LR = {d:.6}\n", .{ epoch, avg_loss, current_lr });
             }
         }
+
+        // Clean up best weights storage
+        if (best_weights) |*bw| {
+            for (bw.items) |*t| {
+                t.deinit();
+            }
+            bw.deinit();
+        }
+    }
+
+    /// Save the network to a file
+    /// Returns the number of bytes written
+    pub fn save(self: *Network, path: []const u8) !usize {
+        const serialization = @import("serialization.zig");
+        return try serialization.saveModel(self.layers.items, path);
+    }
+
+    /// Static method to load a network from a file
+    /// Caller owns the returned Network and must call deinit()
+    pub fn load(allocator: std.mem.Allocator, path: []const u8, backend_inst: backend_module.Backend) !*Network {
+        const serialization = @import("serialization.zig");
+        const loaded_layers = try serialization.loadModel(allocator, path, backend_inst);
+
+        const self = try allocator.create(Network);
+        errdefer allocator.destroy(self);
+
+        self.allocator = allocator;
+        self.backend = backend_inst;
+        self.work_buffer = null;
+        self.output_buffer = null;
+        self.max_layer_size = 0;
+        self.grad_work_1 = null;
+        self.grad_work_2 = null;
+
+        // Convert ArrayList to Managed
+        self.layers = std.array_list.Managed(layer.Layer).init(allocator);
+        try self.layers.appendSlice(loaded_layers.items);
+        loaded_layers.deinit();
+
+        self.caches = std.array_list.Managed(?LayerCache).init(allocator);
+        try self.caches.resize(self.layers.items.len);
+        for (self.caches.items) |*cache| {
+            cache.* = null;
+        }
+
+        self.optimizers = std.array_list.Managed(?optimizer.Optimizer).init(allocator);
+        try self.optimizers.resize(self.layers.items.len);
+        for (self.optimizers.items) |*opt| {
+            opt.* = null;
+        }
+
+        // Calculate max layer size
+        for (self.layers.items) |l| {
+            const size = l.inputSize();
+            const out_size = l.outputSize();
+            const max_size = @max(size, out_size);
+            if (max_size > self.max_layer_size) {
+                self.max_layer_size = max_size;
+            }
+        }
+
+        // Pre-allocate work buffers
+        try self.reallocateWorkBuffers(self.max_layer_size);
+
+        return self;
     }
 };

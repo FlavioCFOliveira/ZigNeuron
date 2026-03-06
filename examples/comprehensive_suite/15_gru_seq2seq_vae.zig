@@ -26,5 +26,5 @@ pub fn main() !void {
     _ = try net.addDense(32, window_size, .linear);
 
     std.debug.print("\n--- Training GRU Seq2seq VAE ---\n", .{});
-    try net.train(dataset.x, dataset.x, 50, 0.01, .{ .mse = {} });
+    try net.train(dataset.x, dataset.x, 50, 0.01, .{ .mse = {} }, null, null);
 }

@@ -22,5 +22,5 @@ pub fn main() !void {
     _ = try net.addDense(16, target_size, .linear);
 
     std.debug.print("\n--- Training CNN Seq2seq ---\n", .{});
-    try net.train(dataset.x, dataset.y, 50, 0.01, .{ .mse = {} });
+    try net.train(dataset.x, dataset.y, 50, 0.01, .{ .mse = {} }, null, null);
 }

@@ -158,12 +158,12 @@ fn testBackend(allocator: std.mem.Allocator, backend: zn.backend.Backend, name: 
 
     // Warm-up run
     const loss_fn = zn.loss.Loss{ .mse = {} };
-    try network.train(training_data[0..10], training_targets[0..10], 1, 0.01, loss_fn);
+    try network.train(training_data[0..10], training_targets[0..10], 1, 0.01, loss_fn, null, null);
     network.clearGradients();
 
     // Training benchmark
     var timer = try std.time.Timer.start();
-    try network.train(training_data, training_targets, 50, 0.01, loss_fn);
+    try network.train(training_data, training_targets, 50, 0.01, loss_fn, null, null);
     result.training_time_ms = @as(f64, @floatFromInt(timer.read())) / 1_000_000.0;
 
     // Get final loss
@@ -230,7 +230,7 @@ pub fn testArchitectures(allocator: std.mem.Allocator, backend: zn.backend.Backe
         // Quick benchmark
         const start = std.time.milliTimestamp();
         const loss_fn = zn.loss.Loss{ .mse = {} };
-        try network.train(&[_][]const f32{}, &[_][]const f32{}, 10, 0.01, loss_fn);
+        try network.train(&[_][]const f32{}, &[_][]const f32{}, 10, 0.01, loss_fn, null, null);
         const train_time = std.time.milliTimestamp() - start;
 
         std.debug.print("{s:20} | {d:15} | {s:15}\n", .{

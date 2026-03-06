@@ -7,6 +7,7 @@ const loss = @import("loss.zig");
 const vulkan_module = @import("vulkan.zig");
 const metal = @import("metal.zig");
 const metal_context = @import("metal_context.zig");
+const optimization = @import("optimization.zig");
 
 /// Available GPU backends in priority order
 pub const GpuBackend = enum {
@@ -1334,6 +1335,7 @@ pub const Backend = struct {
             .tanh => "tanh_forward",
             .softmax => "softmax_forward",
             .linear => "linear_forward",
+            .gelu => "gelu_forward", // TODO: Add Metal kernel for GELU
         };
         const pipeline = ctx.getPipeline(pipeline_name) orelse return error.PipelineNotFound;
 
@@ -1393,6 +1395,7 @@ pub const Backend = struct {
             .tanh => "tanh_backward",
             .softmax => "softmax_backward",
             .linear => "linear_backward",
+            .gelu => "gelu_backward", // TODO: Add Metal kernel for GELU
         };
         const pipeline = ctx.getPipeline(pipeline_name) orelse return error.PipelineNotFound;
 
@@ -1964,12 +1967,18 @@ pub const Backend = struct {
 
     fn vulkanActivationForward(self: Backend, act: activation.Activation, input: []const f32, output: []f32) !void {
         _ = self;
-        if (act == .softmax) {
-            try act.softmaxForward(input, output);
-        } else {
-            for (input, 0..) |x, i| {
-                output[i] = act.forward(x);
-            }
+        switch (act) {
+            .softmax => try act.softmaxForward(input, output),
+            .relu => optimization.SIMD.reluVectorized(input, output),
+            .sigmoid => optimization.SIMD.sigmoidVectorized(input, output),
+            .tanh => optimization.SIMD.tanhVectorized(input, output),
+            .linear => @memcpy(output, input),
+            .gelu => {
+                // GELU using scalar implementation for now
+                for (input, 0..) |x, i| {
+                    output[i] = act.forward(x);
+                }
+            },
         }
     }
 
@@ -2057,18 +2066,21 @@ pub const Backend = struct {
     fn cpuActivationBackward(act: activation.Activation, input: []const f32, grad_output: []const f32, grad_input: []f32) void {
         if (act == .softmax) {
             // Softmax backward requires per-sample processing
-            // We need to know the number of classes.
-            // Since we don't pass it, we assume the whole input is one sample
-            // UNLESS we update the interface.
-            // For now, let's assume we need to loop if input.len > some_heuristic or we just need the size.
-            // Actually, for softmax, input is the ACTIVATED output (probabilities).
-            // We can't know num_classes without it being passed.
-            // Let's assume it's one sample for now, as it was before,
-            // but the Network should really pass the sample size.
             act.softmaxBackward(input, grad_output, grad_input) catch @panic("Softmax backward failed");
         } else {
-            for (input, 0..) |y, i| {
-                grad_input[i] = act.backward(y, grad_output[i]);
+            // Use SIMD-optimized backward passes
+            switch (act) {
+                .relu => optimization.SIMD.reluBackwardVectorized(input, grad_output, grad_input),
+                .sigmoid => optimization.SIMD.sigmoidBackwardVectorized(input, grad_output, grad_input),
+                .tanh => optimization.SIMD.tanhBackwardVectorized(input, grad_output, grad_input),
+                .linear => @memcpy(grad_input, grad_output),
+                .softmax => unreachable, // Handled above
+                .gelu => {
+                    // GELU backward using scalar implementation for now
+                    for (input, grad_output, grad_input) |y, go, *gi| {
+                        gi.* = act.backward(y, go);
+                    }
+                },
             }
         }
     }
@@ -2286,9 +2298,15 @@ pub const Backend = struct {
 
     fn cpuAttentionForward(self: Backend, q: []const f32, k: []const f32, v: []const f32, output: []f32, seq_len: usize, d_k: usize, scaling_factor: f32) !void {
         _ = self;
-        // Pre-allocate scores buffer once (avoid allocation in hot loop)
-        var scores = try std.heap.page_allocator.alloc(f32, seq_len);
-        defer std.heap.page_allocator.free(scores);
+        // Use stack buffer for small sequences to avoid allocation
+        const STACK_BUFFER_SIZE = 1024;
+        var stack_buffer: [STACK_BUFFER_SIZE]f32 = undefined;
+
+        const scores: []f32 = if (seq_len <= STACK_BUFFER_SIZE)
+            stack_buffer[0..seq_len]
+        else
+            try std.heap.page_allocator.alloc(f32, seq_len);
+        defer if (seq_len > STACK_BUFFER_SIZE) std.heap.page_allocator.free(scores);
 
         for (0..seq_len) |i| {
             var max_score: f32 = -std.math.inf(f32);
@@ -2810,6 +2828,124 @@ pub const Backend = struct {
         if (ctx.active_command_buffer == null) {
             cb.commit();
             cb.waitUntilCompleted();
+        }
+    }
+
+    /// Batch Normalization forward pass (training mode)
+    pub fn batchNormForwardTraining(
+        self: Backend,
+        input: []const f32, input_buf: ?*const metal.MTLBuffer,
+        output: []f32, output_buf: ?*const metal.MTLBuffer,
+        gamma: []const f32, gamma_buf: ?*const metal.MTLBuffer,
+        beta: []const f32, beta_buf: ?*const metal.MTLBuffer,
+        epsilon: f32,
+        momentum: f32,
+        running_mean: []f32, running_mean_buf: ?*const metal.MTLBuffer,
+        running_var: []f32, running_var_buf: ?*const metal.MTLBuffer,
+    ) !void {
+        _ = input_buf; _ = output_buf; _ = gamma_buf; _ = beta_buf;
+        _ = running_mean_buf; _ = running_var_buf;
+
+        // Compute batch mean
+        var batch_mean: f32 = 0.0;
+        for (input) |x| batch_mean += x;
+        batch_mean /= @as(f32, @floatFromInt(input.len));
+
+        // Compute batch variance
+        var batch_var: f32 = 0.0;
+        for (input) |x| {
+            const diff = x - batch_mean;
+            batch_var += diff * diff;
+        }
+        batch_var /= @as(f32, @floatFromInt(input.len));
+
+        // Normalize
+        const inv_std = 1.0 / @sqrt(batch_var + epsilon);
+
+        for (input, 0..) |x, i| {
+            const normalized = (x - batch_mean) * inv_std;
+            const idx = i % gamma.len;
+            output[i] = gamma[idx] * normalized + beta[idx];
+        }
+
+        // Update running statistics
+        for (0..gamma.len) |i| {
+            running_mean[i] = (1.0 - momentum) * running_mean[i] + momentum * batch_mean;
+            running_var[i] = (1.0 - momentum) * running_var[i] + momentum * batch_var;
+        }
+
+        _ = self;
+    }
+
+    /// Batch Normalization forward pass (inference mode)
+    pub fn batchNormForwardInference(
+        self: Backend,
+        input: []const f32, input_buf: ?*const metal.MTLBuffer,
+        output: []f32, output_buf: ?*const metal.MTLBuffer,
+        gamma: []const f32, gamma_buf: ?*const metal.MTLBuffer,
+        beta: []const f32, beta_buf: ?*const metal.MTLBuffer,
+        epsilon: f32,
+        running_mean: []const f32, running_mean_buf: ?*const metal.MTLBuffer,
+        running_var: []const f32, running_var_buf: ?*const metal.MTLBuffer,
+    ) !void {
+        _ = input_buf; _ = output_buf; _ = gamma_buf; _ = beta_buf;
+        _ = running_mean_buf; _ = running_var_buf; _ = self;
+
+        // Use running statistics
+        for (input, 0..) |x, i| {
+            const idx = i % gamma.len;
+            const mean = running_mean[idx];
+            const var_val = running_var[idx];
+            const normalized = (x - mean) / @sqrt(var_val + epsilon);
+            output[i] = gamma[idx] * normalized + beta[idx];
+        }
+    }
+
+    /// Batch Normalization backward pass
+    pub fn batchNormBackward(
+        self: Backend,
+        input: []const f32, input_buf: ?*const metal.MTLBuffer,
+        grad_output: []const f32, grad_output_buf: ?*const metal.MTLBuffer,
+        grad_input: []f32, grad_input_buf: ?*const metal.MTLBuffer,
+        gamma: []const f32, gamma_buf: ?*const metal.MTLBuffer,
+        grad_gamma: []f32, grad_gamma_buf: ?*const metal.MTLBuffer,
+        grad_beta: []f32, grad_beta_buf: ?*const metal.MTLBuffer,
+        epsilon: f32,
+    ) !void {
+        _ = input_buf; _ = grad_output_buf; _ = grad_input_buf;
+        _ = gamma_buf; _ = grad_gamma_buf; _ = grad_beta_buf; _ = self;
+
+        // Compute batch mean and variance
+        var batch_mean: f32 = 0.0;
+        for (input) |x| batch_mean += x;
+        batch_mean /= @as(f32, @floatFromInt(input.len));
+
+        var batch_var: f32 = 0.0;
+        for (input) |x| {
+            const diff = x - batch_mean;
+            batch_var += diff * diff;
+        }
+        batch_var /= @as(f32, @floatFromInt(input.len));
+
+        const inv_std = 1.0 / @sqrt(batch_var + epsilon);
+
+        // Reset gradients
+        @memset(grad_gamma, 0);
+        @memset(grad_beta, 0);
+
+        // Compute gradients
+        for (input, grad_output, 0..) |x, go, i| {
+            const normalized = (x - batch_mean) * inv_std;
+            const idx = i % gamma.len;
+
+            grad_gamma[idx] += go * normalized;
+            grad_beta[idx] += go;
+        }
+
+        // Gradient w.r.t. input
+        for (input, grad_output, grad_input, 0..) |_, go, *gi, i| {
+            const idx = i % gamma.len;
+            gi.* = gamma[idx] * inv_std * go;
         }
     }
 };

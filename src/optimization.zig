@@ -31,7 +31,7 @@ pub const SIMD = struct {
         // Process 4 elements at a time
         while (i + vector_len <= input.len) : (i += vector_len) {
             // Load 4 floats into NEON register
-            const vec = @as(@Vector(VECTOR_WIDTH, f32), input[i..][0..VECTOR_WIDTH]);
+            const vec: @Vector(VECTOR_WIDTH, f32) = input[i..][0..VECTOR_WIDTH].*;
 
             // Create zero vector
             const zero = @as(@Vector(VECTOR_WIDTH, f32), @splat(0.0));
@@ -65,11 +65,11 @@ pub const SIMD = struct {
         // Process 4 elements at a time
         while (i + vector_len <= input.len) : (i += vector_len) {
             // Load 4 floats
-            const vec = @as(@Vector(VECTOR_WIDTH, f32), input[i..][0..VECTOR_WIDTH]);
+            const vec: @Vector(VECTOR_WIDTH, f32) = input[i..][0..VECTOR_WIDTH].*;
 
             // Compute sigmoid approximation
             // Use: sigmoid(x) ≈ 0.5 + 0.197 * x / (1 + 0.197 * |x|)
-            const abs_vec = @fabs(vec);
+            const abs_vec = @abs(vec);
             const scale = @as(@Vector(VECTOR_WIDTH, f32), @splat(0.197));
             const half = @as(@Vector(VECTOR_WIDTH, f32), @splat(0.5));
 
@@ -103,7 +103,7 @@ pub const SIMD = struct {
         // Process 4 elements at a time
         while (i + vector_len <= input.len) : (i += vector_len) {
             // Load 4 floats
-            const vec = @as(@Vector(VECTOR_WIDTH, f32), input[i..][0..VECTOR_WIDTH]);
+            const vec: @Vector(VECTOR_WIDTH, f32) = input[i..][0..VECTOR_WIDTH].*;
 
             // Compute tanh approximation
             // Use: tanh(x) ≈ x * (1 + 0.5 * x^2) / (1 + x^2)
@@ -140,8 +140,8 @@ pub const SIMD = struct {
         // Process 4 elements at a time
         while (i + vector_len <= a.len) : (i += vector_len) {
             // Load vectors
-            const vec_a = @as(@Vector(VECTOR_WIDTH, f32), a[i..][0..VECTOR_WIDTH]);
-            const vec_b = @as(@Vector(VECTOR_WIDTH, f32), b[i..][0..VECTOR_WIDTH]);
+            const vec_a: @Vector(VECTOR_WIDTH, f32) = a[i..][0..VECTOR_WIDTH].*;
+            const vec_b: @Vector(VECTOR_WIDTH, f32) = b[i..][0..VECTOR_WIDTH].*;
 
             // Add vectors
             const result = vec_a + vec_b;
@@ -173,8 +173,8 @@ pub const SIMD = struct {
         // Process 4 elements at a time
         while (i + vector_len <= a.len) : (i += vector_len) {
             // Load vectors
-            const vec_a = @as(@Vector(VECTOR_WIDTH, f32), a[i..][0..VECTOR_WIDTH]);
-            const vec_b = @as(@Vector(VECTOR_WIDTH, f32), b[i..][0..VECTOR_WIDTH]);
+            const vec_a: @Vector(VECTOR_WIDTH, f32) = a[i..][0..VECTOR_WIDTH].*;
+            const vec_b: @Vector(VECTOR_WIDTH, f32) = b[i..][0..VECTOR_WIDTH].*;
 
             // Multiply vectors
             const result = vec_a * vec_b;
@@ -207,8 +207,8 @@ pub const SIMD = struct {
         // Process 4 elements at a time
         while (i + vector_len <= a.len) : (i += vector_len) {
             // Load vectors
-            const vec_a = @as(@Vector(VECTOR_WIDTH, f32), a[i..][0..VECTOR_WIDTH]);
-            const vec_b = @as(@Vector(VECTOR_WIDTH, f32), b[i..][0..VECTOR_WIDTH]);
+            const vec_a: @Vector(VECTOR_WIDTH, f32) = a[i..][0..VECTOR_WIDTH].*;
+            const vec_b: @Vector(VECTOR_WIDTH, f32) = b[i..][0..VECTOR_WIDTH].*;
 
             // Compute squared error
             const diff = vec_a - vec_b;
@@ -222,6 +222,81 @@ pub const SIMD = struct {
         for (a[i..], b[i..], output[i..]) |x, y, *out| {
             const diff = x - y;
             out.* = diff * diff;
+        }
+    }
+
+    /// Vectorized ReLU backward: grad_input = grad_output * (output > 0 ? 1 : 0)
+    pub fn reluBackwardVectorized(output: []const f32, grad_output: []const f32, grad_input: []f32) void {
+        if (!isNeonAvailable()) {
+            for (output, grad_output, grad_input) |y, go, *gi| {
+                gi.* = if (y > 0) go else 0;
+            }
+            return;
+        }
+
+        var i: usize = 0;
+        const vector_len = VECTOR_WIDTH;
+
+        while (i + vector_len <= output.len) : (i += vector_len) {
+            const vec_y: @Vector(VECTOR_WIDTH, f32) = output[i..][0..VECTOR_WIDTH].*;
+            const vec_go: @Vector(VECTOR_WIDTH, f32) = grad_output[i..][0..VECTOR_WIDTH].*;
+            const zero = @as(@Vector(VECTOR_WIDTH, f32), @splat(0.0));
+            const result = @select(f32, vec_y > zero, vec_go, zero);
+            grad_input[i..][0..VECTOR_WIDTH].* = result;
+        }
+
+        for (output[i..], grad_output[i..], grad_input[i..]) |y, go, *gi| {
+            gi.* = if (y > 0) go else 0;
+        }
+    }
+
+    /// Vectorized Sigmoid backward: grad_input = grad_output * output * (1 - output)
+    pub fn sigmoidBackwardVectorized(output: []const f32, grad_output: []const f32, grad_input: []f32) void {
+        if (!isNeonAvailable()) {
+            for (output, grad_output, grad_input) |y, go, *gi| {
+                gi.* = go * y * (1.0 - y);
+            }
+            return;
+        }
+
+        var i: usize = 0;
+        const vector_len = VECTOR_WIDTH;
+
+        while (i + vector_len <= output.len) : (i += vector_len) {
+            const vec_y: @Vector(VECTOR_WIDTH, f32) = output[i..][0..VECTOR_WIDTH].*;
+            const vec_go: @Vector(VECTOR_WIDTH, f32) = grad_output[i..][0..VECTOR_WIDTH].*;
+            const one = @as(@Vector(VECTOR_WIDTH, f32), @splat(1.0));
+            const result = vec_go * vec_y * (one - vec_y);
+            grad_input[i..][0..VECTOR_WIDTH].* = result;
+        }
+
+        for (output[i..], grad_output[i..], grad_input[i..]) |y, go, *gi| {
+            gi.* = go * y * (1.0 - y);
+        }
+    }
+
+    /// Vectorized Tanh backward: grad_input = grad_output * (1 - output^2)
+    pub fn tanhBackwardVectorized(output: []const f32, grad_output: []const f32, grad_input: []f32) void {
+        if (!isNeonAvailable()) {
+            for (output, grad_output, grad_input) |y, go, *gi| {
+                gi.* = go * (1.0 - y * y);
+            }
+            return;
+        }
+
+        var i: usize = 0;
+        const vector_len = VECTOR_WIDTH;
+
+        while (i + vector_len <= output.len) : (i += vector_len) {
+            const vec_y: @Vector(VECTOR_WIDTH, f32) = output[i..][0..VECTOR_WIDTH].*;
+            const vec_go: @Vector(VECTOR_WIDTH, f32) = grad_output[i..][0..VECTOR_WIDTH].*;
+            const one = @as(@Vector(VECTOR_WIDTH, f32), @splat(1.0));
+            const result = vec_go * (one - vec_y * vec_y);
+            grad_input[i..][0..VECTOR_WIDTH].* = result;
+        }
+
+        for (output[i..], grad_output[i..], grad_input[i..]) |y, go, *gi| {
+            gi.* = go * (1.0 - y * y);
         }
     }
 };
@@ -623,8 +698,6 @@ pub const CacheFriendly = struct {
 };
 
 test "SIMD relu vectorized" {
-    const allocator = std.testing.allocator;
-
     const input = [_]f32{ -1.0, 0.0, 1.0, 2.0, -2.0, 3.0 };
     var output: [6]f32 = undefined;
 
@@ -639,8 +712,6 @@ test "SIMD relu vectorized" {
 }
 
 test "SIMD add vectorized" {
-    const allocator = std.testing.allocator;
-
     const a = [_]f32{ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0 };
     const b = [_]f32{ 0.5, 1.5, 2.5, 3.5, 4.5, 5.5 };
     var output: [6]f32 = undefined;
@@ -657,7 +728,6 @@ test "SIMD add vectorized" {
 
 test "Memory pool allocation" {
     const allocator = std.testing.allocator;
-
     var pool = try Memory.MemoryPool.init(allocator, 1024);
     defer pool.deinit();
 
@@ -672,7 +742,6 @@ test "Memory pool allocation" {
 
 test "Cache-friendly matrix multiplication" {
     const allocator = std.testing.allocator;
-
     const m: usize = 32;
     const n: usize = 32;
     const k: usize = 32;
@@ -699,8 +768,6 @@ test "Cache-friendly matrix multiplication" {
 }
 
 test "Performance benchmark" {
-    const allocator = std.testing.allocator;
-
     const data = [_]f32{1.0, 2.0, 3.0, 4.0};
     const result = Performance.benchmark(struct {
         fn sum(arr: []const f32) f32 {

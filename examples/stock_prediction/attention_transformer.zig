@@ -48,7 +48,7 @@ pub fn main() !void {
     std.debug.print("Starting training Attention stock predictor...\n", .{});
     const epochs = 100;
     const learning_rate: f32 = 0.005;
-    try net.train(windows.x, windows.y, epochs, learning_rate, .{ .mse = {} });
+    try net.train(windows.x, windows.y, epochs, learning_rate, .{ .mse = {} }, null, null);
 
     // 6. Predict
     const last_window = windows.x[windows.x.len - 1];

@@ -7,6 +7,7 @@ pub const Activation = union(enum) {
     tanh,
     softmax,
     linear, // Identity activation (no transformation)
+    gelu, // Gaussian Error Linear Unit
 
     pub fn forward(self: Activation, x: f32) f32 {
         return switch (self) {
@@ -15,6 +16,7 @@ pub const Activation = union(enum) {
             .tanh => tanhForward(x),
             .softmax => @panic("softmax forward not implemented for single value"),
             .linear => x, // Identity: f(x) = x
+            .gelu => geluForward(x),
         };
     }
 
@@ -25,6 +27,7 @@ pub const Activation = union(enum) {
             .tanh => tanhBackward(y) * grad,
             .softmax => @panic("softmax backward not implemented for single value"),
             .linear => grad, // Derivative of identity is 1
+            .gelu => geluBackward(y) * grad,
         };
     }
 
@@ -102,5 +105,31 @@ pub const Activation = union(enum) {
 
     fn tanhBackward(y: f32) f32 {
         return 1 - y * y;
+    }
+
+    /// GELU forward: GELU(x) = x * Φ(x) where Φ is the CDF of standard normal
+    /// Using the approximation: 0.5 * x * (1 + tanh[√(2/π) * (x + 0.044715 * x³)])
+    fn geluForward(x: f32) f32 {
+        const sqrt_2_over_pi: f32 = 0.7978845608; // sqrt(2/π)
+        const coeff: f32 = 0.044715;
+        const x_cubed = x * x * x;
+        const inner = sqrt_2_over_pi * (x + coeff * x_cubed);
+        return 0.5 * x * (1.0 + std.math.tanh(inner));
+    }
+
+    /// GELU backward derivative
+    /// For GELU, we approximate x from y (activated output) for backward compatibility
+    /// dGELU/dx = Φ(x) + x * φ(x) where φ is the PDF of standard normal
+    fn geluBackward(y: f32) f32 {
+        // Approximate x ≈ y for computing derivative (good approximation for small values)
+        // For more accuracy, we'd need to store x during forward pass
+        const x = y;
+        const sqrt_2_over_pi: f32 = 0.7978845608;
+        const coeff: f32 = 0.044715;
+        const x_cubed = x * x * x;
+        const inner = sqrt_2_over_pi * (x + coeff * x_cubed);
+        const tanh_inner = std.math.tanh(inner);
+        const sech2_inner = 1.0 - tanh_inner * tanh_inner;
+        return 0.5 * (1.0 + tanh_inner) + 0.5 * x * sech2_inner * sqrt_2_over_pi * (1.0 + 3.0 * coeff * x * x);
     }
 };

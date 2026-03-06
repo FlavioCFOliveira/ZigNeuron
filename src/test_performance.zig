@@ -65,7 +65,7 @@ fn testFNN(allocator: std.mem.Allocator, backend: zn.backend.Backend, name: []co
     // Warm-up run
     std.debug.print("  Warm-up...\n", .{});
     const loss_fn = zn.loss.Loss{ .mse = {} };
-    try network.train(training_data[0..10], training_targets[0..10], 1, 0.01, loss_fn);
+    try network.train(training_data[0..10], training_targets[0..10], 1, 0.01, loss_fn, null, null);
 
     // Clear gradients after warm-up
     network.clearGradients();
@@ -75,7 +75,7 @@ fn testFNN(allocator: std.mem.Allocator, backend: zn.backend.Backend, name: []co
     std.debug.print("  Training for {d} epochs...\n", .{num_epochs});
 
     var timer = try std.time.Timer.start();
-    try network.train(training_data, training_targets, num_epochs, 0.01, loss_fn);
+    try network.train(training_data, training_targets, num_epochs, 0.01, loss_fn, null, null);
     const elapsed_ns = timer.read();
     const elapsed_ms = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000.0;
 

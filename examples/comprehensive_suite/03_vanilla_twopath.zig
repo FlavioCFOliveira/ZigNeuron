@@ -20,5 +20,5 @@ pub fn main() !void {
     _ = try net.addDense(32, 1, .linear);
 
     std.debug.print("\n--- Training Vanilla RNN 2-Path ---\n", .{});
-    try net.train(dataset.x, dataset.y, 50, 0.001, .{ .mse = {} });
+    try net.train(dataset.x, dataset.y, 50, 0.001, .{ .mse = {} }, null, null);
 }

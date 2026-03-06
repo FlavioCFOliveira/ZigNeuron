@@ -14,6 +14,7 @@ pub const Layer = union(enum) {
     sampling: *SamplingLayer,
     conv1d: *Conv1D,
     layer_norm: *LayerNorm,
+    batch_norm: *BatchNorm,
     dropout: *Dropout,
     attention: *Attention,
     bidirectional: *recurrent.Bidirectional,
@@ -28,6 +29,7 @@ pub const Layer = union(enum) {
             .sampling => |s| s.deinit(),
             .conv1d => |c| c.deinit(),
             .layer_norm => |ln| ln.deinit(),
+            .batch_norm => |bn| bn.deinit(),
             .dropout => |dr| dr.deinit(),
             .attention => |a| a.deinit(),
             .bidirectional => |b| b.deinit(),
@@ -44,6 +46,7 @@ pub const Layer = union(enum) {
             .sampling => |s| try s.forward(input, input_buf, output, output_buf),
             .conv1d => |c| try c.forward(input, input_buf, output, output_buf),
             .layer_norm => |ln| try ln.forward(input, input_buf, output, output_buf),
+            .batch_norm => |bn| try bn.forward(input, input_buf, output, output_buf),
             .dropout => |dr| try dr.forward(input, input_buf, output, output_buf),
             .attention => |a| try a.forward(input, input_buf, output, output_buf),
             .bidirectional => |b| try b.forward(input, input_buf, output, output_buf),
@@ -65,6 +68,7 @@ pub const Layer = union(enum) {
             .sampling => |s| try s.backward(input, input_buf, grad_output, grad_output_buf, grad_input, grad_input_buf, activated_output, activated_output_buf),
             .conv1d => |c| try c.backward(input, input_buf, grad_output, grad_output_buf, grad_input, grad_input_buf, activated_output, activated_output_buf),
             .layer_norm => |ln| try ln.backward(input, input_buf, grad_output, grad_output_buf, grad_input, grad_input_buf, activated_output, activated_output_buf),
+            .batch_norm => |bn| try bn.backward(input, input_buf, grad_output, grad_output_buf, grad_input, grad_input_buf, activated_output, activated_output_buf),
             .dropout => |dr| try dr.backward(input, input_buf, grad_output, grad_output_buf, grad_input, grad_input_buf, activated_output, activated_output_buf),
             .attention => |a| try a.backward(input, input_buf, grad_output, grad_output_buf, grad_input, grad_input_buf, activated_output, activated_output_buf),
             .bidirectional => |b| try b.backward(input, input_buf, grad_output, grad_output_buf, grad_input, grad_input_buf, activated_output, activated_output_buf),
@@ -81,6 +85,7 @@ pub const Layer = union(enum) {
             .sampling => |s| return s.input_size,
             .conv1d => |c| return c.input_size,
             .layer_norm => |ln| return ln.size,
+            .batch_norm => |bn| return bn.size,
             .dropout => |dr| return dr.size,
             .attention => |a| return a.size,
             .bidirectional => |b| return b.input_size,
@@ -97,6 +102,7 @@ pub const Layer = union(enum) {
             .sampling => |s| return s.input_size / 2,
             .conv1d => |c| return c.output_size,
             .layer_norm => |ln| return ln.size,
+            .batch_norm => |bn| return bn.size,
             .dropout => |dr| return dr.size,
             .attention => |a| return a.size,
             .bidirectional => |b| return 2 * b.hidden_size,
@@ -113,6 +119,7 @@ pub const Layer = union(enum) {
             .sampling => |s| return &s.epsilon,
             .conv1d => |c| return &c.weights,
             .layer_norm => |ln| return &ln.gamma,
+            .batch_norm => |bn| return &bn.gamma,
             .dropout => |dr| return &dr.mask,
             .attention => |a| return &a.query_weights,
             .bidirectional => |b| return b.fw_layer.getWeights(),
@@ -129,6 +136,7 @@ pub const Layer = union(enum) {
             .sampling => |s| return &s.epsilon,
             .conv1d => |c| return &c.bias,
             .layer_norm => |ln| return &ln.beta,
+            .batch_norm => |bn| return &bn.beta,
             .dropout => |dr| return &dr.mask,
             .attention => |a| return &a.query_weights,
             .bidirectional => |b| return b.fw_layer.getBias(),
@@ -145,6 +153,7 @@ pub const Layer = union(enum) {
             .sampling => |s| return &s.epsilon,
             .conv1d => |c| return &c.grad_weights,
             .layer_norm => |ln| return &ln.grad_gamma,
+            .batch_norm => |bn| return &bn.grad_gamma,
             .dropout => |dr| return &dr.mask,
             .attention => |a| return &a.query_weights,
             .bidirectional => |b| return b.fw_layer.getGradWeights(),
@@ -161,6 +170,7 @@ pub const Layer = union(enum) {
             .sampling => |s| return &s.epsilon,
             .conv1d => |c| return &c.grad_bias,
             .layer_norm => |ln| return &ln.grad_beta,
+            .batch_norm => |bn| return &bn.grad_beta,
             .dropout => |dr| return &dr.mask,
             .attention => |a| return &a.query_weights,
             .bidirectional => |b| return b.fw_layer.getGradBias(),
@@ -193,6 +203,7 @@ pub const Layer = union(enum) {
             .sampling => |s| return s.backend,
             .conv1d => |c| return c.backend,
             .layer_norm => |ln| return ln.backend,
+            .batch_norm => |bn| return bn.backend,
             .dropout => |dr| return dr.backend,
             .attention => |a| return a.backend,
             .bidirectional => |b| return b.fw_layer.getBackend(),
@@ -242,7 +253,7 @@ pub const Dense = struct {
 
         const scale = switch (act) {
             .relu => @sqrt(2.0 / @as(f32, @floatFromInt(input_size))),
-            .sigmoid, .tanh, .softmax => @sqrt(2.0 / @as(f32, @floatFromInt(input_size + output_size))),
+            .sigmoid, .tanh, .softmax, .gelu => @sqrt(2.0 / @as(f32, @floatFromInt(input_size + output_size))),
             .linear => @sqrt(1.0 / @as(f32, @floatFromInt(input_size))),
         };
 
@@ -555,6 +566,76 @@ pub const LayerNorm = struct {
     }
 };
 
+pub const BatchNorm = struct {
+    size: usize,
+    gamma: tensor.Tensor,
+    beta: tensor.Tensor,
+    grad_gamma: tensor.Tensor,
+    grad_beta: tensor.Tensor,
+    running_mean: tensor.Tensor,
+    running_var: tensor.Tensor,
+    eps: f32,
+    momentum: f32,
+    backend: backend_module.Backend,
+    allocator: std.mem.Allocator,
+    training: bool,
+
+    pub fn init(allocator: std.mem.Allocator, size: usize, backend: backend_module.Backend) !*BatchNorm {
+        const self = try allocator.create(BatchNorm);
+        self.size = size;
+        self.eps = 1e-5;
+        self.momentum = 0.1;
+        self.training = true;
+
+        // Learnable parameters
+        self.gamma = try tensor.Tensor.init(allocator, &.{size}, backend);
+        self.beta = try tensor.Tensor.init(allocator, &.{size}, backend);
+        self.grad_gamma = try tensor.Tensor.init(allocator, &.{size}, backend);
+        self.grad_beta = try tensor.Tensor.init(allocator, &.{size}, backend);
+
+        // Running statistics
+        self.running_mean = try tensor.Tensor.init(allocator, &.{size}, backend);
+        self.running_var = try tensor.Tensor.init(allocator, &.{size}, backend);
+
+        // Initialize
+        @memset(self.gamma.slice, 1.0);
+        @memset(self.beta.slice, 0.0);
+        @memset(self.running_mean.slice, 0.0);
+        @memset(self.running_var.slice, 1.0);
+        @memset(self.grad_gamma.slice, 0.0);
+        @memset(self.grad_beta.slice, 0.0);
+
+        self.backend = backend;
+        self.allocator = allocator;
+        return self;
+    }
+
+    pub fn deinit(self: *BatchNorm) void {
+        self.gamma.deinit();
+        self.beta.deinit();
+        self.grad_gamma.deinit();
+        self.grad_beta.deinit();
+        self.running_mean.deinit();
+        self.running_var.deinit();
+        self.allocator.destroy(self);
+    }
+
+    pub fn forward(self: *BatchNorm, input: []const f32, input_buf: ?*const metal.MTLBuffer, output: []f32, output_buf: ?*const metal.MTLBuffer) !void {
+        if (self.training) {
+            // Training mode: use batch statistics and update running stats
+            try self.backend.batchNormForwardTraining(input, input_buf, output, output_buf, self.gamma.slice, self.gamma.getMtlBuffer(), self.beta.slice, self.beta.getMtlBuffer(), self.eps, self.momentum, self.running_mean.slice, self.running_mean.getMtlBuffer(), self.running_var.slice, self.running_var.getMtlBuffer());
+        } else {
+            // Inference mode: use running statistics
+            try self.backend.batchNormForwardInference(input, input_buf, output, output_buf, self.gamma.slice, self.gamma.getMtlBuffer(), self.beta.slice, self.beta.getMtlBuffer(), self.eps, self.running_mean.slice, self.running_mean.getMtlBuffer(), self.running_var.slice, self.running_var.getMtlBuffer());
+        }
+    }
+
+    pub fn backward(self: *BatchNorm, input: []const f32, input_buf: ?*const metal.MTLBuffer, grad_output: []const f32, grad_output_buf: ?*const metal.MTLBuffer, grad_input: []f32, grad_input_buf: ?*const metal.MTLBuffer, activated_output: []const f32, activated_output_buf: ?*const metal.MTLBuffer) !void {
+        _ = activated_output; _ = activated_output_buf;
+        try self.backend.batchNormBackward(input, input_buf, grad_output, grad_output_buf, grad_input, grad_input_buf, self.gamma.slice, self.gamma.getMtlBuffer(), self.grad_gamma.slice, self.grad_gamma.getMtlBuffer(), self.grad_beta.slice, self.grad_beta.getMtlBuffer(), self.eps);
+    }
+};
+
 pub const Dropout = struct {
     size: usize,
     rate: f32,
@@ -603,8 +684,15 @@ pub const Attention = struct {
     query_weights: tensor.Tensor,
     key_weights: tensor.Tensor,
     value_weights: tensor.Tensor,
+    // Dummy tensors for optimizer compatibility (attention doesn't use bias in this implementation)
+    bias: tensor.Tensor,
+    grad_weights: tensor.Tensor,
+    grad_bias: tensor.Tensor,
     backend: backend_module.Backend,
     allocator: std.mem.Allocator,
+    // Pre-allocated buffer for attention weights to avoid allocation in hot path
+    attention_weights_buffer: ?tensor.Tensor,
+    max_seq_len: usize,
 
     pub fn init(allocator: std.mem.Allocator, size: usize, backend: backend_module.Backend) !*Attention {
         const self = try allocator.create(Attention);
@@ -612,13 +700,22 @@ pub const Attention = struct {
         self.query_weights = try tensor.Tensor.init(allocator, &.{ size, size }, backend);
         self.key_weights = try tensor.Tensor.init(allocator, &.{ size, size }, backend);
         self.value_weights = try tensor.Tensor.init(allocator, &.{ size, size }, backend);
+        // Initialize dummy tensors for optimizer compatibility
+        self.bias = try tensor.Tensor.init(allocator, &.{size}, backend);
+        self.grad_weights = try tensor.Tensor.init(allocator, &.{ size, size }, backend);
+        self.grad_bias = try tensor.Tensor.init(allocator, &.{size}, backend);
         self.backend = backend;
         self.allocator = allocator;
+        self.attention_weights_buffer = null;
+        self.max_seq_len = 0;
 
         // Simple initialization
         @memset(self.query_weights.slice, 0.1);
         @memset(self.key_weights.slice, 0.1);
         @memset(self.value_weights.slice, 0.1);
+        @memset(self.bias.slice, 0);
+        @memset(self.grad_weights.slice, 0);
+        @memset(self.grad_bias.slice, 0);
 
         return self;
     }
@@ -627,7 +724,24 @@ pub const Attention = struct {
         self.query_weights.deinit();
         self.key_weights.deinit();
         self.value_weights.deinit();
+        self.bias.deinit();
+        self.grad_weights.deinit();
+        self.grad_bias.deinit();
+        if (self.attention_weights_buffer) |*buf| buf.deinit();
         self.allocator.destroy(self);
+    }
+
+    /// Ensure the attention weights buffer is large enough for the given sequence length.
+    /// Grows the buffer if needed, but never shrinks it (amortized allocation cost).
+    fn ensureAttentionBuffer(self: *Attention, seq_len: usize) ![]f32 {
+        const required_size = seq_len * seq_len;
+        if (self.attention_weights_buffer == null or self.max_seq_len < seq_len) {
+            // Need to allocate or grow the buffer
+            if (self.attention_weights_buffer) |*buf| buf.deinit();
+            self.attention_weights_buffer = try tensor.Tensor.init(self.allocator, &.{required_size}, self.backend);
+            self.max_seq_len = seq_len;
+        }
+        return self.attention_weights_buffer.?.slice[0..required_size];
     }
 
     pub fn forward(self: *Attention, input: []const f32, input_buf: ?*const metal.MTLBuffer, output: []f32, output_buf: ?*const metal.MTLBuffer) !void {
@@ -643,9 +757,8 @@ pub const Attention = struct {
         const d_k = self.size;
         const scale = 1.0 / @sqrt(@as(f32, @floatFromInt(d_k)));
 
-        // Allocate temporary buffers for intermediate computations
-        var attention_weights = try self.allocator.alloc(f32, seq_len * seq_len);
-        defer self.allocator.free(attention_weights);
+        // Use pre-allocated buffer for attention weights (zero-allocation hot path)
+        const attention_weights = try self.ensureAttentionBuffer(seq_len);
 
         // 1. Recompute attention scores and weights (forward pass values needed for backward)
         for (0..seq_len) |i| {
