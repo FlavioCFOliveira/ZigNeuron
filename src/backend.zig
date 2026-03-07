@@ -152,6 +152,98 @@ pub const Backend = struct {
         }
     }
 
+    /// Execute batched matrix multiplication with bias addition
+    /// C = A * B + bias
+    /// GPU is PRIORITY - CPU only used if GPU unavailable
+    pub fn matMulBias(self: Backend, a: []const f32, a_buf: ?*const metal.MTLBuffer, b: []const f32, b_buf: ?*const metal.MTLBuffer, bias: []const f32, bias_buf: ?*const metal.MTLBuffer, c: []f32, c_buf: ?*const metal.MTLBuffer, batch_size: usize, n: usize, k: usize) !void {
+        switch (self.type) {
+            .gpu => |gpu| switch (gpu) {
+                .metal => try self.metalMatMulBias(a, a_buf, b, b_buf, bias, bias_buf, c, c_buf, batch_size, n, k),
+            },
+            .cpu => {
+                // CPU fallback: compute matmul then add bias
+                cpuMatMulBatch(a, b, c, batch_size, n, k, false);
+                // Add bias to each row
+                var batch_idx: usize = 0;
+                while (batch_idx < batch_size) : (batch_idx += 1) {
+                    var col: usize = 0;
+                    while (col < n) : (col += 1) {
+                        c[batch_idx * n + col] += bias[col];
+                    }
+                }
+            },
+        }
+    }
+
+    /// Execute batched matrix multiplication with bias addition and ReLU activation
+    /// C = max(0, A * B + bias)
+    /// GPU is PRIORITY - CPU only used if GPU unavailable
+    pub fn matMulBiasRelu(self: Backend, a: []const f32, a_buf: ?*const metal.MTLBuffer, b: []const f32, b_buf: ?*const metal.MTLBuffer, bias: []const f32, bias_buf: ?*const metal.MTLBuffer, c: []f32, c_buf: ?*const metal.MTLBuffer, batch_size: usize, n: usize, k: usize) !void {
+        switch (self.type) {
+            .gpu => |gpu| switch (gpu) {
+                .metal => try self.metalMatMulBiasRelu(a, a_buf, b, b_buf, bias, bias_buf, c, c_buf, batch_size, n, k),
+            },
+            .cpu => {
+                // CPU fallback: compute matmul, add bias, then apply ReLU
+                cpuMatMulBatch(a, b, c, batch_size, n, k, false);
+                var batch_idx: usize = 0;
+                while (batch_idx < batch_size) : (batch_idx += 1) {
+                    var col: usize = 0;
+                    while (col < n) : (col += 1) {
+                        const val = c[batch_idx * n + col] + bias[col];
+                        c[batch_idx * n + col] = if (val > 0) val else 0;
+                    }
+                }
+            },
+        }
+    }
+
+    /// Execute batched matrix multiplication with bias addition and Sigmoid activation
+    /// C = sigmoid(A * B + bias)
+    /// GPU is PRIORITY - CPU only used if GPU unavailable
+    pub fn matMulBiasSigmoid(self: Backend, a: []const f32, a_buf: ?*const metal.MTLBuffer, b: []const f32, b_buf: ?*const metal.MTLBuffer, bias: []const f32, bias_buf: ?*const metal.MTLBuffer, c: []f32, c_buf: ?*const metal.MTLBuffer, batch_size: usize, n: usize, k: usize) !void {
+        switch (self.type) {
+            .gpu => |gpu| switch (gpu) {
+                .metal => try self.metalMatMulBiasSigmoid(a, a_buf, b, b_buf, bias, bias_buf, c, c_buf, batch_size, n, k),
+            },
+            .cpu => {
+                // CPU fallback: compute matmul, add bias, then apply sigmoid
+                cpuMatMulBatch(a, b, c, batch_size, n, k, false);
+                var batch_idx: usize = 0;
+                while (batch_idx < batch_size) : (batch_idx += 1) {
+                    var col: usize = 0;
+                    while (col < n) : (col += 1) {
+                        const val = c[batch_idx * n + col] + bias[col];
+                        c[batch_idx * n + col] = 1.0 / (1.0 + @exp(-val));
+                    }
+                }
+            },
+        }
+    }
+
+    /// Execute batched matrix multiplication with bias addition and Tanh activation
+    /// C = tanh(A * B + bias)
+    /// GPU is PRIORITY - CPU only used if GPU unavailable
+    pub fn matMulBiasTanh(self: Backend, a: []const f32, a_buf: ?*const metal.MTLBuffer, b: []const f32, b_buf: ?*const metal.MTLBuffer, bias: []const f32, bias_buf: ?*const metal.MTLBuffer, c: []f32, c_buf: ?*const metal.MTLBuffer, batch_size: usize, n: usize, k: usize) !void {
+        switch (self.type) {
+            .gpu => |gpu| switch (gpu) {
+                .metal => try self.metalMatMulBiasTanh(a, a_buf, b, b_buf, bias, bias_buf, c, c_buf, batch_size, n, k),
+            },
+            .cpu => {
+                // CPU fallback: compute matmul, add bias, then apply tanh
+                cpuMatMulBatch(a, b, c, batch_size, n, k, false);
+                var batch_idx: usize = 0;
+                while (batch_idx < batch_size) : (batch_idx += 1) {
+                    var col: usize = 0;
+                    while (col < n) : (col += 1) {
+                        const val = c[batch_idx * n + col] + bias[col];
+                        c[batch_idx * n + col] = std.math.tanh(val);
+                    }
+                }
+            },
+        }
+    }
+
     /// Execute matrix multiplication with transposed A: C = A^T * B
     pub fn matMulTransposeA(self: Backend, a: []const f32, a_buf: ?*const metal.MTLBuffer, b: []const f32, b_buf: ?*const metal.MTLBuffer, c: []f32, c_buf: ?*const metal.MTLBuffer, m: usize, n: usize, k: usize, accumulate: bool) !void {
         switch (self.type) {
@@ -1060,6 +1152,166 @@ pub const Backend = struct {
         const max_threads = pipeline.maxTotalThreadsPerThreadgroup();
         const tg_size = @min(32, max_threads);
         encoder.dispatchThreads(metal.MTLSize.make(n, 1, batch_size), metal.MTLSize.make(tg_size, 1, tg_size));
+        encoder.endEncoding();
+
+        if (ctx.active_command_buffer == null) {
+            cb.commit();
+            cb.waitUntilCompleted();
+        }
+    }
+
+    fn metalMatMulBias(self: Backend, a: []const f32, a_buf: ?*const metal.MTLBuffer, b: []const f32, b_buf: ?*const metal.MTLBuffer, bias: []const f32, bias_buf: ?*const metal.MTLBuffer, c: []f32, c_buf: ?*const metal.MTLBuffer, batch_size: usize, n: usize, k: usize) !void {
+        if (!isMacos()) return error.NotAvailable;
+        const ctx = self.metal_ctx.?;
+        var buffer_a = try self.getBuffer(a, a_buf);
+        defer if (a_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_a.buffer);
+        var buffer_b = try self.getBuffer(b, b_buf);
+        defer if (b_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_b.buffer);
+        var buffer_bias = try self.getBuffer(bias, bias_buf);
+        defer if (bias_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_bias.buffer);
+        var buffer_c = try self.getBuffer(c, c_buf);
+        defer if (c_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_c.buffer);
+
+        var cb = try self.getCommandBuffer();
+        var encoder = try cb.computeCommandEncoder();
+
+        const pipeline = ctx.getPipeline("matmul_bias") orelse return error.PipelineNotFound;
+        encoder.setComputePipelineState(pipeline);
+        encoder.setBuffer(&buffer_a.buffer, buffer_a.offset, 0);
+        encoder.setBuffer(&buffer_b.buffer, buffer_b.offset, 1);
+        encoder.setBuffer(&buffer_bias.buffer, buffer_bias.offset, 2);
+        encoder.setBuffer(&buffer_c.buffer, buffer_c.offset, 3);
+
+        const batch_size_u32 = @as(u32, @intCast(batch_size));
+        const n_u32 = @as(u32, @intCast(n));
+        const k_u32 = @as(u32, @intCast(k));
+        encoder.setBytes(std.mem.asBytes(&batch_size_u32), 4);
+        encoder.setBytes(std.mem.asBytes(&n_u32), 5);
+        encoder.setBytes(std.mem.asBytes(&k_u32), 6);
+
+        const max_threads = pipeline.maxTotalThreadsPerThreadgroup();
+        const tg_size = @min(32, max_threads);
+        encoder.dispatchThreads(metal.MTLSize.make(n, batch_size, 1), metal.MTLSize.make(tg_size, 1, 1));
+        encoder.endEncoding();
+
+        if (ctx.active_command_buffer == null) {
+            cb.commit();
+            cb.waitUntilCompleted();
+        }
+    }
+
+    fn metalMatMulBiasRelu(self: Backend, a: []const f32, a_buf: ?*const metal.MTLBuffer, b: []const f32, b_buf: ?*const metal.MTLBuffer, bias: []const f32, bias_buf: ?*const metal.MTLBuffer, c: []f32, c_buf: ?*const metal.MTLBuffer, batch_size: usize, n: usize, k: usize) !void {
+        if (!isMacos()) return error.NotAvailable;
+        const ctx = self.metal_ctx.?;
+        var buffer_a = try self.getBuffer(a, a_buf);
+        defer if (a_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_a.buffer);
+        var buffer_b = try self.getBuffer(b, b_buf);
+        defer if (b_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_b.buffer);
+        var buffer_bias = try self.getBuffer(bias, bias_buf);
+        defer if (bias_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_bias.buffer);
+        var buffer_c = try self.getBuffer(c, c_buf);
+        defer if (c_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_c.buffer);
+
+        var cb = try self.getCommandBuffer();
+        var encoder = try cb.computeCommandEncoder();
+
+        const pipeline = ctx.getPipeline("matmul_bias_relu") orelse return error.PipelineNotFound;
+        encoder.setComputePipelineState(pipeline);
+        encoder.setBuffer(&buffer_a.buffer, buffer_a.offset, 0);
+        encoder.setBuffer(&buffer_b.buffer, buffer_b.offset, 1);
+        encoder.setBuffer(&buffer_bias.buffer, buffer_bias.offset, 2);
+        encoder.setBuffer(&buffer_c.buffer, buffer_c.offset, 3);
+
+        const batch_size_u32 = @as(u32, @intCast(batch_size));
+        const n_u32 = @as(u32, @intCast(n));
+        const k_u32 = @as(u32, @intCast(k));
+        encoder.setBytes(std.mem.asBytes(&batch_size_u32), 4);
+        encoder.setBytes(std.mem.asBytes(&n_u32), 5);
+        encoder.setBytes(std.mem.asBytes(&k_u32), 6);
+
+        const max_threads = pipeline.maxTotalThreadsPerThreadgroup();
+        const tg_size = @min(32, max_threads);
+        encoder.dispatchThreads(metal.MTLSize.make(n, batch_size, 1), metal.MTLSize.make(tg_size, 1, 1));
+        encoder.endEncoding();
+
+        if (ctx.active_command_buffer == null) {
+            cb.commit();
+            cb.waitUntilCompleted();
+        }
+    }
+
+    fn metalMatMulBiasSigmoid(self: Backend, a: []const f32, a_buf: ?*const metal.MTLBuffer, b: []const f32, b_buf: ?*const metal.MTLBuffer, bias: []const f32, bias_buf: ?*const metal.MTLBuffer, c: []f32, c_buf: ?*const metal.MTLBuffer, batch_size: usize, n: usize, k: usize) !void {
+        if (!isMacos()) return error.NotAvailable;
+        const ctx = self.metal_ctx.?;
+        var buffer_a = try self.getBuffer(a, a_buf);
+        defer if (a_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_a.buffer);
+        var buffer_b = try self.getBuffer(b, b_buf);
+        defer if (b_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_b.buffer);
+        var buffer_bias = try self.getBuffer(bias, bias_buf);
+        defer if (bias_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_bias.buffer);
+        var buffer_c = try self.getBuffer(c, c_buf);
+        defer if (c_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_c.buffer);
+
+        var cb = try self.getCommandBuffer();
+        var encoder = try cb.computeCommandEncoder();
+
+        const pipeline = ctx.getPipeline("matmul_bias_sigmoid") orelse return error.PipelineNotFound;
+        encoder.setComputePipelineState(pipeline);
+        encoder.setBuffer(&buffer_a.buffer, buffer_a.offset, 0);
+        encoder.setBuffer(&buffer_b.buffer, buffer_b.offset, 1);
+        encoder.setBuffer(&buffer_bias.buffer, buffer_bias.offset, 2);
+        encoder.setBuffer(&buffer_c.buffer, buffer_c.offset, 3);
+
+        const batch_size_u32 = @as(u32, @intCast(batch_size));
+        const n_u32 = @as(u32, @intCast(n));
+        const k_u32 = @as(u32, @intCast(k));
+        encoder.setBytes(std.mem.asBytes(&batch_size_u32), 4);
+        encoder.setBytes(std.mem.asBytes(&n_u32), 5);
+        encoder.setBytes(std.mem.asBytes(&k_u32), 6);
+
+        const max_threads = pipeline.maxTotalThreadsPerThreadgroup();
+        const tg_size = @min(32, max_threads);
+        encoder.dispatchThreads(metal.MTLSize.make(n, batch_size, 1), metal.MTLSize.make(tg_size, 1, 1));
+        encoder.endEncoding();
+
+        if (ctx.active_command_buffer == null) {
+            cb.commit();
+            cb.waitUntilCompleted();
+        }
+    }
+
+    fn metalMatMulBiasTanh(self: Backend, a: []const f32, a_buf: ?*const metal.MTLBuffer, b: []const f32, b_buf: ?*const metal.MTLBuffer, bias: []const f32, bias_buf: ?*const metal.MTLBuffer, c: []f32, c_buf: ?*const metal.MTLBuffer, batch_size: usize, n: usize, k: usize) !void {
+        if (!isMacos()) return error.NotAvailable;
+        const ctx = self.metal_ctx.?;
+        var buffer_a = try self.getBuffer(a, a_buf);
+        defer if (a_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_a.buffer);
+        var buffer_b = try self.getBuffer(b, b_buf);
+        defer if (b_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_b.buffer);
+        var buffer_bias = try self.getBuffer(bias, bias_buf);
+        defer if (bias_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_bias.buffer);
+        var buffer_c = try self.getBuffer(c, c_buf);
+        defer if (c_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_c.buffer);
+
+        var cb = try self.getCommandBuffer();
+        var encoder = try cb.computeCommandEncoder();
+
+        const pipeline = ctx.getPipeline("matmul_bias_tanh") orelse return error.PipelineNotFound;
+        encoder.setComputePipelineState(pipeline);
+        encoder.setBuffer(&buffer_a.buffer, buffer_a.offset, 0);
+        encoder.setBuffer(&buffer_b.buffer, buffer_b.offset, 1);
+        encoder.setBuffer(&buffer_bias.buffer, buffer_bias.offset, 2);
+        encoder.setBuffer(&buffer_c.buffer, buffer_c.offset, 3);
+
+        const batch_size_u32 = @as(u32, @intCast(batch_size));
+        const n_u32 = @as(u32, @intCast(n));
+        const k_u32 = @as(u32, @intCast(k));
+        encoder.setBytes(std.mem.asBytes(&batch_size_u32), 4);
+        encoder.setBytes(std.mem.asBytes(&n_u32), 5);
+        encoder.setBytes(std.mem.asBytes(&k_u32), 6);
+
+        const max_threads = pipeline.maxTotalThreadsPerThreadgroup();
+        const tg_size = @min(32, max_threads);
+        encoder.dispatchThreads(metal.MTLSize.make(n, batch_size, 1), metal.MTLSize.make(tg_size, 1, 1));
         encoder.endEncoding();
 
         if (ctx.active_command_buffer == null) {

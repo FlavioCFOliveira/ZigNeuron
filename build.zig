@@ -83,6 +83,13 @@ pub fn build(b: *std.Build) void {
             "shaders/metal/matmul.metal",
             "shaders/metal/activation.metal",
             "shaders/metal/loss.metal",
+            "shaders/metal/fused.metal",
+            "shaders/metal/attention.metal",
+            "shaders/metal/recurrent.metal",
+            "shaders/metal/convolution.metal",
+            "shaders/metal/normalization.metal",
+            "shaders/metal/optimizer.metal",
+            "shaders/metal/auxiliary.metal",
         };
 
         var air_files: std.ArrayListUnmanaged([]const u8) = .{};

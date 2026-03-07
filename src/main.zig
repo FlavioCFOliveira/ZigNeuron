@@ -9,6 +9,7 @@ pub const optimizer = @import("optimizer.zig");
 pub const tensor = @import("tensor.zig");
 pub const serialization = @import("serialization.zig");
 pub const metrics = @import("metrics.zig");
+pub const cuda = @import("cuda.zig");
 pub const ZigNeuron = struct {};
 
 test "basic test" {

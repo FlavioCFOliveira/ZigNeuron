@@ -20,6 +20,7 @@ const unit_recurrent_accumulation = @import("test/unit/recurrent_accumulation.zi
 const unit_vae = @import("test/unit/vae.zig");
 const unit_phase4 = @import("test/unit/phase4.zig");
 const unit_parity = @import("test/unit/parity.zig");
+const unit_scheduler = @import("test/unit/scheduler.zig");
 
 test {
     // Reference only known good unit tests
@@ -33,5 +34,6 @@ test {
     std.testing.refAllDecls(unit_vae);
     std.testing.refAllDecls(unit_phase4);
     std.testing.refAllDecls(unit_parity);
+    std.testing.refAllDecls(unit_scheduler);
 }
 
