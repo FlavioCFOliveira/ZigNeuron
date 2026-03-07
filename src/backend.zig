@@ -77,7 +77,7 @@ pub const Backend = struct {
     }
 
     /// End a batch of commands and execute them (Metal only)
-    pub fn endCommandBatch(self: Backend) !void {
+    pub fn endCommandBatch(self: *Backend) !void {
         if (self.metal_ctx) |ctx| {
             if (ctx.active_command_buffer) |cb| {
                 var mutable_cb = cb;
@@ -1938,6 +1938,11 @@ pub const Backend = struct {
         var buffer_out = try self.getBuffer(output, output_buf);
         defer if (output_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_out.buffer);
 
+        // Allocate temporary buffer for attention scores [seq_len * seq_len]
+        const scores_size = seq_len * seq_len * @sizeOf(f32);
+        var buffer_scores = try ctx.allocBuffer(scores_size, .StorageModePrivate);
+        defer buffer_scores.release();
+
         var cb = try self.getCommandBuffer();
         var encoder = try cb.computeCommandEncoder();
         const pipeline = ctx.getPipeline("attention_forward") orelse return error.PipelineNotFound;
@@ -1946,13 +1951,17 @@ pub const Backend = struct {
         encoder.setBuffer(&buffer_k.buffer, buffer_k.offset, 1);
         encoder.setBuffer(&buffer_v.buffer, buffer_v.offset, 2);
         encoder.setBuffer(&buffer_out.buffer, buffer_out.offset, 3);
+        encoder.setBuffer(&buffer_scores, 0, 4);
         const sl = @as(u32, @intCast(seq_len));
         const dk = @as(u32, @intCast(d_k));
-        encoder.setBytes(std.mem.asBytes(&sl), 4);
-        encoder.setBytes(std.mem.asBytes(&dk), 5);
-        encoder.setBytes(std.mem.asBytes(&scaling_factor), 6);
+        encoder.setBytes(std.mem.asBytes(&sl), 5);
+        encoder.setBytes(std.mem.asBytes(&dk), 6);
+        encoder.setBytes(std.mem.asBytes(&scaling_factor), 7);
 
-        encoder.dispatchThreads(metal.MTLSize.make(d_k, seq_len, 1), metal.MTLSize.make(16, 16, 1));
+        // Use threadgroup size that's a multiple of SIMD width (32) for optimal occupancy
+        const tg_width = 32;
+        const tg_height = 8;
+        encoder.dispatchThreads(metal.MTLSize.make(d_k, seq_len, 1), metal.MTLSize.make(tg_width, tg_height, 1));
         encoder.endEncoding();
         if (ctx.active_command_buffer == null) { cb.commit(); cb.waitUntilCompleted(); }
     }

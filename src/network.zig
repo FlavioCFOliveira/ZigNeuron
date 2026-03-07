@@ -624,11 +624,13 @@ pub const EarlyStopping = struct {
                         }
 
                         // Save current weights
-                        for (self.layers.items) |l| {
-                            const weights = l.getWeights();
-                            const weights_copy = try tensor.Tensor.init(self.allocator, &.{weights.slice.len}, self.backend);
-                            @memcpy(weights_copy.slice, weights.slice);
-                            try best_weights.?.append(weights_copy);
+                        if (best_weights) |*bw| {
+                            for (self.layers.items) |l| {
+                                const weights = l.getWeights();
+                                const weights_copy = try tensor.Tensor.init(self.allocator, &.{weights.slice.len}, self.backend);
+                                @memcpy(weights_copy.slice, weights.slice);
+                                try bw.append(weights_copy);
+                            }
                         }
                     }
                 } else {
@@ -637,14 +639,16 @@ pub const EarlyStopping = struct {
                         std.debug.print("Early stopping triggered after {} epochs\n", .{epoch + 1});
 
                         // Restore best weights if requested
-                        if (config.restore_best_weights and best_weights != null) {
-                            var i: usize = 0;
-                            for (self.layers.items) |l| {
-                                const layer_weights = l.getWeights();
-                                @memcpy(layer_weights.slice, best_weights.?.items[i].slice);
-                                i += 1;
+                        if (config.restore_best_weights) {
+                            if (best_weights) |*bw| {
+                                var i: usize = 0;
+                                for (self.layers.items) |l| {
+                                    const layer_weights = l.getWeights();
+                                    @memcpy(layer_weights.slice, bw.items[i].slice);
+                                    i += 1;
+                                }
+                                std.debug.print("Restored weights from best epoch (loss: {d:.4})\n", .{best_loss});
                             }
-                            std.debug.print("Restored weights from best epoch (loss: {d:.4})\n", .{best_loss});
                         }
 
                         // Clean up
