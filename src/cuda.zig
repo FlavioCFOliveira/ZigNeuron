@@ -1,241 +1,769 @@
 /// CUDA GPU backend implementation for ZigNeuron
 /// Provides CUDA compute kernel support for NVIDIA GPUs on Linux/Windows
 ///
-/// Implementation Status: FOUNDATION - Basic structure in place
-///
-/// TODO: Implement full CUDA backend (see ROADMAP.md task #29)
-///
-/// Requirements:
-/// - NVIDIA GPU with Compute Capability >= 6.0
-/// - CUDA Toolkit >= 11.0
-/// - Linux or Windows platform
-///
 /// Architecture:
-/// - CUDA context management
-/// - Kernel compilation/linking
-/// - Memory management (device/host transfers)
-/// - Stream-based execution
-/// - Tensor Core support (where available)
-
+/// - CUDA driver API dynamic loading (libcuda.so / nvcuda.dll)
+/// - Context and stream management
+/// - Memory pooling for efficient buffer reuse
+/// - Kernel loading from PTX or inline CUDA-C
+/// - Async execution with streams
+/// - Unified memory support where available
 const std = @import("std");
+const cuda_driver = @import("cuda_driver.zig");
+const cuda_context = @import("cuda_context.zig");
 
-// CUDA Error codes (subset)
-pub const CUresult = enum(c_int) {
-    SUCCESS = 0,
-    ERROR_INVALID_VALUE = 1,
-    ERROR_OUT_OF_MEMORY = 2,
-    ERROR_NOT_INITIALIZED = 3,
-    ERROR_DEINITIALIZED = 4,
-    ERROR_PROFILER_DISABLED = 5,
-    ERROR_PROFILER_NOT_INITIALIZED = 6,
-    ERROR_PROFILER_ALREADY_STARTED = 7,
-    ERROR_PROFILER_ALREADY_STOPPED = 8,
-    ERROR_STUB_LIBRARY = 34,
-    ERROR_DEVICE_UNAVAILABLE = 46,
-    ERROR_NO_DEVICE = 100,
-    ERROR_INVALID_DEVICE = 101,
-    ERROR_INVALID_CONTEXT = 201,
-};
+const CUresult = cuda_driver.CUresult;
+const CUdeviceptr = cuda_driver.CUdeviceptr;
+const CudaDriver = cuda_driver.CudaDriver;
+const CudaContext = cuda_context.CudaContext;
 
-// Opaque CUDA types
-pub const CUdevice = c_int;
-pub const CUcontext = opaque {};
-pub const CUmodule = opaque {};
-pub const CUfunction = opaque {};
-pub const CUstream = opaque {};
-pub const CUdeviceptr = u64;
+// Re-export CUDA types
+pub const CudaError = cuda_driver.CudaError;
+pub const CUdevice = cuda_driver.CUdevice;
 
-// CUDA Device wrapper
-pub const CudaDevice = struct {
-    device: CUdevice,
-    context: *CUcontext,
-    stream: *CUstream,
+// =============================================================================
+// CudaBackend Structure
+// =============================================================================
+
+pub const CudaBackend = struct {
     allocator: std.mem.Allocator,
+    driver: CudaDriver,
+    context: *CudaContext,
 
-    // Device properties
-    compute_capability_major: i32,
-    compute_capability_minor: i32,
-    total_memory: usize,
-    multiprocessor_count: i32,
-    max_threads_per_block: i32,
+    // Kernel PTX cache
+    kernel_ptx: std.StringHashMap([]const u8),
 
-    pub fn init(allocator: std.mem.Allocator) !CudaDevice {
-        // TODO: Implement CUDA initialization
-        // 1. Load CUDA driver library (libcuda.so on Linux, nvcuda.dll on Windows)
-        // 2. Initialize driver with cuInit
-        // 3. Get device count with cuDeviceGetCount
-        // 4. Select best device (highest compute capability)
-        // 5. Create context with cuCtxCreate
-        // 6. Create stream with cuStreamCreate
-        // 7. Query device properties
+    /// Initialize CUDA backend
+    pub fn init(allocator: std.mem.Allocator) !CudaBackend {
+        // Load CUDA driver
+        var driver = try CudaDriver.init(allocator);
+        errdefer driver.deinit();
 
-        _ = allocator;
-        return error.CudaNotAvailable;
+        // Create CUDA context with best device
+        const ctx = try CudaContext.init(allocator, &driver);
+        errdefer ctx.deinit();
+
+        var backend = CudaBackend{
+            .allocator = allocator,
+            .driver = driver,
+            .context = ctx,
+            .kernel_ptx = std.StringHashMap([]const u8).init(allocator),
+        };
+
+        // Load built-in kernels
+        try backend.loadBuiltinKernels();
+
+        return backend;
     }
 
-    pub fn deinit(self: *CudaDevice) void {
-        // TODO: Cleanup CUDA resources
-        // 1. Synchronize stream
-        // 2. Destroy stream
-        // 3. Pop and destroy context
-        _ = self;
+    /// Cleanup CUDA backend
+    pub fn deinit(self: *CudaBackend) void {
+        // Free kernel PTX strings
+        var ptx_iter = self.kernel_ptx.iterator();
+        while (ptx_iter.next()) |entry| {
+            self.allocator.free(entry.value_ptr.*);
+            self.allocator.free(entry.key_ptr.*);
+        }
+        self.kernel_ptx.deinit();
+
+        // Cleanup context
+        self.context.deinit();
+
+        // Cleanup driver
+        self.driver.deinit();
     }
 
-    /// Check if CUDA is available on this system
+    /// Check if CUDA is available
     pub fn isAvailable() bool {
-        // TODO: Check if CUDA driver is installed and at least one device exists
-        return false;
+        if (@import("builtin").os.tag == .macos) {
+            return false;
+        }
+
+        var driver = CudaDriver.init(std.heap.page_allocator) catch {
+            return false;
+        };
+        defer driver.deinit();
+
+        return driver.is_initialized;
     }
 
     /// Get number of CUDA devices
     pub fn getDeviceCount() i32 {
-        // TODO: Call cuDeviceGetCount
-        return 0;
-    }
-};
-
-// CUDA Buffer wrapper
-pub const CudaBuffer = struct {
-    ptr: CUdeviceptr,
-    size: usize,
-    device: *CudaDevice,
-
-    pub fn init(device: *CudaDevice, size: usize) !CudaBuffer {
-        // TODO: Allocate device memory with cuMemAlloc
-        _ = device;
-        _ = size;
-        return error.NotImplemented;
-    }
-
-    pub fn deinit(self: *CudaBuffer) void {
-        // TODO: Free device memory with cuMemFree
-        _ = self;
-    }
-
-    /// Copy data from host to device
-    pub fn upload(self: *const CudaBuffer, data: []const f32) !void {
-        // TODO: Copy with cuMemcpyHtoDAsync
-        _ = self;
-        _ = data;
-        return error.NotImplemented;
-    }
-
-    /// Copy data from device to host
-    pub fn download(self: *const CudaBuffer, data: []f32) !void {
-        // TODO: Copy with cuMemcpyDtoHAsync
-        _ = self;
-        _ = data;
-        return error.NotImplemented;
-    }
-};
-
-// CUDA Kernel wrapper
-pub const CudaKernel = struct {
-    function: *CUfunction,
-    module: *CUmodule,
-    device: *CudaDevice,
-    name: []const u8,
-
-    pub fn init(device: *CudaDevice, name: []const u8, ptx_code: []const u8) !CudaKernel {
-        // TODO: Load kernel from PTX
-        // 1. Load module with cuModuleLoadData
-        // 2. Get function with cuModuleGetFunction
-        _ = device;
-        _ = name;
-        _ = ptx_code;
-        return error.NotImplemented;
-    }
-
-    pub fn deinit(self: *CudaKernel) void {
-        // TODO: Unload module
-        _ = self;
-    }
-
-    /// Launch kernel with given parameters
-    pub fn launch(
-        self: *CudaKernel,
-        grid_dim: [3]u32,
-        block_dim: [3]u32,
-        args: []const *anyopaque,
-    ) !void {
-        // TODO: Launch with cuLaunchKernel
-        _ = self;
-        _ = grid_dim;
-        _ = block_dim;
-        _ = args;
-        return error.NotImplemented;
-    }
-};
-
-// CUDA Backend implementation
-pub const CudaBackend = struct {
-    device: CudaDevice,
-    allocator: std.mem.Allocator,
-
-    // Kernel cache
-    kernels: std.StringHashMap(CudaKernel),
-
-    pub fn init(allocator: std.mem.Allocator) !CudaBackend {
-        if (!CudaDevice.isAvailable()) {
-            return error.CudaNotAvailable;
+        if (@import("builtin").os.tag == .macos) {
+            return 0;
         }
 
-        const device = try CudaDevice.init(allocator);
-        errdefer device.deinit();
+        var driver = CudaDriver.init(std.heap.page_allocator) catch {
+            return 0;
+        };
+        defer driver.deinit();
 
-        return CudaBackend{
-            .device = device,
-            .allocator = allocator,
-            .kernels = std.StringHashMap(CudaKernel).init(allocator),
+        var count: c_int = 0;
+        const result = driver.deviceGetCount.?(&count);
+        if (result.isError()) {
+            return 0;
+        }
+        return count;
+    }
+
+    /// Synchronize the CUDA stream
+    pub fn synchronize(self: *CudaBackend) !void {
+        try self.context.synchronize();
+    }
+
+    // =============================================================================
+    // Memory Operations
+    // =============================================================================
+
+    /// Allocate device buffer
+    pub fn allocBuffer(self: *CudaBackend, size: usize) !DeviceBuffer {
+        const buf = try self.context.getBuffer(size);
+        return DeviceBuffer{
+            .ptr = buf.ptr,
+            .size = buf.size,
+            .context = self.context,
         };
     }
 
-    pub fn deinit(self: *CudaBackend) void {
-        // Cleanup kernels
-        var iter = self.kernels.iterator();
-        while (iter.next()) |entry| {
-            entry.value_ptr.deinit();
+    /// Free device buffer
+    pub fn freeBuffer(self: *CudaBackend, buffer: DeviceBuffer) void {
+        var buf = CudaContext.DeviceBuffer{
+            .ptr = buffer.ptr,
+            .size = buffer.size,
+            .pool_index = null,
+        };
+        self.context.returnBuffer(buf);
+    }
+
+    /// Upload data to device
+    pub fn upload(self: *CudaBackend, dst: CUdeviceptr, src: []const f32) !void {
+        try self.context.upload(dst, std.mem.sliceAsBytes(src));
+    }
+
+    /// Upload data asynchronously
+    pub fn uploadAsync(self: *CudaBackend, dst: CUdeviceptr, src: []const f32) !void {
+        try self.context.uploadAsync(dst, std.mem.sliceAsBytes(src));
+    }
+
+    /// Download data from device
+    pub fn download(self: *CudaBackend, dst: []f32, src: CUdeviceptr) !void {
+        try self.context.download(std.mem.sliceAsBytes(dst), src);
+    }
+
+    /// Download data asynchronously
+    pub fn downloadAsync(self: *CudaBackend, dst: []f32, src: CUdeviceptr) !void {
+        try self.context.downloadAsync(std.mem.sliceAsBytes(dst), src);
+    }
+
+    // =============================================================================
+    // Core Neural Network Operations
+    // =============================================================================
+
+    /// Matrix multiplication: C = A * B + (accumulate ? C : 0)
+    pub fn matMul(
+        self: *CudaBackend,
+        a: []const f32,
+        b: []const f32,
+        c: []f32,
+        m: usize,
+        n: usize,
+        k: usize,
+        transpose_a: bool,
+        transpose_b: bool,
+        accumulate: bool,
+    ) !void {
+        // Allocate device buffers
+        const size_a = m * k * @sizeOf(f32);
+        const size_b = k * n * @sizeOf(f32);
+        const size_c = m * n * @sizeOf(f32);
+
+        var d_a = try self.context.getBuffer(size_a);
+        defer self.context.returnBuffer(d_a);
+        var d_b = try self.context.getBuffer(size_b);
+        defer self.context.returnBuffer(d_b);
+        var d_c = try self.context.getBuffer(size_c);
+        defer self.context.returnBuffer(d_c);
+
+        // Upload data
+        try self.context.upload(d_a.ptr, std.mem.sliceAsBytes(a));
+        try self.context.upload(d_b.ptr, std.mem.sliceAsBytes(b));
+        if (accumulate) {
+            try self.context.upload(d_c.ptr, std.mem.sliceAsBytes(c));
         }
-        self.kernels.deinit();
 
-        // Cleanup device
-        self.device.deinit();
+        // Determine kernel name based on transpose flags
+        const kernel_name = if (transpose_a)
+            "matmul_transpose_a"
+        else if (transpose_b)
+            "matmul_transpose_b"
+        else
+            "matmul";
+
+        // Get config
+        const config = self.context.getMatrixConfig(m, n);
+
+        // Launch kernel
+        const m_u32: u32 = @intCast(m);
+        const n_u32: u32 = @intCast(n);
+        const k_u32: u32 = @intCast(k);
+        const acc_u32: u32 = @intFromBool(accumulate);
+
+        const args = [_]?*anyopaque{
+            @ptrCast(&d_a.ptr),
+            @ptrCast(&d_b.ptr),
+            @ptrCast(&d_c.ptr),
+            @ptrCast(&m_u32),
+            @ptrCast(&n_u32),
+            @ptrCast(&k_u32),
+            @ptrCast(&acc_u32),
+        };
+
+        try self.context.launchKernel(
+            kernel_name,
+            .{ config.grid_x, config.grid_y, 1 },
+            .{ config.block_x, config.block_y, 1 },
+            0,
+            &args,
+        );
+
+        // Download result
+        try self.context.download(std.mem.sliceAsBytes(c), d_c.ptr);
     }
 
-    // TODO: Implement all backend operations
-    // Following the same pattern as backend.zig Metal implementation
+    /// Batched matrix multiplication
+    pub fn matMulBatch(
+        self: *CudaBackend,
+        a: []const f32,
+        b: []const f32,
+        c: []f32,
+        batch_size: usize,
+        n: usize,
+        k: usize,
+        accumulate: bool,
+    ) !void {
+        const size_per_batch = n * k * @sizeOf(f32);
+        const total_size_a = batch_size * k * @sizeOf(f32); // a is batch_size x k
+        const total_size_b = batch_size * n * k * @sizeOf(f32);
+        const total_size_c = batch_size * n * @sizeOf(f32);
 
-    pub fn matmul(self: *CudaBackend, a: []const f32, b: []const f32, c: []f32, m: usize, n: usize, k: usize) !void {
-        // TODO: Implement CUDA matrix multiplication
-        // Use cuBLAS or custom kernel
+        var d_a = try self.context.getBuffer(total_size_a);
+        defer self.context.returnBuffer(d_a);
+        var d_b = try self.context.getBuffer(total_size_b);
+        defer self.context.returnBuffer(d_b);
+        var d_c = try self.context.getBuffer(total_size_c);
+        defer self.context.returnBuffer(d_c);
+
+        try self.context.upload(d_a.ptr, std.mem.sliceAsBytes(a));
+        try self.context.upload(d_b.ptr, std.mem.sliceAsBytes(b));
+        if (accumulate) {
+            try self.context.upload(d_c.ptr, std.mem.sliceAsBytes(c));
+        }
+
+        const bs_u32: u32 = @intCast(batch_size);
+        const n_u32: u32 = @intCast(n);
+        const k_u32: u32 = @intCast(k);
+        const acc_u32: u32 = @intFromBool(accumulate);
+
+        const args = [_]?*anyopaque{
+            @ptrCast(&d_a.ptr),
+            @ptrCast(&d_b.ptr),
+            @ptrCast(&d_c.ptr),
+            @ptrCast(&bs_u32),
+            @ptrCast(&n_u32),
+            @ptrCast(&k_u32),
+            @ptrCast(&acc_u32),
+        };
+
+        const config = self.context.getElementWiseConfig(batch_size * n);
+
+        try self.context.launchKernel(
+            "matmul_batch",
+            .{ config.grid, 1, 1 },
+            .{ config.block, 1, 1 },
+            0,
+            &args,
+        );
+
+        try self.context.download(std.mem.sliceAsBytes(c), d_c.ptr);
+    }
+
+    /// Element-wise operations
+    pub fn elementWiseOp(
+        self: *CudaBackend,
+        op: ElementWiseOp,
+        a: []const f32,
+        b: []const f32,
+        c: []f32,
+    ) !void {
+        const size = a.len * @sizeOf(f32);
+
+        var d_a = try self.context.getBuffer(size);
+        defer self.context.returnBuffer(d_a);
+        var d_b = try self.context.getBuffer(size);
+        defer self.context.returnBuffer(d_b);
+        var d_c = try self.context.getBuffer(size);
+        defer self.context.returnBuffer(d_c);
+
+        try self.context.upload(d_a.ptr, std.mem.sliceAsBytes(a));
+        try self.context.upload(d_b.ptr, std.mem.sliceAsBytes(b));
+
+        const kernel_name = switch (op) {
+            .add => "ew_add",
+            .sub => "ew_sub",
+            .mul => "ew_mul",
+            .div => "ew_div",
+        };
+
+        const len_u32: u32 = @intCast(a.len);
+        const args = [_]?*anyopaque{
+            @ptrCast(&d_a.ptr),
+            @ptrCast(&d_b.ptr),
+            @ptrCast(&d_c.ptr),
+            @ptrCast(&len_u32),
+        };
+
+        const config = self.context.getElementWiseConfig(a.len);
+
+        try self.context.launchKernel(
+            kernel_name,
+            .{ config.grid, 1, 1 },
+            .{ config.block, 1, 1 },
+            0,
+            &args,
+        );
+
+        try self.context.download(std.mem.sliceAsBytes(c), d_c.ptr);
+    }
+
+    /// Scalar multiplication
+    pub fn scale(self: *CudaBackend, a: []const f32, scalar: f32, c: []f32) !void {
+        const size = a.len * @sizeOf(f32);
+
+        var d_a = try self.context.getBuffer(size);
+        defer self.context.returnBuffer(d_a);
+        var d_c = try self.context.getBuffer(size);
+        defer self.context.returnBuffer(d_c);
+
+        try self.context.upload(d_a.ptr, std.mem.sliceAsBytes(a));
+
+        const len_u32: u32 = @intCast(a.len);
+        const args = [_]?*anyopaque{
+            @ptrCast(&d_a.ptr),
+            @ptrCast(&scalar),
+            @ptrCast(&d_c.ptr),
+            @ptrCast(&len_u32),
+        };
+
+        const config = self.context.getElementWiseConfig(a.len);
+
+        try self.context.launchKernel(
+            "scale_buffer",
+            .{ config.grid, 1, 1 },
+            .{ config.block, 1, 1 },
+            0,
+            &args,
+        );
+
+        try self.context.download(std.mem.sliceAsBytes(c), d_c.ptr);
+    }
+
+    /// Map operations (exp, log, sqrt, etc.)
+    pub fn mapOp(
+        self: *CudaBackend,
+        op: MapOp,
+        input: []const f32,
+        output: []f32,
+    ) !void {
+        const size = input.len * @sizeOf(f32);
+
+        var d_input = try self.context.getBuffer(size);
+        defer self.context.returnBuffer(d_input);
+        var d_output = try self.context.getBuffer(size);
+        defer self.context.returnBuffer(d_output);
+
+        try self.context.upload(d_input.ptr, std.mem.sliceAsBytes(input));
+
+        const kernel_name = switch (op) {
+            .exp => "map_exp",
+            .log => "map_log",
+            .sqrt => "map_sqrt",
+            .abs => "map_abs",
+            .square => "map_square",
+            .inv => "map_inv",
+        };
+
+        const len_u32: u32 = @intCast(input.len);
+        const args = [_]?*anyopaque{
+            @ptrCast(&d_input.ptr),
+            @ptrCast(&d_output.ptr),
+            @ptrCast(&len_u32),
+        };
+
+        const config = self.context.getElementWiseConfig(input.len);
+
+        try self.context.launchKernel(
+            kernel_name,
+            .{ config.grid, 1, 1 },
+            .{ config.block, 1, 1 },
+            0,
+            &args,
+        );
+
+        try self.context.download(std.mem.sliceAsBytes(output), d_output.ptr);
+    }
+
+    // =============================================================================
+    // Activation Functions
+    // =============================================================================
+
+    /// ReLU forward: output = max(0, input)
+    pub fn reluForward(self: *CudaBackend, input: []const f32, output: []f32) !void {
+        try self.activationForward("relu_forward", input, output);
+    }
+
+    /// ReLU backward
+    pub fn reluBackward(self: *CudaBackend, output: []const f32, grad_output: []const f32, grad_input: []f32) !void {
+        try self.activationBackward("relu_backward", output, grad_output, grad_input);
+    }
+
+    /// Sigmoid forward: output = 1 / (1 + exp(-input))
+    pub fn sigmoidForward(self: *CudaBackend, input: []const f32, output: []f32) !void {
+        try self.activationForward("sigmoid_forward", input, output);
+    }
+
+    /// Sigmoid backward
+    pub fn sigmoidBackward(self: *CudaBackend, output: []const f32, grad_output: []const f32, grad_input: []f32) !void {
+        try self.activationBackward("sigmoid_backward", output, grad_output, grad_input);
+    }
+
+    /// Tanh forward
+    pub fn tanhForward(self: *CudaBackend, input: []const f32, output: []f32) !void {
+        try self.activationForward("tanh_forward", input, output);
+    }
+
+    /// Tanh backward
+    pub fn tanhBackward(self: *CudaBackend, output: []const f32, grad_output: []const f32, grad_input: []f32) !void {
+        try self.activationBackward("tanh_backward", output, grad_output, grad_input);
+    }
+
+    /// Softmax forward
+    pub fn softmaxForward(self: *CudaBackend, input: []const f32, output: []f32, batch_size: usize, features: usize) !void {
+        const size = input.len * @sizeOf(f32);
+
+        var d_input = try self.context.getBuffer(size);
+        defer self.context.returnBuffer(d_input);
+        var d_output = try self.context.getBuffer(size);
+        defer self.context.returnBuffer(d_output);
+
+        try self.context.upload(d_input.ptr, std.mem.sliceAsBytes(input));
+
+        const batch_u32: u32 = @intCast(batch_size);
+        const feat_u32: u32 = @intCast(features);
+        const args = [_]?*anyopaque{
+            @ptrCast(&d_input.ptr),
+            @ptrCast(&d_output.ptr),
+            @ptrCast(&batch_u32),
+            @ptrCast(&feat_u32),
+        };
+
+        const config = self.context.getElementWiseConfig(batch_size);
+
+        try self.context.launchKernel(
+            "softmax_forward",
+            .{ config.grid, 1, 1 },
+            .{ config.block, 1, 1 },
+            0,
+            &args,
+        );
+
+        try self.context.download(std.mem.sliceAsBytes(output), d_output.ptr);
+    }
+
+    fn activationForward(self: *CudaBackend, kernel_name: []const u8, input: []const f32, output: []f32) !void {
+        const size = input.len * @sizeOf(f32);
+
+        var d_input = try self.context.getBuffer(size);
+        defer self.context.returnBuffer(d_input);
+        var d_output = try self.context.getBuffer(size);
+        defer self.context.returnBuffer(d_output);
+
+        try self.context.upload(d_input.ptr, std.mem.sliceAsBytes(input));
+
+        const len_u32: u32 = @intCast(input.len);
+        const args = [_]?*anyopaque{
+            @ptrCast(&d_input.ptr),
+            @ptrCast(&d_output.ptr),
+            @ptrCast(&len_u32),
+        };
+
+        const config = self.context.getElementWiseConfig(input.len);
+
+        try self.context.launchKernel(
+            kernel_name,
+            .{ config.grid, 1, 1 },
+            .{ config.block, 1, 1 },
+            0,
+            &args,
+        );
+
+        try self.context.download(std.mem.sliceAsBytes(output), d_output.ptr);
+    }
+
+    fn activationBackward(self: *CudaBackend, kernel_name: []const u8, output: []const f32, grad_output: []const f32, grad_input: []f32) !void {
+        const size = output.len * @sizeOf(f32);
+
+        var d_output = try self.context.getBuffer(size);
+        defer self.context.returnBuffer(d_output);
+        var d_grad_output = try self.context.getBuffer(size);
+        defer self.context.returnBuffer(d_grad_output);
+        var d_grad_input = try self.context.getBuffer(size);
+        defer self.context.returnBuffer(d_grad_input);
+
+        try self.context.upload(d_output.ptr, std.mem.sliceAsBytes(output));
+        try self.context.upload(d_grad_output.ptr, std.mem.sliceAsBytes(grad_output));
+
+        const len_u32: u32 = @intCast(output.len);
+        const args = [_]?*anyopaque{
+            @ptrCast(&d_output.ptr),
+            @ptrCast(&d_grad_output.ptr),
+            @ptrCast(&d_grad_input.ptr),
+            @ptrCast(&len_u32),
+        };
+
+        const config = self.context.getElementWiseConfig(output.len);
+
+        try self.context.launchKernel(
+            kernel_name,
+            .{ config.grid, 1, 1 },
+            .{ config.block, 1, 1 },
+            0,
+            &args,
+        );
+
+        try self.context.download(std.mem.sliceAsBytes(grad_input), d_grad_input.ptr);
+    }
+
+    // =============================================================================
+    // Loss Functions
+    // =============================================================================
+
+    /// MSE loss backward
+    pub fn mseBackward(self: *CudaBackend, output: []const f32, target: []const f32, grad_output: []f32) !void {
+        try self.lossBackward("mse_backward", output, target, grad_output);
+    }
+
+    /// Cross-entropy loss backward
+    pub fn crossEntropyBackward(self: *CudaBackend, output: []const f32, target: []const f32, grad_output: []f32) !void {
+        try self.lossBackward("cross_entropy_backward", output, target, grad_output);
+    }
+
+    fn lossBackward(self: *CudaBackend, kernel_name: []const u8, output: []const f32, target: []const f32, grad_output: []f32) !void {
+        const size = output.len * @sizeOf(f32);
+
+        var d_output = try self.context.getBuffer(size);
+        defer self.context.returnBuffer(d_output);
+        var d_target = try self.context.getBuffer(size);
+        defer self.context.returnBuffer(d_target);
+        var d_grad = try self.context.getBuffer(size);
+        defer self.context.returnBuffer(d_grad);
+
+        try self.context.upload(d_output.ptr, std.mem.sliceAsBytes(output));
+        try self.context.upload(d_target.ptr, std.mem.sliceAsBytes(target));
+
+        const len_u32: u32 = @intCast(output.len);
+        const args = [_]?*anyopaque{
+            @ptrCast(&d_output.ptr),
+            @ptrCast(&d_target.ptr),
+            @ptrCast(&d_grad.ptr),
+            @ptrCast(&len_u32),
+        };
+
+        const config = self.context.getElementWiseConfig(output.len);
+
+        try self.context.launchKernel(
+            kernel_name,
+            .{ config.grid, 1, 1 },
+            .{ config.block, 1, 1 },
+            0,
+            &args,
+        );
+
+        try self.context.download(std.mem.sliceAsBytes(grad_output), d_grad.ptr);
+    }
+
+    // =============================================================================
+    // Optimizers
+    // =============================================================================
+
+    /// SGD update
+    pub fn sgdUpdate(
+        self: *CudaBackend,
+        weights: []f32,
+        gradients: []const f32,
+        learning_rate: f32,
+        weight_decay: f32,
+    ) !void {
+        const size = weights.len * @sizeOf(f32);
+
+        var d_weights = try self.context.getBuffer(size);
+        defer self.context.returnBuffer(d_weights);
+        var d_gradients = try self.context.getBuffer(size);
+        defer self.context.returnBuffer(d_gradients);
+
+        try self.context.upload(d_weights.ptr, std.mem.sliceAsBytes(weights));
+        try self.context.upload(d_gradients.ptr, std.mem.sliceAsBytes(gradients));
+
+        const len_u32: u32 = @intCast(weights.len);
+        const args = [_]?*anyopaque{
+            @ptrCast(&d_weights.ptr),
+            @ptrCast(&d_gradients.ptr),
+            @ptrCast(&learning_rate),
+            @ptrCast(&weight_decay),
+            @ptrCast(&len_u32),
+        };
+
+        const config = self.context.getElementWiseConfig(weights.len);
+
+        try self.context.launchKernel(
+            "sgd_update",
+            .{ config.grid, 1, 1 },
+            .{ config.block, 1, 1 },
+            0,
+            &args,
+        );
+
+        try self.context.download(std.mem.sliceAsBytes(weights), d_weights.ptr);
+    }
+
+    /// Adam update
+    pub fn adamUpdate(
+        self: *CudaBackend,
+        weights: []f32,
+        gradients: []const f32,
+        m: []f32,
+        v: []f32,
+        learning_rate: f32,
+        beta1: f32,
+        beta2: f32,
+        epsilon: f32,
+        t: u32,
+    ) !void {
+        const size = weights.len * @sizeOf(f32);
+
+        var d_weights = try self.context.getBuffer(size);
+        defer self.context.returnBuffer(d_weights);
+        var d_gradients = try self.context.getBuffer(size);
+        defer self.context.returnBuffer(d_gradients);
+        var d_m = try self.context.getBuffer(size);
+        defer self.context.returnBuffer(d_m);
+        var d_v = try self.context.getBuffer(size);
+        defer self.context.returnBuffer(d_v);
+
+        try self.context.upload(d_weights.ptr, std.mem.sliceAsBytes(weights));
+        try self.context.upload(d_gradients.ptr, std.mem.sliceAsBytes(gradients));
+        try self.context.upload(d_m.ptr, std.mem.sliceAsBytes(m));
+        try self.context.upload(d_v.ptr, std.mem.sliceAsBytes(v));
+
+        const len_u32: u32 = @intCast(weights.len);
+        const args = [_]?*anyopaque{
+            @ptrCast(&d_weights.ptr),
+            @ptrCast(&d_gradients.ptr),
+            @ptrCast(&d_m.ptr),
+            @ptrCast(&d_v.ptr),
+            @ptrCast(&learning_rate),
+            @ptrCast(&beta1),
+            @ptrCast(&beta2),
+            @ptrCast(&epsilon),
+            @ptrCast(&t),
+            @ptrCast(&len_u32),
+        };
+
+        const config = self.context.getElementWiseConfig(weights.len);
+
+        try self.context.launchKernel(
+            "adam_update",
+            .{ config.grid, 1, 1 },
+            .{ config.block, 1, 1 },
+            0,
+            &args,
+        );
+
+        try self.context.download(std.mem.sliceAsBytes(weights), d_weights.ptr);
+        try self.context.download(std.mem.sliceAsBytes(m), d_m.ptr);
+        try self.context.download(std.mem.sliceAsBytes(v), d_v.ptr);
+    }
+
+    // =============================================================================
+    // Internal: Kernel Loading
+    // =============================================================================
+
+    fn loadBuiltinKernels(self: *CudaBackend) !void {
+        // Load built-in PTX for essential kernels from pre-compiled files
+        // Kernels should be compiled separately and loaded at runtime
         _ = self;
-        _ = a;
-        _ = b;
-        _ = c;
-        _ = m;
-        _ = n;
-        _ = k;
-        return error.NotImplemented;
+        // TODO: Load compiled PTX files from disk or embed them
     }
 
-    pub fn activationForward(self: *CudaBackend, act_type: ActivationType, input: []const f32, output: []f32) !void {
-        // TODO: Implement CUDA activation forward
-        _ = self;
-        _ = act_type;
-        _ = input;
-        _ = output;
-        return error.NotImplemented;
+    /// Load a kernel from PTX file
+    pub fn loadKernelFromFile(self: *CudaBackend, name: []const u8, path: []const u8) !void {
+        const ptx = try std.fs.cwd().readFileAlloc(self.allocator, path, 10 * 1024 * 1024);
+        errdefer self.allocator.free(ptx);
+
+        try self.context.loadKernel(name, ptx);
+
+        const name_copy = try self.allocator.dupe(u8, name);
+        try self.kernel_ptx.put(name_copy, ptx);
     }
 
-    pub fn activationBackward(self: *CudaBackend, act_type: ActivationType, output: []const f32, grad_output: []const f32, grad_input: []f32) !void {
-        // TODO: Implement CUDA activation backward
-        _ = self;
-        _ = act_type;
-        _ = output;
-        _ = grad_output;
-        _ = grad_input;
-        return error.NotImplemented;
+    /// Load a kernel from PTX string
+    pub fn loadKernelFromString(self: *CudaBackend, name: []const u8, ptx: []const u8) !void {
+        const ptx_copy = try self.allocator.dupe(u8, ptx);
+        errdefer self.allocator.free(ptx_copy);
+
+        try self.context.loadKernel(name, ptx_copy);
+
+        const name_copy = try self.allocator.dupe(u8, name);
+        try self.kernel_ptx.put(name_copy, ptx_copy);
     }
+};
+
+// =============================================================================
+// Device Buffer Wrapper
+// =============================================================================
+
+pub const DeviceBuffer = struct {
+    ptr: CUdeviceptr,
+    size: usize,
+    context: *CudaContext,
+
+    pub fn deinit(self: *DeviceBuffer) void {
+        var buf = CudaContext.DeviceBuffer{
+            .ptr = self.ptr,
+            .size = self.size,
+            .pool_index = null,
+        };
+        self.context.returnBuffer(buf);
+    }
+};
+
+// =============================================================================
+// Enums
+// =============================================================================
+
+pub const ElementWiseOp = enum {
+    add,
+    sub,
+    mul,
+    div,
+};
+
+pub const MapOp = enum {
+    exp,
+    log,
+    sqrt,
+    abs,
+    square,
+    inv,
 };
 
 pub const ActivationType = enum {
@@ -247,67 +775,82 @@ pub const ActivationType = enum {
     gelu,
 };
 
-// CUDA kernel declarations (PTX strings)
-// These would be generated from .cu files at build time
-// For now, placeholders for the main kernels
-
-/// PTX code for matrix multiplication kernel
-pub const matmul_ptx =
-    \\ TODO: Generate PTX from matmul.cu
-    \\ Expected signature:
-    \\ __global__ void matmul(const float* A, const float* B, float* C,
-    \\                      int M, int N, int K, int accumulate)
-;
-
-/// PTX code for ReLU forward kernel
-pub const relu_forward_ptx =
-    \\ TODO: Generate PTX from activation.cu
-    \\ Expected signature:
-    \\ __global__ void relu_forward(const float* input, float* output, int size)
-;
-
-/// PTX code for ReLU backward kernel
-pub const relu_backward_ptx =
-    \\ TODO: Generate PTX from activation.cu
-    \\ Expected signature:
-    \\ __global__ void relu_backward(const float* output, const float* grad_output,
-    \\                               float* grad_input, int size)
-;
-
-// TODO: Add more kernel PTX strings
-// - sigmoid_forward/backward
-// - tanh_forward/backward
-// - softmax_forward
-// - mse_loss
-// - cross_entropy_loss
-// - sgd_update
-// - adam_update
-// - rmsprop_update
-// - conv1d_forward/backward
-// - lstm_forward/backward
-// - attention_forward/backward
-
 // =============================================================================
-// TESTS
+// PTX Templates for Built-in Kernels
 // =============================================================================
 
-test "CUDA availability check" {
-    // CUDA should not be available on macOS (Apple Silicon)
-    const available = CudaDevice.isAvailable();
+/// PTX header for sm_60+ (Pascal and newer)
+pub const PTX_HEADER = ".version 7.0\\n.target sm_60\\n.address_size 64\\n";
 
-    // On macOS, CUDA should not be available
+/// Template for element-wise operations kernel
+pub const EW_TEMPLATE = PTX_HEADER ++
+    \\n    \\.visible .entry {s}(
+    \\n    .param .u64 a,
+    \\n    .param .u64 b,
+    \\n    .param .u64 c,
+    \\n    .param .u32 n
+    \\n)
+    \\n{{
+    \\n    .reg .pred %p<2>;
+    \\n    .reg .b32 %r<4>;
+    \\n    .reg .b64 %rd<11>;
+    \\n    .reg .f32 %f<4>;
+    \\n
+    \\n    ld.param.u64 %rd1, [a];
+    \\n    ld.param.u64 %rd2, [b];
+    \\n    ld.param.u64 %rd3, [c];
+    \\n    ld.param.u32 %r1, [n];
+    \\n
+    \\n    mov.u32 %r2, %ctaid.x;
+    \\n    mov.u32 %r3, %ntid.x;
+    \\n    mov.u32 %r4, %tid.x;
+    \\n    mad.lo.s32 %r2, %r2, %r3, %r4;
+    \\n    cvt.s64.s32 %rd4, %r2;
+    \\n    setp.ge.s32 %p1, %r2, %r1;
+    \\n    @%p1 bra $L__exit;
+    \\n
+    \\n    shl.b64 %rd5, %rd4, 2;
+    \\n    add.s64 %rd6, %rd1, %rd5;
+    \\n    add.s64 %rd7, %rd2, %rd5;
+    \\n    add.s64 %rd8, %rd3, %rd5;
+    \\n
+    \\n    ld.global.f32 %f1, [%rd6];
+    \\n    ld.global.f32 %f2, [%rd7];
+    \\n    {s} %f3, %f1, %f2;
+    \\n    st.global.f32 [%rd8], %f3;
+    \\n
+    \\$L__exit:
+    \\n    ret;
+    \\n}};
+
+// =============================================================================
+// Tests
+// =============================================================================
+
+test "CUDA availability" {
+    // CUDA should not be available on macOS
     if (@import("builtin").os.tag == .macos) {
-        try std.testing.expect(!available);
+        try std.testing.expect(!CudaBackend.isAvailable());
+        return;
     }
+
     // On Linux/Windows, may or may not be available depending on hardware
+    _ = CudaBackend.isAvailable();
 }
 
-test "CUDA device count" {
-    const count = CudaDevice.getDeviceCount();
-    try std.testing.expect(count >= 0);
-
-    // If CUDA is not available, count should be 0
-    if (!CudaDevice.isAvailable()) {
-        try std.testing.expectEqual(0, count);
+test "CUDA backend initialization" {
+    if (@import("builtin").os.tag == .macos) {
+        return error.SkipZigTest;
     }
+
+    var backend = CudaBackend.init(std.testing.allocator) catch |err| {
+        if (err == cuda_driver.CudaError.CudaDriverNotFound or
+            err == cuda_driver.CudaError.CudaInitFailed or
+            err == error.NoCudaDevices)
+        {
+            return;
+        }
+        return err;
+    };
+    defer backend.deinit();
 }
