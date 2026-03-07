@@ -648,10 +648,19 @@ pub const Conv2D = struct {
     }
 
     pub fn forward(self: *Conv2D, input: []const f32, input_buf: ?*const metal.MTLBuffer, output: []f32, output_buf: ?*const metal.MTLBuffer) !void {
-        _ = input_buf; // TODO: Use GPU buffer when implemented
-        // TODO: Implement conv2dForward in backend
-        // For now, use CPU implementation directly
-        try self.cpuConv2dForward(input, output);
+        // Use GPU implementation if available
+        try self.backend.conv2dForward(
+            input, input_buf,
+            self.weights.slice, self.weights.getMtlBuffer(),
+            self.bias.slice, self.bias.getMtlBuffer(),
+            output, output_buf,
+            self.in_channels, self.out_channels,
+            self.kernel_h, self.kernel_w,
+            self.input_h, self.input_w,
+            self.output_h, self.output_w,
+            self.stride_h, self.stride_w,
+            self.padding_h, self.padding_w,
+        );
         try self.backend.activationForward(self.act, output, output_buf, output, output_buf);
     }
 
@@ -688,13 +697,24 @@ pub const Conv2D = struct {
     }
 
     pub fn backward(self: *Conv2D, input: []const f32, input_buf: ?*const metal.MTLBuffer, grad_output: []const f32, grad_output_buf: ?*const metal.MTLBuffer, grad_input: []f32, grad_input_buf: ?*const metal.MTLBuffer, activated_output: []const f32, activated_output_buf: ?*const metal.MTLBuffer) !void {
-        _ = input_buf;
-        _ = grad_input_buf;
         // 1. Activation backward
         try self.backend.activationBackward(self.act, activated_output, activated_output_buf, grad_output, grad_output_buf, self.grad_after_act.slice, self.grad_after_act.getMtlBuffer());
 
-        // 2. Conv2D backward (CPU fallback for now)
-        try self.cpuConv2dBackward(input, self.grad_after_act.slice, grad_input);
+        // 2. Conv2D backward using backend
+        try self.backend.conv2dBackward(
+            input, input_buf,
+            self.weights.slice, self.weights.getMtlBuffer(),
+            self.grad_after_act.slice, self.grad_after_act.getMtlBuffer(),
+            grad_input, grad_input_buf,
+            self.grad_weights.slice, self.grad_weights.getMtlBuffer(),
+            self.grad_bias.slice, self.grad_bias.getMtlBuffer(),
+            self.in_channels, self.out_channels,
+            self.kernel_h, self.kernel_w,
+            self.input_h, self.input_w,
+            self.output_h, self.output_w,
+            self.stride_h, self.stride_w,
+            self.padding_h, self.padding_w,
+        );
     }
 
     fn cpuConv2dBackward(self: *Conv2D, input: []const f32, grad_output: []const f32, grad_input: []f32) !void {
@@ -849,7 +869,7 @@ pub const BatchNorm = struct {
 
     pub fn backward(self: *BatchNorm, input: []const f32, input_buf: ?*const metal.MTLBuffer, grad_output: []const f32, grad_output_buf: ?*const metal.MTLBuffer, grad_input: []f32, grad_input_buf: ?*const metal.MTLBuffer, activated_output: []const f32, activated_output_buf: ?*const metal.MTLBuffer) !void {
         _ = activated_output; _ = activated_output_buf;
-        try self.backend.batchNormBackward(input, input_buf, grad_output, grad_output_buf, grad_input, grad_input_buf, self.gamma.slice, self.gamma.getMtlBuffer(), self.grad_gamma.slice, self.grad_gamma.getMtlBuffer(), self.grad_beta.slice, self.grad_beta.getMtlBuffer(), self.eps);
+        try self.backend.batchNormBackward(input, input_buf, grad_output, grad_output_buf, grad_input, grad_input_buf, self.gamma.slice, self.gamma.getMtlBuffer(), self.grad_gamma.slice, self.grad_gamma.getMtlBuffer(), self.grad_beta.slice, self.grad_beta.getMtlBuffer(), self.eps, self.running_mean.slice, self.running_mean.getMtlBuffer(), self.running_var.slice, self.running_var.getMtlBuffer());
     }
 };
 

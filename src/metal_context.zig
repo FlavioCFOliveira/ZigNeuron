@@ -112,10 +112,17 @@ pub const MetalContext = struct {
         // Normalization kernels
         try self.registerPipeline("layernorm_forward_optimized");
         try self.registerPipeline("layernorm_backward");
+        try self.registerPipeline("batchnorm_forward_training");
+        try self.registerPipeline("batchnorm_forward_inference");
+        try self.registerPipeline("batchnorm_backward");
 
         // Convolution kernels
         try self.registerPipeline("conv1d_forward");
         try self.registerPipeline("conv1d_backward");
+        try self.registerPipeline("conv2d_forward");
+        try self.registerPipeline("conv2d_backward");
+        try self.registerPipeline("conv2d_forward");
+        try self.registerPipeline("conv2d_backward");
 
         // Attention kernels
         try self.registerPipeline("attention_forward");

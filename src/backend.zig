@@ -424,6 +424,26 @@ pub const Backend = struct {
         }
     }
 
+    /// Conv2D forward pass
+    pub fn conv2dForward(self: Backend, input: []const f32, input_buf: ?*const metal.MTLBuffer, weights: []const f32, weights_buf: ?*const metal.MTLBuffer, bias: []const f32, bias_buf: ?*const metal.MTLBuffer, output: []f32, output_buf: ?*const metal.MTLBuffer, in_channels: usize, out_channels: usize, kernel_h: usize, kernel_w: usize, input_h: usize, input_w: usize, output_h: usize, output_w: usize, stride_h: usize, stride_w: usize, padding_h: usize, padding_w: usize) !void {
+        switch (self.type) {
+            .gpu => |gpu| switch (gpu) {
+                .metal => try self.metalConv2dForward(input, input_buf, weights, weights_buf, bias, bias_buf, output, output_buf, in_channels, out_channels, kernel_h, kernel_w, input_h, input_w, output_h, output_w, stride_h, stride_w, padding_h, padding_w),
+            },
+            .cpu => try self.cpuConv2dForward(input, weights, bias, output, in_channels, out_channels, kernel_h, kernel_w, input_h, input_w, output_h, output_w, stride_h, stride_w, padding_h, padding_w),
+        }
+    }
+
+    /// Conv2D backward pass
+    pub fn conv2dBackward(self: Backend, input: []const f32, input_buf: ?*const metal.MTLBuffer, weights: []const f32, weights_buf: ?*const metal.MTLBuffer, grad_output: []const f32, grad_output_buf: ?*const metal.MTLBuffer, grad_input: []f32, grad_input_buf: ?*const metal.MTLBuffer, grad_weights: []f32, grad_weights_buf: ?*const metal.MTLBuffer, grad_bias: []f32, grad_bias_buf: ?*const metal.MTLBuffer, in_channels: usize, out_channels: usize, kernel_h: usize, kernel_w: usize, input_h: usize, input_w: usize, output_h: usize, output_w: usize, stride_h: usize, stride_w: usize, padding_h: usize, padding_w: usize) !void {
+        switch (self.type) {
+            .gpu => |gpu| switch (gpu) {
+                .metal => try self.metalConv2dBackward(input, input_buf, weights, weights_buf, grad_output, grad_output_buf, grad_input, grad_input_buf, grad_weights, grad_weights_buf, grad_bias, grad_bias_buf, in_channels, out_channels, kernel_h, kernel_w, input_h, input_w, output_h, output_w, stride_h, stride_w, padding_h, padding_w),
+            },
+            .cpu => try self.cpuConv2dBackward(input, weights, grad_output, grad_input, grad_weights, grad_bias, in_channels, out_channels, kernel_h, kernel_w, input_h, input_w, output_h, output_w, stride_h, stride_w, padding_h, padding_w),
+        }
+    }
+
     /// Dropout forward pass
     pub fn dropoutForward(self: Backend, input: []const f32, input_buf: ?*const metal.MTLBuffer, output: []f32, output_buf: ?*const metal.MTLBuffer, mask: []f32, mask_buf: ?*const metal.MTLBuffer, rate: f32, scaling_factor: f32, seed: u64) !void {
         switch (self.type) {
@@ -1698,6 +1718,185 @@ pub const Backend = struct {
         }
     }
 
+    // MARK: - Batch Normalization Metal Functions
+
+    fn metalBatchNormForwardTraining(
+        self: Backend,
+        input: []const f32,
+        input_buf: ?*const metal.MTLBuffer,
+        output: []f32,
+        output_buf: ?*const metal.MTLBuffer,
+        gamma: []const f32,
+        gamma_buf: ?*const metal.MTLBuffer,
+        beta: []const f32,
+        beta_buf: ?*const metal.MTLBuffer,
+        epsilon: f32,
+        momentum: f32,
+        running_mean: []f32,
+        running_mean_buf: ?*const metal.MTLBuffer,
+        running_var: []f32,
+        running_var_buf: ?*const metal.MTLBuffer,
+    ) !void {
+        const ctx = self.metal_ctx.?;
+        var buffer_in = try self.getBuffer(input, input_buf);
+        defer if (input_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_in.buffer);
+        var buffer_out = try self.getBuffer(output, output_buf);
+        defer if (output_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_out.buffer);
+        var buffer_gamma = try self.getBuffer(gamma, gamma_buf);
+        defer if (gamma_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_gamma.buffer);
+        var buffer_beta = try self.getBuffer(beta, beta_buf);
+        defer if (beta_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_beta.buffer);
+        var buffer_running_mean = try self.getBuffer(running_mean, running_mean_buf);
+        defer if (running_mean_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_running_mean.buffer);
+        var buffer_running_var = try self.getBuffer(running_var, running_var_buf);
+        defer if (running_var_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_running_var.buffer);
+
+        var cb = try self.getCommandBuffer();
+        var encoder = try cb.computeCommandEncoder();
+        const pipeline = ctx.getPipeline("batchnorm_forward_training") orelse return error.PipelineNotFound;
+        encoder.setComputePipelineState(pipeline);
+        encoder.setBuffer(&buffer_in.buffer, buffer_in.offset, 0);
+        encoder.setBuffer(&buffer_out.buffer, buffer_out.offset, 1);
+        encoder.setBuffer(&buffer_gamma.buffer, buffer_gamma.offset, 2);
+        encoder.setBuffer(&buffer_beta.buffer, buffer_beta.offset, 3);
+        encoder.setBuffer(&buffer_running_mean.buffer, buffer_running_mean.offset, 4);
+        encoder.setBuffer(&buffer_running_var.buffer, buffer_running_var.offset, 5);
+        encoder.setBytes(std.mem.asBytes(&epsilon), 6);
+        encoder.setBytes(std.mem.asBytes(&momentum), 7);
+        const size = @as(u32, @intCast(gamma.len));
+        const batch_size = @as(u32, @intCast(input.len / gamma.len));
+        encoder.setBytes(std.mem.asBytes(&batch_size), 8);
+        encoder.setBytes(std.mem.asBytes(&size), 9);
+
+        // Dispatch one thread per channel
+        encoder.dispatchThreads(metal.MTLSize.make(size, 1, 1), metal.MTLSize.make(1, 1, 1));
+        encoder.endEncoding();
+        if (ctx.active_command_buffer == null) {
+            cb.commit();
+            cb.waitUntilCompleted();
+        }
+    }
+
+    fn metalBatchNormForwardInference(
+        self: Backend,
+        input: []const f32,
+        input_buf: ?*const metal.MTLBuffer,
+        output: []f32,
+        output_buf: ?*const metal.MTLBuffer,
+        gamma: []const f32,
+        gamma_buf: ?*const metal.MTLBuffer,
+        beta: []const f32,
+        beta_buf: ?*const metal.MTLBuffer,
+        epsilon: f32,
+        running_mean: []const f32,
+        running_mean_buf: ?*const metal.MTLBuffer,
+        running_var: []const f32,
+        running_var_buf: ?*const metal.MTLBuffer,
+    ) !void {
+        const ctx = self.metal_ctx.?;
+        var buffer_in = try self.getBuffer(input, input_buf);
+        defer if (input_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_in.buffer);
+        var buffer_out = try self.getBuffer(output, output_buf);
+        defer if (output_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_out.buffer);
+        var buffer_gamma = try self.getBuffer(gamma, gamma_buf);
+        defer if (gamma_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_gamma.buffer);
+        var buffer_beta = try self.getBuffer(beta, beta_buf);
+        defer if (beta_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_beta.buffer);
+        var buffer_running_mean = try self.getBuffer(running_mean, running_mean_buf);
+        defer if (running_mean_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_running_mean.buffer);
+        var buffer_running_var = try self.getBuffer(running_var, running_var_buf);
+        defer if (running_var_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_running_var.buffer);
+
+        var cb = try self.getCommandBuffer();
+        var encoder = try cb.computeCommandEncoder();
+        const pipeline = ctx.getPipeline("batchnorm_forward_inference") orelse return error.PipelineNotFound;
+        encoder.setComputePipelineState(pipeline);
+        encoder.setBuffer(&buffer_in.buffer, buffer_in.offset, 0);
+        encoder.setBuffer(&buffer_out.buffer, buffer_out.offset, 1);
+        encoder.setBuffer(&buffer_gamma.buffer, buffer_gamma.offset, 2);
+        encoder.setBuffer(&buffer_beta.buffer, buffer_beta.offset, 3);
+        encoder.setBuffer(&buffer_running_mean.buffer, buffer_running_mean.offset, 4);
+        encoder.setBuffer(&buffer_running_var.buffer, buffer_running_var.offset, 5);
+        encoder.setBytes(std.mem.asBytes(&epsilon), 6);
+        const size = @as(u32, @intCast(gamma.len));
+        const batch_size = @as(u32, @intCast(input.len / gamma.len));
+        encoder.setBytes(std.mem.asBytes(&batch_size), 7);
+        encoder.setBytes(std.mem.asBytes(&size), 8);
+
+        // Dispatch one thread per channel
+        encoder.dispatchThreads(metal.MTLSize.make(size, 1, 1), metal.MTLSize.make(1, 1, 1));
+        encoder.endEncoding();
+        if (ctx.active_command_buffer == null) {
+            cb.commit();
+            cb.waitUntilCompleted();
+        }
+    }
+
+    fn metalBatchNormBackward(
+        self: Backend,
+        input: []const f32,
+        input_buf: ?*const metal.MTLBuffer,
+        grad_output: []const f32,
+        grad_output_buf: ?*const metal.MTLBuffer,
+        grad_input: []f32,
+        grad_input_buf: ?*const metal.MTLBuffer,
+        gamma: []const f32,
+        gamma_buf: ?*const metal.MTLBuffer,
+        grad_gamma: []f32,
+        grad_gamma_buf: ?*const metal.MTLBuffer,
+        grad_beta: []f32,
+        grad_beta_buf: ?*const metal.MTLBuffer,
+        epsilon: f32,
+        running_mean: []const f32,
+        running_mean_buf: ?*const metal.MTLBuffer,
+        running_var: []const f32,
+        running_var_buf: ?*const metal.MTLBuffer,
+    ) !void {
+        const ctx = self.metal_ctx.?;
+        var buffer_in = try self.getBuffer(input, input_buf);
+        defer if (input_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_in.buffer);
+        var buffer_go = try self.getBuffer(grad_output, grad_output_buf);
+        defer if (grad_output_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_go.buffer);
+        var buffer_gi = try self.getBuffer(grad_input, grad_input_buf);
+        defer if (grad_input_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_gi.buffer);
+        var buffer_gamma = try self.getBuffer(gamma, gamma_buf);
+        defer if (gamma_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_gamma.buffer);
+        var buffer_gg = try self.getBuffer(grad_gamma, grad_gamma_buf);
+        defer if (grad_gamma_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_gg.buffer);
+        var buffer_gb = try self.getBuffer(grad_beta, grad_beta_buf);
+        defer if (grad_beta_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_gb.buffer);
+        var buffer_running_mean = try self.getBuffer(running_mean, running_mean_buf);
+        defer if (running_mean_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_running_mean.buffer);
+        var buffer_running_var = try self.getBuffer(running_var, running_var_buf);
+        defer if (running_var_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_running_var.buffer);
+
+        var cb = try self.getCommandBuffer();
+        var encoder = try cb.computeCommandEncoder();
+        const pipeline = ctx.getPipeline("batchnorm_backward") orelse return error.PipelineNotFound;
+        encoder.setComputePipelineState(pipeline);
+        encoder.setBuffer(&buffer_in.buffer, buffer_in.offset, 0);
+        encoder.setBuffer(&buffer_go.buffer, buffer_go.offset, 1);
+        encoder.setBuffer(&buffer_gi.buffer, buffer_gi.offset, 2);
+        encoder.setBuffer(&buffer_gamma.buffer, buffer_gamma.offset, 3);
+        encoder.setBuffer(&buffer_gg.buffer, buffer_gg.offset, 4);
+        encoder.setBuffer(&buffer_gb.buffer, buffer_gb.offset, 5);
+        encoder.setBuffer(&buffer_running_mean.buffer, buffer_running_mean.offset, 6);
+        encoder.setBuffer(&buffer_running_var.buffer, buffer_running_var.offset, 7);
+        encoder.setBytes(std.mem.asBytes(&epsilon), 8);
+        const size = @as(u32, @intCast(gamma.len));
+        const batch_size = @as(u32, @intCast(input.len / gamma.len));
+        encoder.setBytes(std.mem.asBytes(&batch_size), 9);
+        encoder.setBytes(std.mem.asBytes(&size), 10);
+
+        // Dispatch one thread per channel
+        encoder.dispatchThreads(metal.MTLSize.make(size, 1, 1), metal.MTLSize.make(1, 1, 1));
+        encoder.endEncoding();
+        if (ctx.active_command_buffer == null) {
+            cb.commit();
+            cb.waitUntilCompleted();
+        }
+    }
+
     fn metalConv1dForward(self: Backend, input: []const f32, input_buf: ?*const metal.MTLBuffer, weights: []const f32, weights_buf: ?*const metal.MTLBuffer, bias: []const f32, bias_buf: ?*const metal.MTLBuffer, output: []f32, output_buf: ?*const metal.MTLBuffer, in_channels: usize, out_channels: usize, kernel_size: usize, in_len: usize, out_len: usize) !void {
         const ctx = self.metal_ctx.?;
         var buffer_in = try self.getBuffer(input, input_buf);
@@ -1771,6 +1970,125 @@ pub const Backend = struct {
         encoder.setBytes(std.mem.asBytes(&batch_size), 11);
 
         encoder.dispatchThreads(metal.MTLSize.make(out_len, out_channels, batch_size), metal.MTLSize.make(16, 16, 1));
+        encoder.endEncoding();
+        if (ctx.active_command_buffer == null) {
+            cb.commit();
+            cb.waitUntilCompleted();
+        }
+    }
+
+    fn metalConv2dForward(self: Backend, input: []const f32, input_buf: ?*const metal.MTLBuffer, weights: []const f32, weights_buf: ?*const metal.MTLBuffer, bias: []const f32, bias_buf: ?*const metal.MTLBuffer, output: []f32, output_buf: ?*const metal.MTLBuffer, in_channels: usize, out_channels: usize, kernel_h: usize, kernel_w: usize, input_h: usize, input_w: usize, output_h: usize, output_w: usize, stride_h: usize, stride_w: usize, padding_h: usize, padding_w: usize) !void {
+        const ctx = self.metal_ctx.?;
+        var buffer_in = try self.getBuffer(input, input_buf);
+        defer if (input_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_in.buffer);
+        var buffer_w = try self.getBuffer(weights, weights_buf);
+        defer if (weights_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_w.buffer);
+        var buffer_b = try self.getBuffer(bias, bias_buf);
+        defer if (bias_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_b.buffer);
+        var buffer_out = try self.getBuffer(output, output_buf);
+        defer if (output_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_out.buffer);
+
+        var cb = try self.getCommandBuffer();
+        var encoder = try cb.computeCommandEncoder();
+        const pipeline = ctx.getPipeline("conv2d_forward") orelse return error.PipelineNotFound;
+        encoder.setComputePipelineState(pipeline);
+        encoder.setBuffer(&buffer_in.buffer, buffer_in.offset, 0);
+        encoder.setBuffer(&buffer_w.buffer, buffer_w.offset, 1);
+        encoder.setBuffer(&buffer_b.buffer, buffer_b.offset, 2);
+        encoder.setBuffer(&buffer_out.buffer, buffer_out.offset, 3);
+
+        const params = [_]u32{
+            @as(u32, @intCast(in_channels)),
+            @as(u32, @intCast(out_channels)),
+            @as(u32, @intCast(kernel_h)),
+            @as(u32, @intCast(kernel_w)),
+            @as(u32, @intCast(input_h)),
+            @as(u32, @intCast(input_w)),
+            @as(u32, @intCast(output_h)),
+            @as(u32, @intCast(output_w)),
+            @as(u32, @intCast(stride_h)),
+            @as(u32, @intCast(stride_w)),
+            @as(u32, @intCast(padding_h)),
+            @as(u32, @intCast(padding_w)),
+        };
+        encoder.setBytes(std.mem.asBytes(&params[0]), 4);
+        encoder.setBytes(std.mem.asBytes(&params[1]), 5);
+        encoder.setBytes(std.mem.asBytes(&params[2]), 6);
+        encoder.setBytes(std.mem.asBytes(&params[3]), 7);
+        encoder.setBytes(std.mem.asBytes(&params[4]), 8);
+        encoder.setBytes(std.mem.asBytes(&params[5]), 9);
+        encoder.setBytes(std.mem.asBytes(&params[6]), 10);
+        encoder.setBytes(std.mem.asBytes(&params[7]), 11);
+        encoder.setBytes(std.mem.asBytes(&params[8]), 12);
+        encoder.setBytes(std.mem.asBytes(&params[9]), 13);
+        encoder.setBytes(std.mem.asBytes(&params[10]), 14);
+        encoder.setBytes(std.mem.asBytes(&params[11]), 15);
+
+        const batch_size = input.len / (in_channels * input_h * input_w);
+        encoder.dispatchThreads(metal.MTLSize.make(output_w, output_h, out_channels * batch_size), metal.MTLSize.make(8, 8, 1));
+        encoder.endEncoding();
+        if (ctx.active_command_buffer == null) {
+            cb.commit();
+            cb.waitUntilCompleted();
+        }
+    }
+
+    fn metalConv2dBackward(self: Backend, input: []const f32, input_buf: ?*const metal.MTLBuffer, weights: []const f32, weights_buf: ?*const metal.MTLBuffer, grad_output: []const f32, grad_output_buf: ?*const metal.MTLBuffer, grad_input: []f32, grad_input_buf: ?*const metal.MTLBuffer, grad_weights: []f32, grad_weights_buf: ?*const metal.MTLBuffer, grad_bias: []f32, grad_bias_buf: ?*const metal.MTLBuffer, in_channels: usize, out_channels: usize, kernel_h: usize, kernel_w: usize, input_h: usize, input_w: usize, output_h: usize, output_w: usize, stride_h: usize, stride_w: usize, padding_h: usize, padding_w: usize) !void {
+        const ctx = self.metal_ctx.?;
+        var buffer_in = try self.getBuffer(input, input_buf);
+        defer if (input_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_in.buffer);
+        var buffer_w = try self.getBuffer(weights, weights_buf);
+        defer if (weights_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_w.buffer);
+        var buffer_go = try self.getBuffer(grad_output, grad_output_buf);
+        defer if (grad_output_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_go.buffer);
+        var buffer_gi = try self.getBuffer(grad_input, grad_input_buf);
+        defer if (grad_input_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_gi.buffer);
+        var buffer_gw = try self.getBuffer(grad_weights, grad_weights_buf);
+        defer if (grad_weights_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_gw.buffer);
+        var buffer_gb = try self.getBuffer(grad_bias, grad_bias_buf);
+        defer if (grad_bias_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_gb.buffer);
+
+        var cb = try self.getCommandBuffer();
+        var encoder = try cb.computeCommandEncoder();
+        const pipeline = ctx.getPipeline("conv2d_backward") orelse return error.PipelineNotFound;
+        encoder.setComputePipelineState(pipeline);
+        encoder.setBuffer(&buffer_in.buffer, buffer_in.offset, 0);
+        encoder.setBuffer(&buffer_w.buffer, buffer_w.offset, 1);
+        encoder.setBuffer(&buffer_go.buffer, buffer_go.offset, 2);
+        encoder.setBuffer(&buffer_gi.buffer, buffer_gi.offset, 3);
+        encoder.setBuffer(&buffer_gw.buffer, buffer_gw.offset, 4);
+        encoder.setBuffer(&buffer_gb.buffer, buffer_gb.offset, 5);
+
+        const params = [_]u32{
+            @as(u32, @intCast(in_channels)),
+            @as(u32, @intCast(out_channels)),
+            @as(u32, @intCast(kernel_h)),
+            @as(u32, @intCast(kernel_w)),
+            @as(u32, @intCast(input_h)),
+            @as(u32, @intCast(input_w)),
+            @as(u32, @intCast(output_h)),
+            @as(u32, @intCast(output_w)),
+            @as(u32, @intCast(stride_h)),
+            @as(u32, @intCast(stride_w)),
+            @as(u32, @intCast(padding_h)),
+            @as(u32, @intCast(padding_w)),
+        };
+        encoder.setBytes(std.mem.asBytes(&params[0]), 6);
+        encoder.setBytes(std.mem.asBytes(&params[1]), 7);
+        encoder.setBytes(std.mem.asBytes(&params[2]), 8);
+        encoder.setBytes(std.mem.asBytes(&params[3]), 9);
+        encoder.setBytes(std.mem.asBytes(&params[4]), 10);
+        encoder.setBytes(std.mem.asBytes(&params[5]), 11);
+        encoder.setBytes(std.mem.asBytes(&params[6]), 12);
+        encoder.setBytes(std.mem.asBytes(&params[7]), 13);
+        encoder.setBytes(std.mem.asBytes(&params[8]), 14);
+        encoder.setBytes(std.mem.asBytes(&params[9]), 15);
+        encoder.setBytes(std.mem.asBytes(&params[10]), 16);
+        encoder.setBytes(std.mem.asBytes(&params[11]), 17);
+        const batch_size = @as(u32, @intCast(input.len / (in_channels * input_h * input_w)));
+        encoder.setBytes(std.mem.asBytes(&batch_size), 18);
+
+        encoder.dispatchThreads(metal.MTLSize.make(output_w, output_h, out_channels * batch_size), metal.MTLSize.make(8, 8, 1));
         encoder.endEncoding();
         if (ctx.active_command_buffer == null) {
             cb.commit();
@@ -2140,6 +2458,125 @@ pub const Backend = struct {
         }
     }
 
+    // MARK: - Batch Normalization CPU Functions
+
+    fn cpuBatchNormForwardTraining(
+        self: Backend,
+        input: []const f32,
+        output: []f32,
+        gamma: []const f32,
+        beta: []const f32,
+        epsilon: f32,
+        momentum: f32,
+        running_mean: []f32,
+        running_var: []f32,
+    ) !void {
+        _ = self;
+        const size = gamma.len;
+        const batch_size = input.len / size;
+
+        // Compute mean and variance per channel across batch
+        for (0..size) |c| {
+            var mean: f32 = 0;
+            for (0..batch_size) |b| {
+                mean += input[b * size + c];
+            }
+            mean /= @as(f32, @floatFromInt(batch_size));
+
+            var var_val: f32 = 0;
+            for (0..batch_size) |b| {
+                const diff = input[b * size + c] - mean;
+                var_val += diff * diff;
+            }
+            var_val /= @as(f32, @floatFromInt(batch_size));
+
+            // Update running statistics
+            running_mean[c] = (1.0 - momentum) * running_mean[c] + momentum * mean;
+            running_var[c] = (1.0 - momentum) * running_var[c] + momentum * var_val;
+
+            // Normalize and scale
+            const inv_std = 1.0 / @sqrt(var_val + epsilon);
+            for (0..batch_size) |b| {
+                const x_hat = (input[b * size + c] - mean) * inv_std;
+                output[b * size + c] = x_hat * gamma[c] + beta[c];
+            }
+        }
+    }
+
+    fn cpuBatchNormForwardInference(
+        self: Backend,
+        input: []const f32,
+        output: []f32,
+        gamma: []const f32,
+        beta: []const f32,
+        epsilon: f32,
+        running_mean: []const f32,
+        running_var: []const f32,
+    ) !void {
+        _ = self;
+        const size = gamma.len;
+        const batch_size = input.len / size;
+
+        for (0..size) |c| {
+            const mean = running_mean[c];
+            const var_val = running_var[c];
+            const inv_std = 1.0 / @sqrt(var_val + epsilon);
+
+            for (0..batch_size) |b| {
+                const x_hat = (input[b * size + c] - mean) * inv_std;
+                output[b * size + c] = x_hat * gamma[c] + beta[c];
+            }
+        }
+    }
+
+    fn cpuBatchNormBackward(
+        self: Backend,
+        input: []const f32,
+        grad_output: []const f32,
+        grad_input: []f32,
+        gamma: []const f32,
+        grad_gamma: []f32,
+        grad_beta: []f32,
+        epsilon: f32,
+    ) !void {
+        _ = self;
+        const size = gamma.len;
+        const batch_size = input.len / size;
+
+        // Compute mean and variance per channel
+        for (0..size) |c| {
+            var mean: f32 = 0;
+            for (0..batch_size) |b| {
+                mean += input[b * size + c];
+            }
+            mean /= @as(f32, @floatFromInt(batch_size));
+
+            var var_val: f32 = 0;
+            for (0..batch_size) |b| {
+                const diff = input[b * size + c] - mean;
+                var_val += diff * diff;
+            }
+            var_val /= @as(f32, @floatFromInt(batch_size));
+
+            const inv_std = 1.0 / @sqrt(var_val + epsilon);
+
+            // Compute grad_gamma and grad_beta
+            grad_gamma[c] = 0;
+            grad_beta[c] = 0;
+            for (0..batch_size) |b| {
+                const x_hat = (input[b * size + c] - mean) * inv_std;
+                grad_gamma[c] += grad_output[b * size + c] * x_hat;
+                grad_beta[c] += grad_output[b * size + c];
+            }
+
+            // Compute grad_input
+            const coef = gamma[c] * inv_std;
+            for (0..batch_size) |b| {
+                grad_input[b * size + c] = grad_output[b * size + c] * coef;
+            }
+        }
+    }
+
     fn cpuConv1dForward(self: Backend, input: []const f32, weights: []const f32, bias: []const f32, output: []f32, in_channels: usize, out_channels: usize, kernel_size: usize, in_len: usize, out_len: usize) !void {
         _ = self;
         const batch_size = input.len / (in_channels * in_len);
@@ -2176,6 +2613,71 @@ pub const Backend = struct {
                             const w_idx = (oc * in_channels + ic) * kernel_size + k;
                             grad_weights[w_idx] += input[in_idx] * go;
                             grad_input[in_idx] += weights[w_idx] * go;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn cpuConv2dForward(self: Backend, input: []const f32, weights: []const f32, bias: []const f32, output: []f32, in_channels: usize, out_channels: usize, kernel_h: usize, kernel_w: usize, input_h: usize, input_w: usize, output_h: usize, output_w: usize, stride_h: usize, stride_w: usize, padding_h: usize, padding_w: usize) !void {
+        _ = self;
+        const batch_size = input.len / (in_channels * input_h * input_w);
+        @memset(output, 0);
+        for (0..batch_size) |b| {
+            for (0..out_channels) |oc| {
+                for (0..output_h) |oh| {
+                    for (0..output_w) |ow| {
+                        var sum: f32 = 0;
+                        const in_h_start = @as(i32, @intCast(oh * stride_h)) - @as(i32, @intCast(padding_h));
+                        const in_w_start = @as(i32, @intCast(ow * stride_w)) - @as(i32, @intCast(padding_w));
+                        for (0..in_channels) |ic| {
+                            for (0..kernel_h) |kh| {
+                                for (0..kernel_w) |kw| {
+                                    const in_h = in_h_start + @as(i32, @intCast(kh));
+                                    const in_w = in_w_start + @as(i32, @intCast(kw));
+                                    if (in_h >= 0 and in_h < input_h and in_w >= 0 and in_w < input_w) {
+                                        const in_idx = ((b * in_channels + ic) * input_h + @as(usize, @intCast(in_h))) * input_w + @as(usize, @intCast(in_w));
+                                        const w_idx = (((oc * in_channels + ic) * kernel_h + kh) * kernel_w + kw);
+                                        sum += input[in_idx] * weights[w_idx];
+                                    }
+                                }
+                            }
+                        }
+                        const out_idx = ((b * out_channels + oc) * output_h + oh) * output_w + ow;
+                        output[out_idx] = sum + bias[oc];
+                    }
+                }
+            }
+        }
+    }
+
+    fn cpuConv2dBackward(self: Backend, input: []const f32, weights: []const f32, grad_output: []const f32, grad_input: []f32, grad_weights: []f32, grad_bias: []f32, in_channels: usize, out_channels: usize, kernel_h: usize, kernel_w: usize, input_h: usize, input_w: usize, output_h: usize, output_w: usize, stride_h: usize, stride_w: usize, padding_h: usize, padding_w: usize) !void {
+        _ = self;
+        const batch_size = input.len / (in_channels * input_h * input_w);
+        @memset(grad_input, 0);
+        for (0..batch_size) |b| {
+            for (0..out_channels) |oc| {
+                for (0..output_h) |oh| {
+                    for (0..output_w) |ow| {
+                        const out_idx = ((b * out_channels + oc) * output_h + oh) * output_w + ow;
+                        const go = grad_output[out_idx];
+                        grad_bias[oc] += go;
+                        const in_h_start = @as(i32, @intCast(oh * stride_h)) - @as(i32, @intCast(padding_h));
+                        const in_w_start = @as(i32, @intCast(ow * stride_w)) - @as(i32, @intCast(padding_w));
+                        for (0..in_channels) |ic| {
+                            for (0..kernel_h) |kh| {
+                                for (0..kernel_w) |kw| {
+                                    const in_h = in_h_start + @as(i32, @intCast(kh));
+                                    const in_w = in_w_start + @as(i32, @intCast(kw));
+                                    if (in_h >= 0 and in_h < input_h and in_w >= 0 and in_w < input_w) {
+                                        const in_idx = ((b * in_channels + ic) * input_h + @as(usize, @intCast(in_h))) * input_w + @as(usize, @intCast(in_w));
+                                        const w_idx = (((oc * in_channels + ic) * kernel_h + kh) * kernel_w + kw);
+                                        grad_weights[w_idx] += input[in_idx] * go;
+                                        grad_input[in_idx] += weights[w_idx] * go;
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -2657,42 +3159,36 @@ pub const Backend = struct {
         running_var: []f32,
         running_var_buf: ?*const metal.MTLBuffer,
     ) !void {
-        _ = input_buf;
-        _ = output_buf;
-        _ = gamma_buf;
-        _ = beta_buf;
-        _ = running_mean_buf;
-        _ = running_var_buf;
-
-        // Compute batch mean
-        var batch_mean: f32 = 0.0;
-        for (input) |x| batch_mean += x;
-        batch_mean /= @as(f32, @floatFromInt(input.len));
-
-        // Compute batch variance
-        var batch_var: f32 = 0.0;
-        for (input) |x| {
-            const diff = x - batch_mean;
-            batch_var += diff * diff;
+        switch (self.type) {
+            .gpu => |gpu| switch (gpu) {
+                .metal => try self.metalBatchNormForwardTraining(
+                    input,
+                    input_buf,
+                    output,
+                    output_buf,
+                    gamma,
+                    gamma_buf,
+                    beta,
+                    beta_buf,
+                    epsilon,
+                    momentum,
+                    running_mean,
+                    running_mean_buf,
+                    running_var,
+                    running_var_buf,
+                ),
+            },
+            .cpu => try self.cpuBatchNormForwardTraining(
+                input,
+                output,
+                gamma,
+                beta,
+                epsilon,
+                momentum,
+                running_mean,
+                running_var,
+            ),
         }
-        batch_var /= @as(f32, @floatFromInt(input.len));
-
-        // Normalize
-        const inv_std = 1.0 / @sqrt(batch_var + epsilon);
-
-        for (input, 0..) |x, i| {
-            const normalized = (x - batch_mean) * inv_std;
-            const idx = i % gamma.len;
-            output[i] = gamma[idx] * normalized + beta[idx];
-        }
-
-        // Update running statistics
-        for (0..gamma.len) |i| {
-            running_mean[i] = (1.0 - momentum) * running_mean[i] + momentum * batch_mean;
-            running_var[i] = (1.0 - momentum) * running_var[i] + momentum * batch_var;
-        }
-
-        _ = self;
     }
 
     /// Batch Normalization forward pass (inference mode)
@@ -2712,21 +3208,33 @@ pub const Backend = struct {
         running_var: []const f32,
         running_var_buf: ?*const metal.MTLBuffer,
     ) !void {
-        _ = input_buf;
-        _ = output_buf;
-        _ = gamma_buf;
-        _ = beta_buf;
-        _ = running_mean_buf;
-        _ = running_var_buf;
-        _ = self;
-
-        // Use running statistics
-        for (input, 0..) |x, i| {
-            const idx = i % gamma.len;
-            const mean = running_mean[idx];
-            const var_val = running_var[idx];
-            const normalized = (x - mean) / @sqrt(var_val + epsilon);
-            output[i] = gamma[idx] * normalized + beta[idx];
+        switch (self.type) {
+            .gpu => |gpu| switch (gpu) {
+                .metal => try self.metalBatchNormForwardInference(
+                    input,
+                    input_buf,
+                    output,
+                    output_buf,
+                    gamma,
+                    gamma_buf,
+                    beta,
+                    beta_buf,
+                    epsilon,
+                    running_mean,
+                    running_mean_buf,
+                    running_var,
+                    running_var_buf,
+                ),
+            },
+            .cpu => try self.cpuBatchNormForwardInference(
+                input,
+                output,
+                gamma,
+                beta,
+                epsilon,
+                running_mean,
+                running_var,
+            ),
         }
     }
 
@@ -2746,46 +3254,42 @@ pub const Backend = struct {
         grad_beta: []f32,
         grad_beta_buf: ?*const metal.MTLBuffer,
         epsilon: f32,
+        running_mean: []const f32,
+        running_mean_buf: ?*const metal.MTLBuffer,
+        running_var: []const f32,
+        running_var_buf: ?*const metal.MTLBuffer,
     ) !void {
-        _ = input_buf;
-        _ = grad_output_buf;
-        _ = grad_input_buf;
-        _ = gamma_buf;
-        _ = grad_gamma_buf;
-        _ = grad_beta_buf;
-        _ = self;
-
-        // Compute batch mean and variance
-        var batch_mean: f32 = 0.0;
-        for (input) |x| batch_mean += x;
-        batch_mean /= @as(f32, @floatFromInt(input.len));
-
-        var batch_var: f32 = 0.0;
-        for (input) |x| {
-            const diff = x - batch_mean;
-            batch_var += diff * diff;
-        }
-        batch_var /= @as(f32, @floatFromInt(input.len));
-
-        const inv_std = 1.0 / @sqrt(batch_var + epsilon);
-
-        // Reset gradients
-        @memset(grad_gamma, 0);
-        @memset(grad_beta, 0);
-
-        // Compute gradients
-        for (input, grad_output, 0..) |x, go, i| {
-            const normalized = (x - batch_mean) * inv_std;
-            const idx = i % gamma.len;
-
-            grad_gamma[idx] += go * normalized;
-            grad_beta[idx] += go;
-        }
-
-        // Gradient w.r.t. input
-        for (input, grad_output, grad_input, 0..) |_, go, *gi, i| {
-            const idx = i % gamma.len;
-            gi.* = gamma[idx] * inv_std * go;
+        switch (self.type) {
+            .gpu => |gpu| switch (gpu) {
+                .metal => try self.metalBatchNormBackward(
+                    input,
+                    input_buf,
+                    grad_output,
+                    grad_output_buf,
+                    grad_input,
+                    grad_input_buf,
+                    gamma,
+                    gamma_buf,
+                    grad_gamma,
+                    grad_gamma_buf,
+                    grad_beta,
+                    grad_beta_buf,
+                    epsilon,
+                    running_mean,
+                    running_mean_buf,
+                    running_var,
+                    running_var_buf,
+                ),
+            },
+            .cpu => try self.cpuBatchNormBackward(
+                input,
+                grad_output,
+                grad_input,
+                gamma,
+                grad_gamma,
+                grad_beta,
+                epsilon,
+            ),
         }
     }
 };
