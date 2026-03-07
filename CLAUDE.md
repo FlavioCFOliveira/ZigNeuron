@@ -22,7 +22,7 @@ The library is organized into logical components:
 - **Activations** - ReLU, sigmoid, tanh activation functions with derivatives
 - **Loss Functions** - MSE (implemented), cross-entropy, binary cross-entropy (TODO)
 - **Network** - High-level network composition with backpropagation training
-- **Backend** - GPU/CPU execution layer with automatic device detection (Metal > Vulkan > CPU)
+- **Backend** - GPU/CPU execution layer with automatic device detection (Metal > CPU)
 
 ## Project Structure
 
@@ -57,7 +57,6 @@ These files document actual test results, including timestamps, environment info
 | Loss Functions | Done | MSE, Cross-Entropy, KL-Divergence |
 | Backpropagation | Done | Training works on CPU and Metal |
 | GPU Backend | Done | Metal implemented and synchronized |
-| Vulkan Support | Partial | Shader base in place |
 | Optimizers | Partial | SGD, Adam, RMSprop basic structs |
 | Unit Tests | Done | Coverage for FNN, RNN, VAE, CNN |
 | Performance Benchmarks | Done | Benchmark suite available |
@@ -137,7 +136,7 @@ To ensure high-quality implementations and architectural integrity, the followin
 | **Metal Performance Expert** | High-performance GPU acceleration for Apple Silicon. MSL kernels, pipelines, and M-series memory optimization. | Optimizes *Backend* for macOS; collaborates with *Zig Performance Architect* for unified memory. |
 | **CUDA Performance Optimizer** | High-performance GPU acceleration for NVIDIA. CUDA kernels, shared memory, and Tensor Core utilization. | Optimizes *Backend* for Linux/Windows; consults *Security Architect* for kernel safety. |
 | **Security Architect** | Rigorous audit of low-level code: memory management, GPU kernels, and concurrency. | Reviews all *Zig Performance Architect* optimizations and *Backend* changes. |
-| **Technical Researcher** | Mathematical derivations, GPU API documentation (Metal/Vulkan), and state-of-the-art research. | Provides foundations for *Neural Net Architect* and *ML Architecture Expert*. |
+| **Technical Researcher** | Mathematical derivations, GPU API documentation (Metal/CUDA), and state-of-the-art research. | Provides foundations for *Neural Net Architect* and *ML Architecture Expert*. |
 | **ML Architecture Expert** | Designing reference examples, benchmarking scenarios, and validating library usability. | Uses *ML Dataset Fetcher* for data; validates *Neural Net Architect* outputs. |
 | **ML Dataset Fetcher** | Identifying, sourcing, and organizing datasets for training and validation examples. | Supports *ML Architecture Expert* with data pipelines. |
 
@@ -170,15 +169,14 @@ These requirements often conflict. Prioritize performance, but always consider r
 The library automatically detects available hardware and selects the best execution backend:
 
 1. **Metal (Apple Silicon)** - Uses Metal compute shaders on M-series chips (M1, M2, M3, etc.)
-2. **Vulkan** - Uses Vulkan compute shaders for cross-platform GPU support
-3. **CPU** - Falls back to CPU computation if no GPU available
+2. **CPU** - Falls back to CPU computation if no GPU available
 
 ### Execution Priority Rules
 
-1. **Training** - Must use GPU (Metal or Vulkan) first. CPU fallback only if no GPU available.
-2. **Inference** - Must use GPU (Metal or Vulkan) first. CPU fallback only if no GPU available.
-3. **Gradient computation** - Must use GPU (Metal or Vulkan) first.
-4. **Forward pass** - Must use GPU (Metal or Vulkan) first.
+1. **Training** - Must use GPU (Metal) first. CPU fallback only if no GPU available.
+2. **Inference** - Must use GPU (Metal) first. CPU fallback only if no GPU available.
+3. **Gradient computation** - Must use GPU (Metal) first.
+4. **Forward pass** - Must use GPU (Metal) first.
 
 ### Implementation Requirements
 
@@ -197,9 +195,9 @@ The library supports multiple platforms:
 | Platform | GPU Backend | CPU Fallback |
 |----------|-------------|--------------|
 | macOS (Apple Silicon) | Metal | Yes |
-| Linux | Vulkan | Yes |
-| Windows | Vulkan | Yes |
-| Other | Vulkan or CPU | Yes |
+| Linux | CPU | Yes |
+| Windows | CPU | Yes |
+| Other | CPU | Yes |
 
 ### Apple Silicon Optimization
 
@@ -209,13 +207,10 @@ The library should leverage Apple Silicon capabilities:
 - Use M-series GPU compute capabilities (SIMD, parallel execution)
 - Optimize for memory bandwidth between CPU and GPU shared memory
 
-### Vulkan Cross-Platform Support
+### Cross-Platform GPU Support
 
-For non-Apple platforms (Linux, Windows):
-- Use Vulkan compute shaders
-- Support SPIR-V shader compilation
-- Detect Vulkan support at runtime
-- Fall back to CPU if Vulkan unavailable
+For non-Apple platforms (Linux, Windows), CUDA backend is planned for future implementation.
+Currently, CPU fallback is used on these platforms.
 
 When adding new features, prioritize:
 1. **GPU/Metal implementation first** - Always implement on GPU first
@@ -224,8 +219,7 @@ When adding new features, prioritize:
 4. **Apple Silicon** - Optimize for M-series chips (M1, M2, M3, etc.)
 
 The library should degrade gracefully:
-- If Metal device unavailable → try Vulkan
-- If Vulkan unavailable → use CPU
+- If Metal device unavailable → use CPU
 - If specific kernel unavailable → use fallback CPU implementation
 
 ## Documentation Language Policy

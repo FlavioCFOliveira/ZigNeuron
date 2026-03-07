@@ -67,7 +67,6 @@ pub fn benchmarkForwardPass(allocator: std.mem.Allocator, backend: backend_modul
         .cpu => "CPU",
         .gpu => |gpu| switch (gpu) {
             .metal => "Metal",
-            .vulkan => "Vulkan",
         },
     };
 
@@ -130,7 +129,6 @@ pub fn benchmarkTraining(allocator: std.mem.Allocator, backend: backend_module.B
         .cpu => "CPU",
         .gpu => |gpu| switch (gpu) {
             .metal => "Metal",
-            .vulkan => "Vulkan",
         },
     };
 
@@ -168,7 +166,6 @@ pub fn benchmarkActivationForward(allocator: std.mem.Allocator, backend: backend
         .cpu => "CPU",
         .gpu => |gpu| switch (gpu) {
             .metal => "Metal",
-            .vulkan => "Vulkan",
         },
     };
 
@@ -211,7 +208,6 @@ pub fn benchmarkMatrixMul(allocator: std.mem.Allocator, backend: backend_module.
         .cpu => "CPU",
         .gpu => |gpu| switch (gpu) {
             .metal => "Metal",
-            .vulkan => "Vulkan",
         },
     };
 

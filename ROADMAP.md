@@ -124,7 +124,7 @@ Este roadmap organiza as tarefas resultantes da auditoria profunda do ZigNeuron 
   - Detecção automática de GPUs NVIDIA
   - Alternativa: Dividir em subtarefas por categoria de kernel
 
-- [ ] **#36** Completar ou remover Backend Vulkan
+- [x] **#36** Remover Backend Vulkan (decisão: remover e focar em Metal + CUDA futuro)
   - Decisão: Implementar completamente ou remover
   - Recomendação: Remover e focar em Metal + CUDA
 
@@ -161,7 +161,7 @@ Este roadmap organiza as tarefas resultantes da auditoria profunda do ZigNeuron 
 
 **Dependências:**
 - #29 (CUDA) pode ser desenvolvido em paralelo
-- #36 (Vulkan) deve ser decidido primeiro
+- **#36** ~~Completar ou remover Backend Vulkan~~ - **REMOVIDO**
 
 **Métricas de Sucesso:**
 - CUDA funcional em Linux/Windows
@@ -249,7 +249,7 @@ Fase 2 (Alta)
 
 Fase 3 (Média)
 ├── #29 (CUDA) ───────────┐
-├── #36 (Vulkan) ─────────┤
+├── #36 (Vulkan - REMOVIDO) ─┤
 ├── #35 (fused) ───────────┤
 ├── #37 (gradcheck) ───────┤──> Fase 4 pode começar
 ├── #38, #9 (docs) ────────┤

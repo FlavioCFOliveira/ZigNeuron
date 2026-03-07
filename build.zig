@@ -72,72 +72,6 @@ pub fn build(b: *std.Build) void {
         benchmark_step.dependOn(&run_benchmarks.step);
     }
 
-    // Vulkan vs CPU comparison benchmark
-    const enable_benchmark_compare = b.option(bool, "benchmark-compare", "Build Vulkan vs CPU comparison benchmark") orelse false;
-
-    if (enable_benchmark_compare) {
-        const benchmark_module = std.Build.Module.create(b, .{
-            .root_source_file = b.path("src/benchmark_compare.zig"),
-            .target = target,
-            .optimize = optimize,
-        });
-        benchmark_module.addImport("ZigNeuron", lib_module);
-
-        const benchmark_exe = b.addExecutable(.{
-            .name = "benchmark-compare",
-            .root_module = benchmark_module,
-        });
-        if (target.result.os.tag == .macos) {
-            benchmark_exe.linkLibC();
-            benchmark_exe.linkSystemLibrary("objc");
-            benchmark_exe.linkFramework("Metal");
-            benchmark_exe.linkFramework("Foundation");
-            benchmark_exe.linkFramework("QuartzCore");
-        }
-
-        b.installArtifact(benchmark_exe);
-
-        const run_benchmarks = b.addRunArtifact(benchmark_exe);
-        const benchmark_step = b.step("benchmark-compare", "Run Vulkan vs CPU comparison benchmark");
-        benchmark_step.dependOn(&run_benchmarks.step);
-    }
-
-    // Vulkan shader compilation step
-    const enable_vulkan = b.option(bool, "vulkan", "Build with Vulkan support") orelse true;
-
-    if (enable_vulkan) {
-        const compile_shaders_step = b.step("compile-shaders", "Compile Vulkan shaders to SPIR-V");
-
-        // Define shader files and their output paths
-        const shaders = [_]struct {
-            name: []const u8,
-            input: []const u8,
-            output: []const u8,
-        }{
-            .{ .name = "matmul", .input = "shaders/matmul.comp", .output = "shaders/matmul.comp.spv" },
-            .{ .name = "activation_forward", .input = "shaders/activation_forward.comp", .output = "shaders/activation_forward.comp.spv" },
-            .{ .name = "activation_backward", .input = "shaders/activation_backward.comp", .output = "shaders/activation_backward.comp.spv" },
-            .{ .name = "loss_backward", .input = "shaders/loss_backward.comp", .output = "shaders/loss_backward.comp.spv" },
-        };
-
-        for (shaders) |shader| {
-            const compile_cmd = b.addSystemCommand(&.{
-                "glslc",
-                "-fshader-stage=compute",
-                shader.input,
-                "-o",
-                shader.output,
-            });
-
-            compile_cmd.step.dependOn(b.getInstallStep());
-            compile_shaders_step.dependOn(&compile_cmd.step);
-        }
-
-        // Add a step to run all Vulkan-related checks
-        const vulkan_step = b.step("vulkan", "Check Vulkan compilation");
-        vulkan_step.dependOn(compile_shaders_step);
-    }
-
     // Metal shader compilation (macOS only)
     const enable_metal = b.option(bool, "metal", "Build with Metal support") orelse (target.result.os.tag == .macos);
 
@@ -210,32 +144,6 @@ pub fn build(b: *std.Build) void {
     const run_perf = b.addRunArtifact(perf_exe);
     const perf_step = b.step("test-performance", "Run performance comparison tests");
     perf_step.dependOn(&run_perf.step);
-
-    // Multi-backend test executable
-    const all_backends_module = std.Build.Module.create(b, .{
-        .root_source_file = b.path("src/test_all_backends.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    all_backends_module.addImport("ZigNeuron", lib_module);
-
-    const all_backends_exe = b.addExecutable(.{
-        .name = "test_all_backends",
-        .root_module = all_backends_module,
-    });
-    if (target.result.os.tag == .macos) {
-        all_backends_exe.linkLibC();
-        all_backends_exe.linkSystemLibrary("objc");
-        all_backends_exe.linkFramework("Metal");
-        all_backends_exe.linkFramework("Foundation");
-        all_backends_exe.linkFramework("QuartzCore");
-    }
-
-    b.installArtifact(all_backends_exe);
-
-    const run_all_backends = b.addRunArtifact(all_backends_exe);
-    const all_backends_step = b.step("test-backends", "Run comprehensive backend comparison tests");
-    all_backends_step.dependOn(&run_all_backends.step);
 
     // Stock Prediction Example
     const stock_module = std.Build.Module.create(b, .{
@@ -311,6 +219,32 @@ pub fn build(b: *std.Build) void {
     const run_cnn = b.addRunArtifact(cnn_exe);
     const cnn_step = b.step("example-cnn", "Run stock prediction CNN example");
     cnn_step.dependOn(&run_cnn.step);
+
+    // Classification Examples
+    // Iris Classification
+    const iris_module = std.Build.Module.create(b, .{
+        .root_source_file = b.path("examples/classification/iris.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    iris_module.addImport("ZigNeuron", lib_module);
+
+    const iris_exe = b.addExecutable(.{
+        .name = "iris_classification",
+        .root_module = iris_module,
+    });
+    if (target.result.os.tag == .macos) {
+        iris_exe.linkLibC();
+        iris_exe.linkSystemLibrary("objc");
+        iris_exe.linkFramework("Metal");
+        iris_exe.linkFramework("Foundation");
+        iris_exe.linkFramework("QuartzCore");
+    }
+    b.installArtifact(iris_exe);
+
+    const run_iris = b.addRunArtifact(iris_exe);
+    const iris_step = b.step("example-iris", "Run Iris flower classification example");
+    iris_step.dependOn(&run_iris.step);
 
     // Comprehensive Suite
     const examples = [_][]const u8{

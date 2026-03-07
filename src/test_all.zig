@@ -8,7 +8,6 @@ const layer = zn.layer;
 const network = zn.network;
 const backend = zn.backend;
 const optimizer = zn.optimizer;
-const vulkan = zn.vulkan;
 
 // Test modules from src/test/
 const unit_activation = @import("test/unit/activation.zig");
@@ -36,9 +35,3 @@ test {
     std.testing.refAllDecls(unit_parity);
 }
 
-// ================== Vulkan Backend Tests ==================
-
-test "vulkan: device init" {
-    const device = vulkan.DeviceWrapper.init() catch return;
-    device.deinit();
-}

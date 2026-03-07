@@ -6,7 +6,6 @@ A high-performance neural network library written in Zig with GPU acceleration s
 
 ✨ **GPU Acceleration**
 - Native Metal support for Apple Silicon
-- Vulkan support for cross-platform GPU acceleration
 - Automatic CPU fallback
 - Optimized thresholds for maximum GPU utilization
 
@@ -59,8 +58,7 @@ zig build test
 ZigNeuron automatically detects and uses the best available backend:
 
 1. **Metal** (macOS with Apple Silicon) - Highest priority
-2. **Vulkan** (Cross-platform GPU)
-3. **CPU** (Fallback)
+2. **CPU** (Fallback)
 
 GPU is activated for operations with:
 - Matrix multiplication: ≥512 elements
@@ -77,7 +75,7 @@ const zn = @import("ZigNeuron");
 pub fn main() !void {
     const allocator = std.heap.page_allocator;
     
-    // Auto-select best backend (Metal > Vulkan > CPU)
+    // Auto-select best backend (Metal > CPU)
     const backend = zn.backend.Backend.default();
     const network = try zn.network.Network.init(allocator, backend);
     defer network.deinit();
@@ -109,4 +107,3 @@ pub fn main() !void {
 - [GPU Optimizations Guide](GPU_OPTIMIZATIONS.md) - Detailed GPU acceleration docs
 - [Benchmark Results](BenchmarkTests.md) - Performance comparisons
 - [Unit Tests](UnitTests.md) - Test coverage details
-- [Vulkan Backend](VulkanBackend.md) - Cross-platform GPU support

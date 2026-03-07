@@ -5,7 +5,7 @@
 /// - Pre-allocated work buffers to reduce memory allocation overhead during training
 /// - Cache-optimized CPU fallback with loop tiling/blocking for large matrices
 /// - Metal GPU automatically selected on macOS with Apple Silicon
-/// - Automatic backend selection: Metal > Vulkan > CPU
+/// - Automatic backend selection: Metal > CPU
 ///
 /// PERFORMANCE TIPS:
 /// - Larger layer sizes (>64 neurons) benefit more from GPU acceleration

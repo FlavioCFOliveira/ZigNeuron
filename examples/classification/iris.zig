@@ -117,14 +117,14 @@ fn normalizeFeatures(data: []const [4]f32, normalized: [][4]f32) void {
     for (&mean) |*m| m.* /= @as(f32, @floatFromInt(data.len));
 
     // Calculate std for each feature
-    var std: [4]f32 = .{ 0, 0, 0, 0 };
+    var std_dev: [4]f32 = .{ 0, 0, 0, 0 };
     for (data) |sample| {
         for (sample, 0..) |value, i| {
             const diff = value - mean[i];
-            std[i] += diff * diff;
+            std_dev[i] += diff * diff;
         }
     }
-    for (&std) |*s| {
+    for (&std_dev) |*s| {
         s.* = @sqrt(s.* / @as(f32, @floatFromInt(data.len)));
         if (s.* < 1e-8) s.* = 1.0; // Prevent division by zero
     }
@@ -132,13 +132,15 @@ fn normalizeFeatures(data: []const [4]f32, normalized: [][4]f32) void {
     // Normalize
     for (data, normalized) |sample, *norm| {
         for (sample, 0..) |value, i| {
-            norm.*[i] = (value - mean[i]) / std[i];
+            norm.*[i] = (value - mean[i]) / std_dev[i];
         }
     }
 }
 
 /// Shuffle dataset
-fn shuffleDataset(allocator: std.mem.Allocator, data: []const [4]f32, labels: []const [3]f32, indices: []usize) !void {
+fn shuffleDataset(_allocator: std.mem.Allocator, data: []const [4]f32, _labels: []const [3]f32, indices: []usize) !void {
+    _ = _allocator;
+    _ = _labels;
     var prng = std.Random.DefaultPrng.init(@intCast(std.time.timestamp()));
     const random = prng.random();
 
@@ -216,70 +218,43 @@ pub fn main() !void {
 
     try net.train(&train_data,&train_labels, epochs, learning_rate, loss_fn, null, null);
 
-    // Evaluation
+    // Evaluation with metrics module
     std.debug.print("\n=== Evaluation ===\n", .{});
 
-    var correct: usize = 0;
-    var class_correct: [3]usize = .{ 0, 0, 0 };
-    var class_total: [3]usize = .{ 0, 0, 0 };
-
-    for (test_data, test_labels, 0..) |input, target, i| {
-        var output: [3]f32 = undefined;
-        _ = try net.forward(input, &output);
-
-        // Apply softmax to get probabilities
-        var max_logit = output[0];
-        for (output[1..]) |v| {
-            if (v > max_logit) max_logit = v;
-        }
-
-        var exp_sum: f32 = 0;
-        var probs: [3]f32 = undefined;
-        for (output, 0..) |v, j| {
-            probs[j] = @exp(v - max_logit);
-            exp_sum += probs[j];
-        }
-        for (&probs) |*p| p.* /= exp_sum;
-
-        // Get predicted class
-        var pred_class: usize = 0;
-        var max_prob = probs[0];
-        for (probs[1..], 1..) |p, c| {
-            if (p > max_prob) {
-                max_prob = p;
-                pred_class = c;
-            }
-        }
-
-        // Get true class
-        var true_class: usize = 0;
-        for (target, 0..) |t, c| {
-            if (t > 0.5) {
-                true_class = c;
-                break;
-            }
-        }
-
-        class_total[true_class] += 1;
-        if (pred_class == true_class) {
-            correct += 1;
-            class_correct[true_class] += 1;
-        }
-
-        std.debug.print("Sample {}: True={}, Pred={} (prob={d:.2})\n", .{ i, true_class, pred_class, max_prob });
+    // Collect predictions and targets for metrics
+    var outputs: [30][3]f32 = undefined;
+    var output_slices: [30][]const f32 = undefined;
+    for (test_data, 0..) |input, i| {
+        _ = try net.forward(input, &outputs[i]);
+        output_slices[i] = &outputs[i];
     }
 
-    const accuracy = @as(f32, @floatFromInt(correct)) / @as(f32, @floatFromInt(test_size)) * 100;
-    std.debug.print("\n=== Results ===\n", .{});
-    std.debug.print("Overall Accuracy: {d:.1}% ({}/{} correct)\n", .{ accuracy, correct, test_size });
+    // Compute metrics
+    var metrics = try zn.metrics.evaluateClassification(
+        allocator,
+        &output_slices,
+        &test_labels,
+        3, // num_classes
+    );
+    defer metrics.deinit(allocator);
+
+    // Print metrics
+    metrics.print();
+    zn.metrics.printPerClassMetrics(metrics.confusion_matrix);
 
     const class_names = [3][]const u8{ "Setosa", "Versicolor", "Virginica" };
     std.debug.print("\nPer-class Accuracy:\n", .{});
     for (0..3) |c| {
-        const class_acc = if (class_total[c] > 0)
-            @as(f32, @floatFromInt(class_correct[c])) / @as(f32, @floatFromInt(class_total[c])) * 100
+        var class_total: usize = 0;
+        var class_correct: usize = 0;
+        for (metrics.confusion_matrix[c], 0..) |val, i| {
+            class_total += val;
+            if (i == c) class_correct = val;
+        }
+        const class_acc = if (class_total > 0)
+            @as(f32, @floatFromInt(class_correct)) / @as(f32, @floatFromInt(class_total)) * 100
         else
             0;
-        std.debug.print("  {s}: {d:.1}% ({}/{} correct)\n", .{ class_names[c], class_acc, class_correct[c], class_total[c] });
+        std.debug.print("  {s}: {d:.1}% ({}/{} correct)\n", .{ class_names[c], class_acc, class_correct, class_total });
     }
 }

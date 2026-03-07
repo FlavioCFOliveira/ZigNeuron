@@ -7,9 +7,8 @@ pub const loss = @import("loss.zig");
 pub const network = @import("network.zig");
 pub const optimizer = @import("optimizer.zig");
 pub const tensor = @import("tensor.zig");
-pub const vulkan = @import("vulkan.zig");
 pub const serialization = @import("serialization.zig");
-
+pub const metrics = @import("metrics.zig");
 pub const ZigNeuron = struct {};
 
 test "basic test" {

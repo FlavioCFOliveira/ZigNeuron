@@ -1,20 +1,18 @@
 /// Backend for neural network computation
-/// Supports GPU (Metal/Vulkan) and CPU execution
+/// Supports GPU (Metal) and CPU execution
 /// GPU is the PRIORITY for all training and inference operations
+/// Priority: Metal (Apple Silicon) > CPU
 const std = @import("std");
 const activation = @import("activation.zig");
 const loss = @import("loss.zig");
-const vulkan_module = @import("vulkan.zig");
 const metal = @import("metal.zig");
 const metal_context = @import("metal_context.zig");
 const optimization = @import("optimization.zig");
 
-/// Available GPU backends in priority order
+/// Available GPU backends
 pub const GpuBackend = enum {
     /// Apple Silicon - Metal compute shaders
     metal,
-    /// Cross-platform - Vulkan compute shaders
-    vulkan,
 };
 
 /// Backend selection - GPU preferred, CPU fallback
@@ -52,7 +50,7 @@ pub const Backend = struct {
     }
 
     /// Returns the default backend type based on available hardware
-    /// Priority: Metal (Apple Silicon) > Vulkan > CPU
+    /// Priority: Metal (Apple Silicon) > CPU
     pub fn detect() BackendType {
         const os_tag = @import("builtin").os.tag;
         if (os_tag == .macos) {
@@ -90,25 +88,16 @@ pub const Backend = struct {
     }
 
     /// Copy data between buffers (GPU or CPU)
-    pub fn copyData(self: Backend,
-        src: []const f32, src_buf: ?*const metal.MTLBuffer,
-        dst: []f32, dst_buf: ?*const metal.MTLBuffer
-    ) !void {
+    pub fn copyData(self: Backend, src: []const f32, src_buf: ?*const metal.MTLBuffer, dst: []f32, dst_buf: ?*const metal.MTLBuffer) !void {
         if (src.len != dst.len) return error.BufferTooSmall;
 
         switch (self.type) {
-            .gpu => |gpu| switch (gpu) {
-                .metal => try self.metalCopyData(src, src_buf, dst, dst_buf),
-                .vulkan => if (dst.ptr != src.ptr) @memcpy(dst, src),
-            },
+            .gpu => try self.metalCopyData(src, src_buf, dst, dst_buf),
             .cpu => if (dst.ptr != src.ptr) @memcpy(dst, src),
         }
     }
 
-    fn metalCopyData(self: Backend,
-        src: []const f32, src_buf: ?*const metal.MTLBuffer,
-        dst: []f32, dst_buf: ?*const metal.MTLBuffer
-    ) !void {
+    fn metalCopyData(self: Backend, src: []const f32, src_buf: ?*const metal.MTLBuffer, dst: []f32, dst_buf: ?*const metal.MTLBuffer) !void {
         const ctx = self.metal_ctx orelse return error.NotAvailable;
 
         if (src_buf != null and dst_buf != null) {
@@ -139,13 +128,7 @@ pub const Backend = struct {
 
     /// Execute matrix multiplication: C = A * B
     /// GPU is PRIORITY - CPU only used if GPU unavailable
-    pub fn matMul(self: Backend,
-        a: []const f32, a_buf: ?*const metal.MTLBuffer,
-        b: []const f32, b_buf: ?*const metal.MTLBuffer,
-        c: []f32, c_buf: ?*const metal.MTLBuffer,
-        m: usize, n: usize, k: usize,
-        accumulate: bool
-    ) !void {
+    pub fn matMul(self: Backend, a: []const f32, a_buf: ?*const metal.MTLBuffer, b: []const f32, b_buf: ?*const metal.MTLBuffer, c: []f32, c_buf: ?*const metal.MTLBuffer, m: usize, n: usize, k: usize, accumulate: bool) !void {
         if (m > 1) {
             try self.matMulBatch(a, a_buf, b, b_buf, c, c_buf, m, n, k, accumulate);
             return;
@@ -153,7 +136,6 @@ pub const Backend = struct {
         switch (self.type) {
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalMatMul(a, a_buf, b, b_buf, c, c_buf, m, n, k, false, accumulate),
-                .vulkan => try self.vulkanMatMulBatch(a, b, c, 1, n, k, false), // Vulkan doesn't support accumulate yet
             },
             .cpu => cpuMatMul(a, b, c, m, n, k, accumulate),
         }
@@ -161,47 +143,27 @@ pub const Backend = struct {
 
     /// Execute batched matrix multiplication
     /// GPU is PRIORITY - CPU only used if GPU unavailable
-    pub fn matMulBatch(self: Backend,
-        a: []const f32, a_buf: ?*const metal.MTLBuffer,
-        b: []const f32, b_buf: ?*const metal.MTLBuffer,
-        c: []f32, c_buf: ?*const metal.MTLBuffer,
-        batch_size: usize, n: usize, k: usize,
-        accumulate: bool
-    ) !void {
+    pub fn matMulBatch(self: Backend, a: []const f32, a_buf: ?*const metal.MTLBuffer, b: []const f32, b_buf: ?*const metal.MTLBuffer, c: []f32, c_buf: ?*const metal.MTLBuffer, batch_size: usize, n: usize, k: usize, accumulate: bool) !void {
         switch (self.type) {
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalMatMulBatchGPU(a, a_buf, b, b_buf, c, c_buf, batch_size, n, k, accumulate),
-                .vulkan => try self.vulkanMatMulBatch(a, b, c, batch_size, n, k, false),
             },
             .cpu => cpuMatMulBatch(a, b, c, batch_size, n, k, accumulate),
         }
     }
 
     /// Execute matrix multiplication with transposed A: C = A^T * B
-    pub fn matMulTransposeA(self: Backend,
-        a: []const f32, a_buf: ?*const metal.MTLBuffer,
-        b: []const f32, b_buf: ?*const metal.MTLBuffer,
-        c: []f32, c_buf: ?*const metal.MTLBuffer,
-        m: usize, n: usize, k: usize,
-        accumulate: bool
-    ) !void {
+    pub fn matMulTransposeA(self: Backend, a: []const f32, a_buf: ?*const metal.MTLBuffer, b: []const f32, b_buf: ?*const metal.MTLBuffer, c: []f32, c_buf: ?*const metal.MTLBuffer, m: usize, n: usize, k: usize, accumulate: bool) !void {
         switch (self.type) {
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalMatMulTransposeA(a, a_buf, b, b_buf, c, c_buf, m, n, k, accumulate),
-                .vulkan => cpuMatMulTransposeA(a, b, c, m, n, k, accumulate),
             },
             .cpu => cpuMatMulTransposeA(a, b, c, m, n, k, accumulate),
         }
     }
 
     /// Execute matrix multiplication with transposed B: C = A * B^T
-    pub fn matMulTransposeB(self: Backend,
-        a: []const f32, a_buf: ?*const metal.MTLBuffer,
-        b: []const f32, b_buf: ?*const metal.MTLBuffer,
-        c: []f32, c_buf: ?*const metal.MTLBuffer,
-        m: usize, n: usize, k: usize,
-        accumulate: bool
-    ) !void {
+    pub fn matMulTransposeB(self: Backend, a: []const f32, a_buf: ?*const metal.MTLBuffer, b: []const f32, b_buf: ?*const metal.MTLBuffer, c: []f32, c_buf: ?*const metal.MTLBuffer, m: usize, n: usize, k: usize, accumulate: bool) !void {
         if (m > 1) {
             try self.metalMatMulBatchTransposeB(a, a_buf, b, b_buf, c, c_buf, m, n, k, accumulate);
             return;
@@ -209,19 +171,12 @@ pub const Backend = struct {
         switch (self.type) {
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalMatMul(a, a_buf, b, b_buf, c, c_buf, m, n, k, true, accumulate),
-                .vulkan => cpuMatMulTransposeB(a, b, c, m, n, k, accumulate),
             },
             .cpu => cpuMatMulTransposeB(a, b, c, m, n, k, accumulate),
         }
     }
 
-    fn metalMatMulBatchTransposeB(self: Backend,
-        a: []const f32, a_buf: ?*const metal.MTLBuffer,
-        b: []const f32, b_buf: ?*const metal.MTLBuffer,
-        c: []f32, c_buf: ?*const metal.MTLBuffer,
-        batch_size: usize, n: usize, k: usize,
-        accumulate: bool
-    ) !void {
+    fn metalMatMulBatchTransposeB(self: Backend, a: []const f32, a_buf: ?*const metal.MTLBuffer, b: []const f32, b_buf: ?*const metal.MTLBuffer, c: []f32, c_buf: ?*const metal.MTLBuffer, batch_size: usize, n: usize, k: usize, accumulate: bool) !void {
         const ctx = self.metal_ctx.?;
         var buffer_a = try self.getBuffer(a, a_buf);
         defer if (a_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_a.buffer);
@@ -261,17 +216,12 @@ pub const Backend = struct {
     /// GPU is PRIORITY - CPU only used if GPU unavailable
     /// Execute activation function on the selected backend
     /// GPU is PRIORITY - CPU only used if GPU unavailable
-    pub fn activationForward(self: Backend,
-        act: activation.Activation,
-        input: []const f32, input_buf: ?*const metal.MTLBuffer,
-        output: []f32, output_buf: ?*const metal.MTLBuffer
-    ) !void {
+    pub fn activationForward(self: Backend, act: activation.Activation, input: []const f32, input_buf: ?*const metal.MTLBuffer, output: []f32, output_buf: ?*const metal.MTLBuffer) !void {
         const batch_size = if (act == .softmax) 1 else input.len / 1; // Default to 1 for now or handle in caller
         _ = batch_size;
         switch (self.type) {
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalActivationForward(act, input, input_buf, output, output_buf),
-                .vulkan => try self.vulkanActivationForward(act, input, output),
             },
             .cpu => {
                 if (act == .softmax) {
@@ -287,16 +237,10 @@ pub const Backend = struct {
 
     /// Execute activation backward pass
     /// GPU is PRIORITY - CPU only used if GPU unavailable
-    pub fn activationBackward(self: Backend,
-        act: activation.Activation,
-        input: []const f32, input_buf: ?*const metal.MTLBuffer,
-        grad_output: []const f32, grad_output_buf: ?*const metal.MTLBuffer,
-        grad_input: []f32, grad_input_buf: ?*const metal.MTLBuffer
-    ) !void {
+    pub fn activationBackward(self: Backend, act: activation.Activation, input: []const f32, input_buf: ?*const metal.MTLBuffer, grad_output: []const f32, grad_output_buf: ?*const metal.MTLBuffer, grad_input: []f32, grad_input_buf: ?*const metal.MTLBuffer) !void {
         switch (self.type) {
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalActivationBackward(act, input, input_buf, grad_output, grad_output_buf, grad_input, grad_input_buf),
-                .vulkan => cpuActivationBackward(act, input, grad_output, grad_input),
             },
             .cpu => cpuActivationBackward(act, input, grad_output, grad_input),
         }
@@ -304,16 +248,10 @@ pub const Backend = struct {
 
     /// Execute loss function gradient on the selected backend
     /// GPU is PRIORITY - CPU only used if GPU unavailable
-    pub fn lossBackward(self: Backend,
-        loss_fn: loss.Loss,
-        output: []const f32, output_buf: ?*const metal.MTLBuffer,
-        target: []const f32, target_buf: ?*const metal.MTLBuffer,
-        grad_output: []f32, grad_output_buf: ?*const metal.MTLBuffer
-    ) !void {
+    pub fn lossBackward(self: Backend, loss_fn: loss.Loss, output: []const f32, output_buf: ?*const metal.MTLBuffer, target: []const f32, target_buf: ?*const metal.MTLBuffer, grad_output: []f32, grad_output_buf: ?*const metal.MTLBuffer) !void {
         switch (self.type) {
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalLossBackward(loss_fn, output, output_buf, target, target_buf, grad_output, grad_output_buf),
-                .vulkan => try self.cpuLossBackwardGeneric(loss_fn, output, target, grad_output),
             },
             .cpu => try self.cpuLossBackwardGeneric(loss_fn, output, target, grad_output),
         }
@@ -325,237 +263,131 @@ pub const Backend = struct {
     }
 
     /// Update weights using SGD
-    pub fn sgdUpdate(self: Backend,
-        weights: []f32, weights_buf: ?*const metal.MTLBuffer,
-        gradients: []const f32, gradients_buf: ?*const metal.MTLBuffer,
-        learning_rate: f32, weight_decay: f32
-    ) !void {
+    pub fn sgdUpdate(self: Backend, weights: []f32, weights_buf: ?*const metal.MTLBuffer, gradients: []const f32, gradients_buf: ?*const metal.MTLBuffer, learning_rate: f32, weight_decay: f32) !void {
         switch (self.type) {
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalSgdUpdate(weights, weights_buf, gradients, gradients_buf, learning_rate, weight_decay),
-                .vulkan => cpuSgdUpdate(weights, gradients, learning_rate, weight_decay),
             },
             .cpu => cpuSgdUpdate(weights, gradients, learning_rate, weight_decay),
         }
     }
 
     /// Update weights using Adam
-    pub fn adamUpdate(self: Backend,
-        weights: []f32, weights_buf: ?*const metal.MTLBuffer,
-        gradients: []const f32, gradients_buf: ?*const metal.MTLBuffer,
-        m: []f32, m_buf: ?*const metal.MTLBuffer,
-        v: []f32, v_buf: ?*const metal.MTLBuffer,
-        lr: f32, beta1: f32, beta2: f32, eps: f32, bias_corr1: f32, bias_corr2: f32
-    ) !void {
+    pub fn adamUpdate(self: Backend, weights: []f32, weights_buf: ?*const metal.MTLBuffer, gradients: []const f32, gradients_buf: ?*const metal.MTLBuffer, m: []f32, m_buf: ?*const metal.MTLBuffer, v: []f32, v_buf: ?*const metal.MTLBuffer, lr: f32, beta1: f32, beta2: f32, eps: f32, bias_corr1: f32, bias_corr2: f32) !void {
         switch (self.type) {
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalAdamUpdate(weights, weights_buf, gradients, gradients_buf, m, m_buf, v, v_buf, lr, beta1, beta2, eps, bias_corr1, bias_corr2),
-                .vulkan => try self.cpuAdamUpdate(weights, gradients, m, v, lr, beta1, beta2, eps, bias_corr1, bias_corr2),
             },
             .cpu => try self.cpuAdamUpdate(weights, gradients, m, v, lr, beta1, beta2, eps, bias_corr1, bias_corr2),
         }
     }
 
     /// Update weights using RMSprop
-    pub fn rmspropUpdate(self: Backend,
-        weights: []f32, weights_buf: ?*const metal.MTLBuffer,
-        gradients: []const f32, gradients_buf: ?*const metal.MTLBuffer,
-        g_avg: []f32, g_avg_buf: ?*const metal.MTLBuffer,
-        lr: f32, rho: f32, eps: f32
-    ) !void {
+    pub fn rmspropUpdate(self: Backend, weights: []f32, weights_buf: ?*const metal.MTLBuffer, gradients: []const f32, gradients_buf: ?*const metal.MTLBuffer, g_avg: []f32, g_avg_buf: ?*const metal.MTLBuffer, lr: f32, rho: f32, eps: f32) !void {
         switch (self.type) {
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalRmspropUpdate(weights, weights_buf, gradients, gradients_buf, g_avg, g_avg_buf, lr, rho, eps),
-                .vulkan => try self.cpuRmspropUpdate(weights, gradients, g_avg, lr, rho, eps),
             },
             .cpu => try self.cpuRmspropUpdate(weights, gradients, g_avg, lr, rho, eps),
         }
     }
 
     /// LayerNorm forward pass
-    pub fn layerNormForward(self: Backend,
-        input: []const f32, input_buf: ?*const metal.MTLBuffer,
-        output: []f32, output_buf: ?*const metal.MTLBuffer,
-        gamma: []const f32, gamma_buf: ?*const metal.MTLBuffer,
-        beta: []const f32, beta_buf: ?*const metal.MTLBuffer,
-        eps: f32
-    ) !void {
+    pub fn layerNormForward(self: Backend, input: []const f32, input_buf: ?*const metal.MTLBuffer, output: []f32, output_buf: ?*const metal.MTLBuffer, gamma: []const f32, gamma_buf: ?*const metal.MTLBuffer, beta: []const f32, beta_buf: ?*const metal.MTLBuffer, eps: f32) !void {
         switch (self.type) {
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalLayerNormForward(input, input_buf, output, output_buf, gamma, gamma_buf, beta, beta_buf, eps),
-                .vulkan => try self.cpuLayerNormForward(input, output, gamma, beta, eps),
             },
             .cpu => try self.cpuLayerNormForward(input, output, gamma, beta, eps),
         }
     }
 
     /// LayerNorm backward pass
-    pub fn layerNormBackward(self: Backend,
-        input: []const f32, input_buf: ?*const metal.MTLBuffer,
-        grad_output: []const f32, grad_output_buf: ?*const metal.MTLBuffer,
-        grad_input: []f32, grad_input_buf: ?*const metal.MTLBuffer,
-        gamma: []const f32, gamma_buf: ?*const metal.MTLBuffer,
-        grad_gamma: []f32, grad_gamma_buf: ?*const metal.MTLBuffer,
-        grad_beta: []f32, grad_beta_buf: ?*const metal.MTLBuffer,
-        eps: f32
-    ) !void {
+    pub fn layerNormBackward(self: Backend, input: []const f32, input_buf: ?*const metal.MTLBuffer, grad_output: []const f32, grad_output_buf: ?*const metal.MTLBuffer, grad_input: []f32, grad_input_buf: ?*const metal.MTLBuffer, gamma: []const f32, gamma_buf: ?*const metal.MTLBuffer, grad_gamma: []f32, grad_gamma_buf: ?*const metal.MTLBuffer, grad_beta: []f32, grad_beta_buf: ?*const metal.MTLBuffer, eps: f32) !void {
         switch (self.type) {
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalLayerNormBackward(input, input_buf, grad_output, grad_output_buf, grad_input, grad_input_buf, gamma, gamma_buf, grad_gamma, grad_gamma_buf, grad_beta, grad_beta_buf, eps),
-                .vulkan => try self.cpuLayerNormBackward(input, grad_output, grad_input, gamma, grad_gamma, grad_beta, eps),
             },
             .cpu => try self.cpuLayerNormBackward(input, grad_output, grad_input, gamma, grad_gamma, grad_beta, eps),
         }
     }
 
     /// Conv1D forward pass
-    pub fn conv1dForward(self: Backend,
-        input: []const f32, input_buf: ?*const metal.MTLBuffer,
-        weights: []const f32, weights_buf: ?*const metal.MTLBuffer,
-        bias: []const f32, bias_buf: ?*const metal.MTLBuffer,
-        output: []f32, output_buf: ?*const metal.MTLBuffer,
-        in_channels: usize, out_channels: usize, kernel_size: usize, in_len: usize, out_len: usize
-    ) !void {
+    pub fn conv1dForward(self: Backend, input: []const f32, input_buf: ?*const metal.MTLBuffer, weights: []const f32, weights_buf: ?*const metal.MTLBuffer, bias: []const f32, bias_buf: ?*const metal.MTLBuffer, output: []f32, output_buf: ?*const metal.MTLBuffer, in_channels: usize, out_channels: usize, kernel_size: usize, in_len: usize, out_len: usize) !void {
         switch (self.type) {
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalConv1dForward(input, input_buf, weights, weights_buf, bias, bias_buf, output, output_buf, in_channels, out_channels, kernel_size, in_len, out_len),
-                .vulkan => try self.cpuConv1dForward(input, weights, bias, output, in_channels, out_channels, kernel_size, in_len, out_len),
             },
             .cpu => try self.cpuConv1dForward(input, weights, bias, output, in_channels, out_channels, kernel_size, in_len, out_len),
         }
     }
 
     /// Conv1D backward pass
-    pub fn conv1dBackward(self: Backend,
-        input: []const f32, input_buf: ?*const metal.MTLBuffer,
-        weights: []const f32, weights_buf: ?*const metal.MTLBuffer,
-        grad_after_act: []const f32, grad_after_act_buf: ?*const metal.MTLBuffer,
-        grad_input: []f32, grad_input_buf: ?*const metal.MTLBuffer,
-        grad_weights: []f32, grad_weights_buf: ?*const metal.MTLBuffer,
-        grad_bias: []f32, grad_bias_buf: ?*const metal.MTLBuffer,
-        in_channels: usize, out_channels: usize, kernel_size: usize, in_len: usize, out_len: usize
-    ) !void {
+    pub fn conv1dBackward(self: Backend, input: []const f32, input_buf: ?*const metal.MTLBuffer, weights: []const f32, weights_buf: ?*const metal.MTLBuffer, grad_after_act: []const f32, grad_after_act_buf: ?*const metal.MTLBuffer, grad_input: []f32, grad_input_buf: ?*const metal.MTLBuffer, grad_weights: []f32, grad_weights_buf: ?*const metal.MTLBuffer, grad_bias: []f32, grad_bias_buf: ?*const metal.MTLBuffer, in_channels: usize, out_channels: usize, kernel_size: usize, in_len: usize, out_len: usize) !void {
         switch (self.type) {
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalConv1dBackward(input, input_buf, weights, weights_buf, grad_after_act, grad_after_act_buf, grad_input, grad_input_buf, grad_weights, grad_weights_buf, grad_bias, grad_bias_buf, in_channels, out_channels, kernel_size, in_len, out_len),
-                .vulkan => try self.cpuConv1dBackward(input, weights, grad_after_act, grad_input, grad_weights, grad_bias, in_channels, out_channels, kernel_size, in_len, out_len),
             },
             .cpu => try self.cpuConv1dBackward(input, weights, grad_after_act, grad_input, grad_weights, grad_bias, in_channels, out_channels, kernel_size, in_len, out_len),
         }
     }
 
     /// Dropout forward pass
-    pub fn dropoutForward(self: Backend,
-        input: []const f32, input_buf: ?*const metal.MTLBuffer,
-        output: []f32, output_buf: ?*const metal.MTLBuffer,
-        mask: []f32, mask_buf: ?*const metal.MTLBuffer,
-        rate: f32, scaling_factor: f32, seed: u64
-    ) !void {
+    pub fn dropoutForward(self: Backend, input: []const f32, input_buf: ?*const metal.MTLBuffer, output: []f32, output_buf: ?*const metal.MTLBuffer, mask: []f32, mask_buf: ?*const metal.MTLBuffer, rate: f32, scaling_factor: f32, seed: u64) !void {
         switch (self.type) {
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalDropoutForward(input, input_buf, output, output_buf, mask, mask_buf, rate, scaling_factor, seed),
-                .vulkan => try self.cpuDropoutForward(input, output, mask, rate, scaling_factor, seed),
             },
             .cpu => try self.cpuDropoutForward(input, output, mask, rate, scaling_factor, seed),
         }
     }
 
     /// VAE Sampling forward pass
-    pub fn vaeSamplingForward(self: Backend,
-        input: []const f32, input_buf: ?*const metal.MTLBuffer,
-        output: []f32, output_buf: ?*const metal.MTLBuffer,
-        epsilon: []f32, epsilon_buf: ?*const metal.MTLBuffer,
-        seed: u64, latent_dim: usize
-    ) !void {
+    pub fn vaeSamplingForward(self: Backend, input: []const f32, input_buf: ?*const metal.MTLBuffer, output: []f32, output_buf: ?*const metal.MTLBuffer, epsilon: []f32, epsilon_buf: ?*const metal.MTLBuffer, seed: u64, latent_dim: usize) !void {
         switch (self.type) {
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalVaeSamplingForward(input, input_buf, output, output_buf, epsilon, epsilon_buf, seed, latent_dim),
-                .vulkan => try self.cpuVaeSamplingForward(input, output, epsilon, seed, latent_dim),
             },
             .cpu => try self.cpuVaeSamplingForward(input, output, epsilon, seed, latent_dim),
         }
     }
 
     /// VAE Sampling backward pass
-    pub fn vaeSamplingBackward(self: Backend,
-        input: []const f32, input_buf: ?*const metal.MTLBuffer,
-        grad_output: []const f32, grad_output_buf: ?*const metal.MTLBuffer,
-        grad_input: []f32, grad_input_buf: ?*const metal.MTLBuffer,
-        epsilon: []const f32, epsilon_buf: ?*const metal.MTLBuffer,
-        latent_dim: usize
-    ) !void {
+    pub fn vaeSamplingBackward(self: Backend, input: []const f32, input_buf: ?*const metal.MTLBuffer, grad_output: []const f32, grad_output_buf: ?*const metal.MTLBuffer, grad_input: []f32, grad_input_buf: ?*const metal.MTLBuffer, epsilon: []const f32, epsilon_buf: ?*const metal.MTLBuffer, latent_dim: usize) !void {
         switch (self.type) {
-            .gpu => |gpu| switch (gpu) {
-                .metal => try self.metalVaeSamplingBackward(input, input_buf, grad_output, grad_output_buf, grad_input, grad_input_buf, epsilon, epsilon_buf, latent_dim),
-                .vulkan => try self.cpuVaeSamplingBackward(input, grad_output, grad_input, epsilon, latent_dim),
-            },
+            .gpu => try self.metalVaeSamplingBackward(input, input_buf, grad_output, grad_output_buf, grad_input, grad_input_buf, epsilon, epsilon_buf, latent_dim),
             .cpu => try self.cpuVaeSamplingBackward(input, grad_output, grad_input, epsilon, latent_dim),
         }
     }
 
     /// Attention forward pass (scaled dot-product)
-    pub fn attentionForward(self: Backend,
-        q: []const f32, q_buf: ?*const metal.MTLBuffer,
-        k: []const f32, k_buf: ?*const metal.MTLBuffer,
-        v: []const f32, v_buf: ?*const metal.MTLBuffer,
-        output: []f32, output_buf: ?*const metal.MTLBuffer,
-        seq_len: usize, d_k: usize, scaling_factor: f32
-    ) !void {
+    pub fn attentionForward(self: Backend, q: []const f32, q_buf: ?*const metal.MTLBuffer, k: []const f32, k_buf: ?*const metal.MTLBuffer, v: []const f32, v_buf: ?*const metal.MTLBuffer, output: []f32, output_buf: ?*const metal.MTLBuffer, seq_len: usize, d_k: usize, scaling_factor: f32) !void {
         switch (self.type) {
-            .gpu => |gpu| switch (gpu) {
-                .metal => try self.metalAttentionForward(q, q_buf, k, k_buf, v, v_buf, output, output_buf, seq_len, d_k, scaling_factor),
-                .vulkan => try self.cpuAttentionForward(q, k, v, output, seq_len, d_k, scaling_factor),
-            },
+            .gpu => try self.metalAttentionForward(q, q_buf, k, k_buf, v, v_buf, output, output_buf, seq_len, d_k, scaling_factor),
             .cpu => try self.cpuAttentionForward(q, k, v, output, seq_len, d_k, scaling_factor),
         }
     }
 
     /// Update bias using SGD
-    pub fn sgdUpdateBias(self: Backend,
-        bias: []f32, bias_buf: ?*const metal.MTLBuffer,
-        gradients: []const f32, gradients_buf: ?*const metal.MTLBuffer,
-        learning_rate: f32
-    ) !void {
+    pub fn sgdUpdateBias(self: Backend, bias: []f32, bias_buf: ?*const metal.MTLBuffer, gradients: []const f32, gradients_buf: ?*const metal.MTLBuffer, learning_rate: f32) !void {
         switch (self.type) {
-            .gpu => |gpu| switch (gpu) {
-                .metal => try self.metalSgdUpdateBias(bias, bias_buf, gradients, gradients_buf, learning_rate),
-                .vulkan => cpuSgdUpdateBias(bias, gradients, learning_rate),
-            },
+            .gpu => try self.metalSgdUpdateBias(bias, bias_buf, gradients, gradients_buf, learning_rate),
             .cpu => cpuSgdUpdateBias(bias, gradients, learning_rate),
         }
     }
 
     /// Accumulate bias gradients
-    pub fn accumulateBias(self: Backend,
-        grad_bias: []f32, grad_bias_buf: ?*const metal.MTLBuffer,
-        grad_after_act: []const f32, grad_after_act_buf: ?*const metal.MTLBuffer
-    ) !void {
+    pub fn accumulateBias(self: Backend, grad_bias: []f32, grad_bias_buf: ?*const metal.MTLBuffer, grad_after_act: []const f32, grad_after_act_buf: ?*const metal.MTLBuffer) !void {
         switch (self.type) {
-            .gpu => |gpu| switch (gpu) {
-                .metal => try self.metalAccumulateBias(grad_bias, grad_bias_buf, grad_after_act, grad_after_act_buf),
-                .vulkan => cpuAccumulateBias(grad_bias, grad_after_act),
-            },
+            .gpu => try self.metalAccumulateBias(grad_bias, grad_bias_buf, grad_after_act, grad_after_act_buf),
             .cpu => cpuAccumulateBias(grad_bias, grad_after_act),
         }
     }
 
     /// Add bias to output (broadcasted over batch)
-    pub fn addBias(self: Backend,
-        output: []f32, output_buf: ?*const metal.MTLBuffer,
-        bias: []const f32, bias_buf: ?*const metal.MTLBuffer
-    ) !void {
+    pub fn addBias(self: Backend, output: []f32, output_buf: ?*const metal.MTLBuffer, bias: []const f32, bias_buf: ?*const metal.MTLBuffer) !void {
         switch (self.type) {
-            .gpu => |gpu| switch (gpu) {
-                .metal => try self.metalAddBias(output, output_buf, bias, bias_buf),
-                .vulkan => {
-                    const batch_size = output.len / bias.len;
-                    for (0..batch_size) |b| {
-                        for (0..bias.len) |i| {
-                            output[b * bias.len + i] += bias[i];
-                        }
-                    }
-                },
-            },
+            .gpu => try self.metalAddBias(output, output_buf, bias, bias_buf),
             .cpu => {
                 const batch_size = output.len / bias.len;
                 for (0..batch_size) |b| {
@@ -568,32 +400,34 @@ pub const Backend = struct {
     }
 
     /// Map a function over a buffer (exp, log, etc)
-    pub fn map(self: Backend,
-        func: MapOp,
-        input: []const f32, input_buf: ?*const metal.MTLBuffer,
-        output: []f32, output_buf: ?*const metal.MTLBuffer
-    ) !void {
+    pub fn map(self: Backend, func: MapOp, input: []const f32, input_buf: ?*const metal.MTLBuffer, output: []f32, output_buf: ?*const metal.MTLBuffer) !void {
         switch (self.type) {
-            .gpu => |gpu| switch (gpu) {
-                .metal => try self.metalMap(func, input, input_buf, output, output_buf),
-                .vulkan => try self.cpuMap(func, input, output),
-            },
+            .gpu => try self.metalMap(func, input, input_buf, output, output_buf),
             .cpu => try self.cpuMap(func, input, output),
         }
     }
 
-    fn cpuMap(self: Backend,
-        func: MapOp,
-        input: []const f32, output: []f32
-    ) !void {
+    fn cpuMap(self: Backend, func: MapOp, input: []const f32, output: []f32) !void {
         _ = self;
         switch (func) {
-            .exp => for (input, output) |in, *out| { out.* = std.math.exp(in); },
-            .log => for (input, output) |in, *out| { out.* = std.math.log(f32, std.math.e, @max(in, 1e-10)); },
-            .sqrt => for (input, output) |in, *out| { out.* = @sqrt(in); },
-            .abs => for (input, output) |in, *out| { out.* = @abs(in); },
-            .square => for (input, output) |in, *out| { out.* = in * in; },
-            .inv => for (input, output) |in, *out| { out.* = 1.0 / in; },
+            .exp => for (input, output) |in, *out| {
+                out.* = std.math.exp(in);
+            },
+            .log => for (input, output) |in, *out| {
+                out.* = std.math.log(f32, std.math.e, @max(in, 1e-10));
+            },
+            .sqrt => for (input, output) |in, *out| {
+                out.* = @sqrt(in);
+            },
+            .abs => for (input, output) |in, *out| {
+                out.* = @abs(in);
+            },
+            .square => for (input, output) |in, *out| {
+                out.* = in * in;
+            },
+            .inv => for (input, output) |in, *out| {
+                out.* = 1.0 / in;
+            },
         }
     }
 
@@ -606,10 +440,7 @@ pub const Backend = struct {
         }
     }
 
-    fn metalAccumulateBias(self: Backend,
-        grad_bias: []f32, grad_bias_buf: ?*const metal.MTLBuffer,
-        grad_after_act: []const f32, grad_after_act_buf: ?*const metal.MTLBuffer
-    ) !void {
+    fn metalAccumulateBias(self: Backend, grad_bias: []f32, grad_bias_buf: ?*const metal.MTLBuffer, grad_after_act: []const f32, grad_after_act_buf: ?*const metal.MTLBuffer) !void {
         const ctx = self.metal_ctx orelse return error.NotAvailable;
         var buffer_gb = try self.getBuffer(grad_bias, grad_bias_buf);
         defer if (grad_bias_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_gb.buffer);
@@ -631,14 +462,13 @@ pub const Backend = struct {
         const tg_size = @min(grad_bias.len, pipeline.maxTotalThreadsPerThreadgroup());
         encoder.dispatchThreads(metal.MTLSize.make(grad_bias.len, 1, 1), metal.MTLSize.make(tg_size, 1, 1));
         encoder.endEncoding();
-        if (ctx.active_command_buffer == null) { cb.commit(); cb.waitUntilCompleted(); }
+        if (ctx.active_command_buffer == null) {
+            cb.commit();
+            cb.waitUntilCompleted();
+        }
     }
 
-    fn metalMap(self: Backend,
-        func: MapOp,
-        input: []const f32, input_buf: ?*const metal.MTLBuffer,
-        output: []f32, output_buf: ?*const metal.MTLBuffer
-    ) !void {
+    fn metalMap(self: Backend, func: MapOp, input: []const f32, input_buf: ?*const metal.MTLBuffer, output: []f32, output_buf: ?*const metal.MTLBuffer) !void {
         const ctx = self.metal_ctx orelse return error.NotAvailable;
         var buffer_input = try self.getBuffer(input, input_buf);
         defer if (input_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_input.buffer);
@@ -676,25 +506,14 @@ pub const Backend = struct {
     }
 
     /// Element-wise operations: C = op(A, B)
-    pub fn elementWise(self: Backend,
-        op: ElementWiseOp,
-        a: []const f32, a_buf: ?*const metal.MTLBuffer,
-        b: []const f32, b_buf: ?*const metal.MTLBuffer,
-        c: []f32, c_buf: ?*const metal.MTLBuffer
-    ) !void {
+    pub fn elementWise(self: Backend, op: ElementWiseOp, a: []const f32, a_buf: ?*const metal.MTLBuffer, b: []const f32, b_buf: ?*const metal.MTLBuffer, c: []f32, c_buf: ?*const metal.MTLBuffer) !void {
         switch (self.type) {
-            .gpu => |gpu| switch (gpu) {
-                .metal => try self.metalElementWise(op, a, a_buf, b, b_buf, c, c_buf),
-                .vulkan => try self.cpuElementWise(op, a, b, c),
-            },
+            .gpu => try self.metalElementWise(op, a, a_buf, b, b_buf, c, c_buf),
             .cpu => try self.cpuElementWise(op, a, b, c),
         }
     }
 
-    fn cpuElementWise(self: Backend,
-        op: ElementWiseOp,
-        a: []const f32, b: []const f32, c: []f32
-    ) !void {
+    fn cpuElementWise(self: Backend, op: ElementWiseOp, a: []const f32, b: []const f32, c: []f32) !void {
         _ = self;
         const Vec4 = @Vector(4, f32);
         const vec_len = (a.len / 4) * 4;
@@ -715,19 +534,22 @@ pub const Backend = struct {
 
         // Process remaining elements
         switch (op) {
-            .add => for (a[i..], b[i..], c[i..]) |av, bv, *cv| { cv.* = av + bv; },
-            .sub => for (a[i..], b[i..], c[i..]) |av, bv, *cv| { cv.* = av - bv; },
-            .mul => for (a[i..], b[i..], c[i..]) |av, bv, *cv| { cv.* = av * bv; },
-            .div => for (a[i..], b[i..], c[i..]) |av, bv, *cv| { cv.* = av / bv; },
+            .add => for (a[i..], b[i..], c[i..]) |av, bv, *cv| {
+                cv.* = av + bv;
+            },
+            .sub => for (a[i..], b[i..], c[i..]) |av, bv, *cv| {
+                cv.* = av - bv;
+            },
+            .mul => for (a[i..], b[i..], c[i..]) |av, bv, *cv| {
+                cv.* = av * bv;
+            },
+            .div => for (a[i..], b[i..], c[i..]) |av, bv, *cv| {
+                cv.* = av / bv;
+            },
         }
     }
 
-    fn metalElementWise(self: Backend,
-        op: ElementWiseOp,
-        a: []const f32, a_buf: ?*const metal.MTLBuffer,
-        b: []const f32, b_buf: ?*const metal.MTLBuffer,
-        c: []f32, c_buf: ?*const metal.MTLBuffer
-    ) !void {
+    fn metalElementWise(self: Backend, op: ElementWiseOp, a: []const f32, a_buf: ?*const metal.MTLBuffer, b: []const f32, b_buf: ?*const metal.MTLBuffer, c: []f32, c_buf: ?*const metal.MTLBuffer) !void {
         const ctx = self.metal_ctx orelse return error.NotAvailable;
         var buffer_a = try self.getBuffer(a, a_buf);
         defer if (a_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_a.buffer);
@@ -773,10 +595,7 @@ pub const Backend = struct {
     /// Fill buffer with constant value
     pub fn fill(self: Backend, data: []f32, data_buf: ?*const metal.MTLBuffer, value: f32) !void {
         switch (self.type) {
-            .gpu => |gpu| switch (gpu) {
-                .metal => try self.metalFillConstant(data, data_buf, value),
-                .vulkan => @memset(data, value),
-            },
+            .gpu => try self.metalFillConstant(data, data_buf, value),
             .cpu => @memset(data, value),
         }
     }
@@ -784,10 +603,7 @@ pub const Backend = struct {
     /// Scale buffer by constant factor
     pub fn scale(self: Backend, data: []f32, data_buf: ?*const metal.MTLBuffer, factor: f32) !void {
         switch (self.type) {
-            .gpu => |gpu| switch (gpu) {
-                .metal => try self.metalScaleBuffer(data, data_buf, factor),
-                .vulkan => for (data) |*v| { v.* *= factor; },
-            },
+            .gpu => try self.metalScaleBuffer(data, data_buf, factor),
             .cpu => {
                 const Vec4 = @Vector(4, f32);
                 const vec_factor: Vec4 = @splat(factor);
@@ -801,28 +617,18 @@ pub const Backend = struct {
                 }
 
                 // Process remaining elements
-                for (data[i..]) |*v| { v.* *= factor; }
+                for (data[i..]) |*v| {
+                    v.* *= factor;
+                }
             },
         }
     }
 
     /// Reverse sequence along time dimension
-    pub fn reverse(self: Backend,
-        input: []const f32, input_buf: ?*const metal.MTLBuffer,
-        output: []f32, output_buf: ?*const metal.MTLBuffer,
-        seq_len: usize, element_size: usize
-    ) !void {
+    pub fn reverse(self: Backend, input: []const f32, input_buf: ?*const metal.MTLBuffer, output: []f32, output_buf: ?*const metal.MTLBuffer, seq_len: usize, element_size: usize) !void {
         if (input.len != seq_len * element_size or output.len != seq_len * element_size) return error.InvalidInputSize;
         switch (self.type) {
-            .gpu => |gpu| switch (gpu) {
-                .metal => try self.metalReverseSequence(input, input_buf, output, output_buf, seq_len, element_size),
-                .vulkan => {
-                    for (0..seq_len) |t| {
-                        const src_t = seq_len - 1 - t;
-                        @memcpy(output[t * element_size .. (t + 1) * element_size], input[src_t * element_size .. (src_t + 1) * element_size]);
-                    }
-                },
-            },
+            .gpu => try self.metalReverseSequence(input, input_buf, output, output_buf, seq_len, element_size),
             .cpu => {
                 for (0..seq_len) |t| {
                     const src_t = seq_len - 1 - t;
@@ -833,24 +639,10 @@ pub const Backend = struct {
     }
 
     /// Concatenate two sequences along feature dimension
-    pub fn concat(self: Backend,
-        input1: []const f32, input1_buf: ?*const metal.MTLBuffer,
-        input2: []const f32, input2_buf: ?*const metal.MTLBuffer,
-        output: []f32, output_buf: ?*const metal.MTLBuffer,
-        size1: usize, size2: usize, seq_len: usize
-    ) !void {
+    pub fn concat(self: Backend, input1: []const f32, input1_buf: ?*const metal.MTLBuffer, input2: []const f32, input2_buf: ?*const metal.MTLBuffer, output: []f32, output_buf: ?*const metal.MTLBuffer, size1: usize, size2: usize, seq_len: usize) !void {
         if (output.len != seq_len * (size1 + size2)) return error.InvalidOutputSize;
         switch (self.type) {
-            .gpu => |gpu| switch (gpu) {
-                .metal => try self.metalConcatBuffers(input1, input1_buf, input2, input2_buf, output, output_buf, size1, size2, seq_len),
-                .vulkan => {
-                    for (0..seq_len) |t| {
-                        const out_t = output[t * (size1 + size2) .. (t + 1) * (size1 + size2)];
-                        @memcpy(out_t[0..size1], input1[t * size1 .. (t + 1) * size1]);
-                        @memcpy(out_t[size1..], input2[t * size2 .. (t + 1) * size2]);
-                    }
-                },
-            },
+            .gpu => try self.metalConcatBuffers(input1, input1_buf, input2, input2_buf, output, output_buf, size1, size2, seq_len),
             .cpu => {
                 for (0..seq_len) |t| {
                     const out_t = output[t * (size1 + size2) .. (t + 1) * (size1 + size2)];
@@ -862,24 +654,10 @@ pub const Backend = struct {
     }
 
     /// Split sequence into two along feature dimension
-    pub fn split(self: Backend,
-        input: []const f32, input_buf: ?*const metal.MTLBuffer,
-        output1: []f32, output1_buf: ?*const metal.MTLBuffer,
-        output2: []f32, output2_buf: ?*const metal.MTLBuffer,
-        size1: usize, size2: usize, seq_len: usize
-    ) !void {
+    pub fn split(self: Backend, input: []const f32, input_buf: ?*const metal.MTLBuffer, output1: []f32, output1_buf: ?*const metal.MTLBuffer, output2: []f32, output2_buf: ?*const metal.MTLBuffer, size1: usize, size2: usize, seq_len: usize) !void {
         if (input.len != seq_len * (size1 + size2)) return error.InvalidInputSize;
         switch (self.type) {
-            .gpu => |gpu| switch (gpu) {
-                .metal => try self.metalSplitBuffer(input, input_buf, output1, output1_buf, output2, output2_buf, size1, size2, seq_len),
-                .vulkan => {
-                    for (0..seq_len) |t| {
-                        const in_t = input[t * (size1 + size2) .. (t + 1) * (size1 + size2)];
-                        @memcpy(output1[t * size1 .. (t + 1) * size1], in_t[0..size1]);
-                        @memcpy(output2[t * size2 .. (t + 1) * size2], in_t[size1..]);
-                    }
-                },
-            },
+            .gpu => try self.metalSplitBuffer(input, input_buf, output1, output1_buf, output2, output2_buf, size1, size2, seq_len),
             .cpu => {
                 for (0..seq_len) |t| {
                     const in_t = input[t * (size1 + size2) .. (t + 1) * (size1 + size2)];
@@ -907,7 +685,10 @@ pub const Backend = struct {
         const tg_size = @min(data.len, pipeline.maxTotalThreadsPerThreadgroup());
         encoder.dispatchThreads(metal.MTLSize.make(data.len, 1, 1), metal.MTLSize.make(tg_size, 1, 1));
         encoder.endEncoding();
-        if (ctx.active_command_buffer == null) { cb.commit(); cb.waitUntilCompleted(); }
+        if (ctx.active_command_buffer == null) {
+            cb.commit();
+            cb.waitUntilCompleted();
+        }
     }
 
     fn metalScaleBuffer(self: Backend, data: []f32, data_buf: ?*const metal.MTLBuffer, factor: f32) !void {
@@ -927,7 +708,10 @@ pub const Backend = struct {
         const tg_size = @min(data.len, pipeline.maxTotalThreadsPerThreadgroup());
         encoder.dispatchThreads(metal.MTLSize.make(data.len, 1, 1), metal.MTLSize.make(tg_size, 1, 1));
         encoder.endEncoding();
-        if (ctx.active_command_buffer == null) { cb.commit(); cb.waitUntilCompleted(); }
+        if (ctx.active_command_buffer == null) {
+            cb.commit();
+            cb.waitUntilCompleted();
+        }
     }
 
     fn metalReverseSequence(self: Backend, input: []const f32, input_buf: ?*const metal.MTLBuffer, output: []f32, output_buf: ?*const metal.MTLBuffer, seq_len: usize, element_size: usize) !void {
@@ -954,7 +738,10 @@ pub const Backend = struct {
         const tg_y = @min(seq_len, max_threads / tg_x);
         encoder.dispatchThreads(metal.MTLSize.make(element_size, seq_len, 1), metal.MTLSize.make(tg_x, tg_y, 1));
         encoder.endEncoding();
-        if (ctx.active_command_buffer == null) { cb.commit(); cb.waitUntilCompleted(); }
+        if (ctx.active_command_buffer == null) {
+            cb.commit();
+            cb.waitUntilCompleted();
+        }
     }
 
     fn metalConcatBuffers(self: Backend, input1: []const f32, input1_buf: ?*const metal.MTLBuffer, input2: []const f32, input2_buf: ?*const metal.MTLBuffer, output: []f32, output_buf: ?*const metal.MTLBuffer, size1: usize, size2: usize, seq_len: usize) !void {
@@ -987,7 +774,10 @@ pub const Backend = struct {
         const tg_y = @min(seq_len, max_threads / tg_x);
         encoder.dispatchThreads(metal.MTLSize.make(total_size, seq_len, 1), metal.MTLSize.make(tg_x, tg_y, 1));
         encoder.endEncoding();
-        if (ctx.active_command_buffer == null) { cb.commit(); cb.waitUntilCompleted(); }
+        if (ctx.active_command_buffer == null) {
+            cb.commit();
+            cb.waitUntilCompleted();
+        }
     }
 
     fn metalSplitBuffer(self: Backend, input: []const f32, input_buf: ?*const metal.MTLBuffer, output1: []f32, output1_buf: ?*const metal.MTLBuffer, output2: []f32, output2_buf: ?*const metal.MTLBuffer, size1: usize, size2: usize, seq_len: usize) !void {
@@ -1020,19 +810,16 @@ pub const Backend = struct {
         const tg_y = @min(seq_len, max_threads / tg_x);
         encoder.dispatchThreads(metal.MTLSize.make(total_size, seq_len, 1), metal.MTLSize.make(tg_x, tg_y, 1));
         encoder.endEncoding();
-        if (ctx.active_command_buffer == null) { cb.commit(); cb.waitUntilCompleted(); }
+        if (ctx.active_command_buffer == null) {
+            cb.commit();
+            cb.waitUntilCompleted();
+        }
     }
 
     /// Fill buffer with random normal values
-    pub fn fillRandomNormal(self: Backend,
-        data: []f32, data_buf: ?*const metal.MTLBuffer,
-        mean: f32, std_dev: f32, seed: u64
-    ) !void {
+    pub fn fillRandomNormal(self: Backend, data: []f32, data_buf: ?*const metal.MTLBuffer, mean: f32, std_dev: f32, seed: u64) !void {
         switch (self.type) {
-            .gpu => |gpu| switch (gpu) {
-                .metal => try self.metalFillRandomNormal(data, data_buf, mean, std_dev, seed),
-                .vulkan => self.cpuFillRandomNormal(data, mean, std_dev, seed),
-            },
+            .gpu => try self.metalFillRandomNormal(data, data_buf, mean, std_dev, seed),
             .cpu => self.cpuFillRandomNormal(data, mean, std_dev, seed),
         }
     }
@@ -1046,10 +833,7 @@ pub const Backend = struct {
         }
     }
 
-    fn metalFillRandomNormal(self: Backend,
-        data: []f32, data_buf: ?*const metal.MTLBuffer,
-        mean: f32, std_dev: f32, seed: u64
-    ) !void {
+    fn metalFillRandomNormal(self: Backend, data: []f32, data_buf: ?*const metal.MTLBuffer, mean: f32, std_dev: f32, seed: u64) !void {
         const ctx = self.metal_ctx orelse return error.NotAvailable;
         var buffer_data = try self.getBuffer(data, data_buf);
         defer if (data_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_data.buffer);
@@ -1076,10 +860,7 @@ pub const Backend = struct {
         }
     }
 
-    fn metalAddBias(self: Backend,
-        output: []f32, output_buf: ?*const metal.MTLBuffer,
-        bias: []const f32, bias_buf: ?*const metal.MTLBuffer
-    ) !void {
+    fn metalAddBias(self: Backend, output: []f32, output_buf: ?*const metal.MTLBuffer, bias: []const f32, bias_buf: ?*const metal.MTLBuffer) !void {
         const ctx = self.metal_ctx orelse return error.NotAvailable;
         var buffer_output = try self.getBuffer(output, output_buf);
         defer if (output_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_output.buffer);
@@ -1113,35 +894,17 @@ pub const Backend = struct {
 
     // ================== Metal implementations ==================
 
-    fn metalMatMul(self: Backend,
-        a: []const f32, a_buf: ?*const metal.MTLBuffer,
-        b: []const f32, b_buf: ?*const metal.MTLBuffer,
-        c: []f32, c_buf: ?*const metal.MTLBuffer,
-        m: usize, n: usize, k: usize,
-        transpose_b: bool,
-        accumulate: bool
-    ) !void {
+    fn metalMatMul(self: Backend, a: []const f32, a_buf: ?*const metal.MTLBuffer, b: []const f32, b_buf: ?*const metal.MTLBuffer, c: []f32, c_buf: ?*const metal.MTLBuffer, m: usize, n: usize, k: usize, transpose_b: bool, accumulate: bool) !void {
         if (!isMacos()) return error.NotAvailable;
         try self.metalMatMulGPU(a, a_buf, b, b_buf, c, c_buf, m, n, k, transpose_b, accumulate);
     }
 
-    fn metalMatMulBatch(self: Backend,
-        a: []const f32, a_buf: ?*const metal.MTLBuffer,
-        b: []const f32, b_buf: ?*const metal.MTLBuffer,
-        c: []f32, c_buf: ?*const metal.MTLBuffer,
-        batch_size: usize, n: usize, k: usize
-    ) !void {
+    fn metalMatMulBatch(self: Backend, a: []const f32, a_buf: ?*const metal.MTLBuffer, b: []const f32, b_buf: ?*const metal.MTLBuffer, c: []f32, c_buf: ?*const metal.MTLBuffer, batch_size: usize, n: usize, k: usize) !void {
         if (!isMacos()) return error.NotAvailable;
         try self.metalMatMulBatchGPU(a, a_buf, b, b_buf, c, c_buf, batch_size, n, k);
     }
 
-    fn metalMatMulTransposeA(self: Backend,
-        a: []const f32, a_buf: ?*const metal.MTLBuffer,
-        b: []const f32, b_buf: ?*const metal.MTLBuffer,
-        c: []f32, c_buf: ?*const metal.MTLBuffer,
-        m: usize, n: usize, k: usize,
-        accumulate: bool
-    ) !void {
+    fn metalMatMulTransposeA(self: Backend, a: []const f32, a_buf: ?*const metal.MTLBuffer, b: []const f32, b_buf: ?*const metal.MTLBuffer, c: []f32, c_buf: ?*const metal.MTLBuffer, m: usize, n: usize, k: usize, accumulate: bool) !void {
         const ctx = self.metal_ctx orelse return error.NotAvailable;
         var buffer_a = try self.getBuffer(a, a_buf);
         defer if (a_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_a.buffer);
@@ -1217,14 +980,7 @@ pub const Backend = struct {
         return try ctx.command_queue.commandBuffer();
     }
 
-    fn metalMatMulGPU(self: Backend,
-        a: []const f32, a_buf: ?*const metal.MTLBuffer,
-        b: []const f32, b_buf: ?*const metal.MTLBuffer,
-        c: []f32, c_buf: ?*const metal.MTLBuffer,
-        m: usize, n: usize, k: usize,
-        transpose_b: bool,
-        accumulate: bool
-    ) !void {
+    fn metalMatMulGPU(self: Backend, a: []const f32, a_buf: ?*const metal.MTLBuffer, b: []const f32, b_buf: ?*const metal.MTLBuffer, c: []f32, c_buf: ?*const metal.MTLBuffer, m: usize, n: usize, k: usize, transpose_b: bool, accumulate: bool) !void {
         const ctx = self.metal_ctx.?;
         var buffer_a = try self.getBuffer(a, a_buf);
         defer if (a_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_a.buffer);
@@ -1272,13 +1028,7 @@ pub const Backend = struct {
         }
     }
 
-    fn metalMatMulBatchGPU(self: Backend,
-        a: []const f32, a_buf: ?*const metal.MTLBuffer,
-        b: []const f32, b_buf: ?*const metal.MTLBuffer,
-        c: []f32, c_buf: ?*const metal.MTLBuffer,
-        batch_size: usize, n: usize, k: usize,
-        accumulate: bool
-    ) !void {
+    fn metalMatMulBatchGPU(self: Backend, a: []const f32, a_buf: ?*const metal.MTLBuffer, b: []const f32, b_buf: ?*const metal.MTLBuffer, c: []f32, c_buf: ?*const metal.MTLBuffer, batch_size: usize, n: usize, k: usize, accumulate: bool) !void {
         const ctx = self.metal_ctx.?;
         var buffer_a = try self.getBuffer(a, a_buf);
         defer if (a_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_a.buffer);
@@ -1318,11 +1068,7 @@ pub const Backend = struct {
         }
     }
 
-    fn metalActivationForward(self: Backend,
-        act: activation.Activation,
-        input: []const f32, input_buf: ?*const metal.MTLBuffer,
-        output: []f32, output_buf: ?*const metal.MTLBuffer
-    ) !void {
+    fn metalActivationForward(self: Backend, act: activation.Activation, input: []const f32, input_buf: ?*const metal.MTLBuffer, output: []f32, output_buf: ?*const metal.MTLBuffer) !void {
         const ctx = self.metal_ctx.?;
         var buffer_input = try self.getBuffer(input, input_buf);
         defer if (input_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_input.buffer);
@@ -1375,12 +1121,7 @@ pub const Backend = struct {
         }
     }
 
-    fn metalActivationBackward(self: Backend,
-        act: activation.Activation,
-        input: []const f32, input_buf: ?*const metal.MTLBuffer,
-        grad_output: []const f32, grad_output_buf: ?*const metal.MTLBuffer,
-        grad_input: []f32, grad_input_buf: ?*const metal.MTLBuffer
-    ) !void {
+    fn metalActivationBackward(self: Backend, act: activation.Activation, input: []const f32, input_buf: ?*const metal.MTLBuffer, grad_output: []const f32, grad_output_buf: ?*const metal.MTLBuffer, grad_input: []f32, grad_input_buf: ?*const metal.MTLBuffer) !void {
         const ctx = self.metal_ctx.?;
         var buffer_input = try self.getBuffer(input, input_buf);
         defer if (input_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_input.buffer);
@@ -1434,22 +1175,12 @@ pub const Backend = struct {
         }
     }
 
-    fn metalLossBackward(self: Backend,
-        loss_fn: loss.Loss,
-        output: []const f32, output_buf: ?*const metal.MTLBuffer,
-        target: []const f32, target_buf: ?*const metal.MTLBuffer,
-        grad_output: []f32, grad_output_buf: ?*const metal.MTLBuffer
-    ) !void {
+    fn metalLossBackward(self: Backend, loss_fn: loss.Loss, output: []const f32, output_buf: ?*const metal.MTLBuffer, target: []const f32, target_buf: ?*const metal.MTLBuffer, grad_output: []f32, grad_output_buf: ?*const metal.MTLBuffer) !void {
         if (!isMacos()) return error.NotAvailable;
         try self.metalLossBackwardGPU(loss_fn, output, output_buf, target, target_buf, grad_output, grad_output_buf);
     }
 
-    fn metalLossBackwardGPU(self: Backend,
-        loss_fn: loss.Loss,
-        output: []const f32, output_buf: ?*const metal.MTLBuffer,
-        target: []const f32, target_buf: ?*const metal.MTLBuffer,
-        grad_output: []f32, grad_output_buf: ?*const metal.MTLBuffer
-    ) !void {
+    fn metalLossBackwardGPU(self: Backend, loss_fn: loss.Loss, output: []const f32, output_buf: ?*const metal.MTLBuffer, target: []const f32, target_buf: ?*const metal.MTLBuffer, grad_output: []f32, grad_output_buf: ?*const metal.MTLBuffer) !void {
         const ctx = self.metal_ctx.?;
         var buffer_output = try self.getBuffer(output, output_buf);
         defer if (output_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_output.buffer);
@@ -1518,11 +1249,7 @@ pub const Backend = struct {
         }
     }
 
-    fn metalSgdUpdate(self: Backend,
-        weights: []f32, weights_buf: ?*const metal.MTLBuffer,
-        gradients: []const f32, gradients_buf: ?*const metal.MTLBuffer,
-        learning_rate: f32, weight_decay: f32
-    ) !void {
+    fn metalSgdUpdate(self: Backend, weights: []f32, weights_buf: ?*const metal.MTLBuffer, gradients: []const f32, gradients_buf: ?*const metal.MTLBuffer, learning_rate: f32, weight_decay: f32) !void {
         const ctx = self.metal_ctx.?;
         var buffer_weights = try self.getBuffer(weights, weights_buf);
         defer if (weights_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_weights.buffer);
@@ -1551,11 +1278,7 @@ pub const Backend = struct {
         }
     }
 
-    fn metalSgdUpdateBias(self: Backend,
-        bias: []f32, bias_buf: ?*const metal.MTLBuffer,
-        gradients: []const f32, gradients_buf: ?*const metal.MTLBuffer,
-        learning_rate: f32
-    ) !void {
+    fn metalSgdUpdateBias(self: Backend, bias: []f32, bias_buf: ?*const metal.MTLBuffer, gradients: []const f32, gradients_buf: ?*const metal.MTLBuffer, learning_rate: f32) !void {
         const ctx = self.metal_ctx.?;
         var buffer_bias = try self.getBuffer(bias, bias_buf);
         defer if (bias_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_bias.buffer);
@@ -1583,14 +1306,7 @@ pub const Backend = struct {
         }
     }
 
-
-    fn metalAdamUpdate(self: Backend,
-        weights: []f32, weights_buf: ?*const metal.MTLBuffer,
-        gradients: []const f32, gradients_buf: ?*const metal.MTLBuffer,
-        m: []f32, m_buf: ?*const metal.MTLBuffer,
-        v: []f32, v_buf: ?*const metal.MTLBuffer,
-        lr: f32, beta1: f32, beta2: f32, eps: f32, bias_corr1: f32, bias_corr2: f32
-    ) !void {
+    fn metalAdamUpdate(self: Backend, weights: []f32, weights_buf: ?*const metal.MTLBuffer, gradients: []const f32, gradients_buf: ?*const metal.MTLBuffer, m: []f32, m_buf: ?*const metal.MTLBuffer, v: []f32, v_buf: ?*const metal.MTLBuffer, lr: f32, beta1: f32, beta2: f32, eps: f32, bias_corr1: f32, bias_corr2: f32) !void {
         const ctx = self.metal_ctx.?;
         var buffer_w = try self.getBuffer(weights, weights_buf);
         defer if (weights_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_w.buffer);
@@ -1621,15 +1337,13 @@ pub const Backend = struct {
         const tg_size = @min(weights.len, pipeline.maxTotalThreadsPerThreadgroup());
         encoder.dispatchThreads(metal.MTLSize.make(weights.len, 1, 1), metal.MTLSize.make(tg_size, 1, 1));
         encoder.endEncoding();
-        if (ctx.active_command_buffer == null) { cb.commit(); cb.waitUntilCompleted(); }
+        if (ctx.active_command_buffer == null) {
+            cb.commit();
+            cb.waitUntilCompleted();
+        }
     }
 
-    fn metalRmspropUpdate(self: Backend,
-        weights: []f32, weights_buf: ?*const metal.MTLBuffer,
-        gradients: []const f32, gradients_buf: ?*const metal.MTLBuffer,
-        g_avg: []f32, g_avg_buf: ?*const metal.MTLBuffer,
-        lr: f32, rho: f32, eps: f32
-    ) !void {
+    fn metalRmspropUpdate(self: Backend, weights: []f32, weights_buf: ?*const metal.MTLBuffer, gradients: []const f32, gradients_buf: ?*const metal.MTLBuffer, g_avg: []f32, g_avg_buf: ?*const metal.MTLBuffer, lr: f32, rho: f32, eps: f32) !void {
         const ctx = self.metal_ctx.?;
         var buffer_w = try self.getBuffer(weights, weights_buf);
         defer if (weights_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_w.buffer);
@@ -1654,16 +1368,13 @@ pub const Backend = struct {
         const tg_size = @min(weights.len, pipeline.maxTotalThreadsPerThreadgroup());
         encoder.dispatchThreads(metal.MTLSize.make(weights.len, 1, 1), metal.MTLSize.make(tg_size, 1, 1));
         encoder.endEncoding();
-        if (ctx.active_command_buffer == null) { cb.commit(); cb.waitUntilCompleted(); }
+        if (ctx.active_command_buffer == null) {
+            cb.commit();
+            cb.waitUntilCompleted();
+        }
     }
 
-    fn metalLayerNormForward(self: Backend,
-        input: []const f32, input_buf: ?*const metal.MTLBuffer,
-        output: []f32, output_buf: ?*const metal.MTLBuffer,
-        gamma: []const f32, gamma_buf: ?*const metal.MTLBuffer,
-        beta: []const f32, beta_buf: ?*const metal.MTLBuffer,
-        eps: f32
-    ) !void {
+    fn metalLayerNormForward(self: Backend, input: []const f32, input_buf: ?*const metal.MTLBuffer, output: []f32, output_buf: ?*const metal.MTLBuffer, gamma: []const f32, gamma_buf: ?*const metal.MTLBuffer, beta: []const f32, beta_buf: ?*const metal.MTLBuffer, eps: f32) !void {
         const ctx = self.metal_ctx.?;
         var buffer_in = try self.getBuffer(input, input_buf);
         defer if (input_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_in.buffer);
@@ -1690,18 +1401,13 @@ pub const Backend = struct {
         const tg_size = @min(gamma.len, pipeline.maxTotalThreadsPerThreadgroup());
         encoder.dispatchThreads(metal.MTLSize.make(batch_size * tg_size, 1, 1), metal.MTLSize.make(tg_size, 1, 1));
         encoder.endEncoding();
-        if (ctx.active_command_buffer == null) { cb.commit(); cb.waitUntilCompleted(); }
+        if (ctx.active_command_buffer == null) {
+            cb.commit();
+            cb.waitUntilCompleted();
+        }
     }
 
-    fn metalLayerNormBackward(self: Backend,
-        input: []const f32, input_buf: ?*const metal.MTLBuffer,
-        grad_output: []const f32, grad_output_buf: ?*const metal.MTLBuffer,
-        grad_input: []f32, grad_input_buf: ?*const metal.MTLBuffer,
-        gamma: []const f32, gamma_buf: ?*const metal.MTLBuffer,
-        grad_gamma: []f32, grad_gamma_buf: ?*const metal.MTLBuffer,
-        grad_beta: []f32, grad_beta_buf: ?*const metal.MTLBuffer,
-        eps: f32
-    ) !void {
+    fn metalLayerNormBackward(self: Backend, input: []const f32, input_buf: ?*const metal.MTLBuffer, grad_output: []const f32, grad_output_buf: ?*const metal.MTLBuffer, grad_input: []f32, grad_input_buf: ?*const metal.MTLBuffer, gamma: []const f32, gamma_buf: ?*const metal.MTLBuffer, grad_gamma: []f32, grad_gamma_buf: ?*const metal.MTLBuffer, grad_beta: []f32, grad_beta_buf: ?*const metal.MTLBuffer, eps: f32) !void {
         const ctx = self.metal_ctx.?;
         var buffer_in = try self.getBuffer(input, input_buf);
         defer if (input_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_in.buffer);
@@ -1734,16 +1440,13 @@ pub const Backend = struct {
         const tg_size = @min(gamma.len, pipeline.maxTotalThreadsPerThreadgroup());
         encoder.dispatchThreads(metal.MTLSize.make(batch_size * tg_size, 1, 1), metal.MTLSize.make(tg_size, 1, 1));
         encoder.endEncoding();
-        if (ctx.active_command_buffer == null) { cb.commit(); cb.waitUntilCompleted(); }
+        if (ctx.active_command_buffer == null) {
+            cb.commit();
+            cb.waitUntilCompleted();
+        }
     }
 
-    fn metalConv1dForward(self: Backend,
-        input: []const f32, input_buf: ?*const metal.MTLBuffer,
-        weights: []const f32, weights_buf: ?*const metal.MTLBuffer,
-        bias: []const f32, bias_buf: ?*const metal.MTLBuffer,
-        output: []f32, output_buf: ?*const metal.MTLBuffer,
-        in_channels: usize, out_channels: usize, kernel_size: usize, in_len: usize, out_len: usize
-    ) !void {
+    fn metalConv1dForward(self: Backend, input: []const f32, input_buf: ?*const metal.MTLBuffer, weights: []const f32, weights_buf: ?*const metal.MTLBuffer, bias: []const f32, bias_buf: ?*const metal.MTLBuffer, output: []f32, output_buf: ?*const metal.MTLBuffer, in_channels: usize, out_channels: usize, kernel_size: usize, in_len: usize, out_len: usize) !void {
         const ctx = self.metal_ctx.?;
         var buffer_in = try self.getBuffer(input, input_buf);
         defer if (input_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_in.buffer);
@@ -1774,18 +1477,13 @@ pub const Backend = struct {
         // 8x4x1 = 32 threads per threadgroup
         encoder.dispatchThreads(metal.MTLSize.make(out_len, out_channels, batch_size), metal.MTLSize.make(8, 4, 1));
         encoder.endEncoding();
-        if (ctx.active_command_buffer == null) { cb.commit(); cb.waitUntilCompleted(); }
+        if (ctx.active_command_buffer == null) {
+            cb.commit();
+            cb.waitUntilCompleted();
+        }
     }
 
-    fn metalConv1dBackward(self: Backend,
-        input: []const f32, input_buf: ?*const metal.MTLBuffer,
-        weights: []const f32, weights_buf: ?*const metal.MTLBuffer,
-        grad_after_act: []const f32, grad_after_act_buf: ?*const metal.MTLBuffer,
-        grad_input: []f32, grad_input_buf: ?*const metal.MTLBuffer,
-        grad_weights: []f32, grad_weights_buf: ?*const metal.MTLBuffer,
-        grad_bias: []f32, grad_bias_buf: ?*const metal.MTLBuffer,
-        in_channels: usize, out_channels: usize, kernel_size: usize, in_len: usize, out_len: usize
-    ) !void {
+    fn metalConv1dBackward(self: Backend, input: []const f32, input_buf: ?*const metal.MTLBuffer, weights: []const f32, weights_buf: ?*const metal.MTLBuffer, grad_after_act: []const f32, grad_after_act_buf: ?*const metal.MTLBuffer, grad_input: []f32, grad_input_buf: ?*const metal.MTLBuffer, grad_weights: []f32, grad_weights_buf: ?*const metal.MTLBuffer, grad_bias: []f32, grad_bias_buf: ?*const metal.MTLBuffer, in_channels: usize, out_channels: usize, kernel_size: usize, in_len: usize, out_len: usize) !void {
         const ctx = self.metal_ctx.?;
         var buffer_in = try self.getBuffer(input, input_buf);
         defer if (input_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_in.buffer);
@@ -1822,15 +1520,13 @@ pub const Backend = struct {
 
         encoder.dispatchThreads(metal.MTLSize.make(out_len, out_channels, batch_size), metal.MTLSize.make(16, 16, 1));
         encoder.endEncoding();
-        if (ctx.active_command_buffer == null) { cb.commit(); cb.waitUntilCompleted(); }
+        if (ctx.active_command_buffer == null) {
+            cb.commit();
+            cb.waitUntilCompleted();
+        }
     }
 
-    fn metalDropoutForward(self: Backend,
-        input: []const f32, input_buf: ?*const metal.MTLBuffer,
-        output: []f32, output_buf: ?*const metal.MTLBuffer,
-        mask: []f32, mask_buf: ?*const metal.MTLBuffer,
-        rate: f32, scaling_factor: f32, seed: u64
-    ) !void {
+    fn metalDropoutForward(self: Backend, input: []const f32, input_buf: ?*const metal.MTLBuffer, output: []f32, output_buf: ?*const metal.MTLBuffer, mask: []f32, mask_buf: ?*const metal.MTLBuffer, rate: f32, scaling_factor: f32, seed: u64) !void {
         const ctx = self.metal_ctx.?;
         var buffer_in = try self.getBuffer(input, input_buf);
         defer if (input_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_in.buffer);
@@ -1855,15 +1551,13 @@ pub const Backend = struct {
         const tg_size = @min(input.len, pipeline.maxTotalThreadsPerThreadgroup());
         encoder.dispatchThreads(metal.MTLSize.make(input.len, 1, 1), metal.MTLSize.make(tg_size, 1, 1));
         encoder.endEncoding();
-        if (ctx.active_command_buffer == null) { cb.commit(); cb.waitUntilCompleted(); }
+        if (ctx.active_command_buffer == null) {
+            cb.commit();
+            cb.waitUntilCompleted();
+        }
     }
 
-    fn metalVaeSamplingForward(self: Backend,
-        input: []const f32, input_buf: ?*const metal.MTLBuffer,
-        output: []f32, output_buf: ?*const metal.MTLBuffer,
-        epsilon: []f32, epsilon_buf: ?*const metal.MTLBuffer,
-        seed: u64, latent_dim: usize
-    ) !void {
+    fn metalVaeSamplingForward(self: Backend, input: []const f32, input_buf: ?*const metal.MTLBuffer, output: []f32, output_buf: ?*const metal.MTLBuffer, epsilon: []f32, epsilon_buf: ?*const metal.MTLBuffer, seed: u64, latent_dim: usize) !void {
         const ctx = self.metal_ctx.?;
         var buffer_in = try self.getBuffer(input, input_buf);
         defer if (input_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_in.buffer);
@@ -1885,16 +1579,13 @@ pub const Backend = struct {
 
         encoder.dispatchThreads(metal.MTLSize.make(latent_dim, 1, 1), metal.MTLSize.make(latent_dim, 1, 1));
         encoder.endEncoding();
-        if (ctx.active_command_buffer == null) { cb.commit(); cb.waitUntilCompleted(); }
+        if (ctx.active_command_buffer == null) {
+            cb.commit();
+            cb.waitUntilCompleted();
+        }
     }
 
-    fn metalVaeSamplingBackward(self: Backend,
-        input: []const f32, input_buf: ?*const metal.MTLBuffer,
-        grad_output: []const f32, grad_output_buf: ?*const metal.MTLBuffer,
-        grad_input: []f32, grad_input_buf: ?*const metal.MTLBuffer,
-        epsilon: []const f32, epsilon_buf: ?*const metal.MTLBuffer,
-        latent_dim: usize
-    ) !void {
+    fn metalVaeSamplingBackward(self: Backend, input: []const f32, input_buf: ?*const metal.MTLBuffer, grad_output: []const f32, grad_output_buf: ?*const metal.MTLBuffer, grad_input: []f32, grad_input_buf: ?*const metal.MTLBuffer, epsilon: []const f32, epsilon_buf: ?*const metal.MTLBuffer, latent_dim: usize) !void {
         const ctx = self.metal_ctx.?;
         var buffer_in = try self.getBuffer(input, input_buf);
         defer if (input_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_in.buffer);
@@ -1918,16 +1609,13 @@ pub const Backend = struct {
 
         encoder.dispatchThreads(metal.MTLSize.make(latent_dim, 1, 1), metal.MTLSize.make(latent_dim, 1, 1));
         encoder.endEncoding();
-        if (ctx.active_command_buffer == null) { cb.commit(); cb.waitUntilCompleted(); }
+        if (ctx.active_command_buffer == null) {
+            cb.commit();
+            cb.waitUntilCompleted();
+        }
     }
 
-    fn metalAttentionForward(self: Backend,
-        q: []const f32, q_buf: ?*const metal.MTLBuffer,
-        k: []const f32, k_buf: ?*const metal.MTLBuffer,
-        v: []const f32, v_buf: ?*const metal.MTLBuffer,
-        output: []f32, output_buf: ?*const metal.MTLBuffer,
-        seq_len: usize, d_k: usize, scaling_factor: f32
-    ) !void {
+    fn metalAttentionForward(self: Backend, q: []const f32, q_buf: ?*const metal.MTLBuffer, k: []const f32, k_buf: ?*const metal.MTLBuffer, v: []const f32, v_buf: ?*const metal.MTLBuffer, output: []f32, output_buf: ?*const metal.MTLBuffer, seq_len: usize, d_k: usize, scaling_factor: f32) !void {
         const ctx = self.metal_ctx.?;
         var buffer_q = try self.getBuffer(q, q_buf);
         defer if (q_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_q.buffer);
@@ -1963,31 +1651,9 @@ pub const Backend = struct {
         const tg_height = 8;
         encoder.dispatchThreads(metal.MTLSize.make(d_k, seq_len, 1), metal.MTLSize.make(tg_width, tg_height, 1));
         encoder.endEncoding();
-        if (ctx.active_command_buffer == null) { cb.commit(); cb.waitUntilCompleted(); }
-    }
-
-
-    // ================== Vulkan implementations ==================
-
-    fn vulkanMatMulBatch(self: Backend, a: []const f32, b: []const f32, c: []f32, batch_size: usize, n: usize, k: usize, accumulate: bool) !void {
-        _ = self;
-        cpuMatMulBatch(a, b, c, batch_size, n, k, accumulate);
-    }
-
-    fn vulkanActivationForward(self: Backend, act: activation.Activation, input: []const f32, output: []f32) !void {
-        _ = self;
-        switch (act) {
-            .softmax => try act.softmaxForward(input, output),
-            .relu => optimization.SIMD.reluVectorized(input, output),
-            .sigmoid => optimization.SIMD.sigmoidVectorized(input, output),
-            .tanh => optimization.SIMD.tanhVectorized(input, output),
-            .linear => @memcpy(output, input),
-            .gelu => {
-                // GELU using scalar implementation for now
-                for (input, 0..) |x, i| {
-                    output[i] = act.forward(x);
-                }
-            },
+        if (ctx.active_command_buffer == null) {
+            cb.commit();
+            cb.waitUntilCompleted();
         }
     }
 
@@ -2152,7 +1818,6 @@ pub const Backend = struct {
             b.* = @min(max_bias, @max(min_bias, b.*));
         }
     }
-
 
     fn cpuAdamUpdate(self: Backend, weights: []f32, gradients: []const f32, m: []f32, v: []f32, lr: f32, beta1: f32, beta2: f32, eps: f32, bias_corr1: f32, bias_corr2: f32) !void {
         _ = self;
@@ -2327,7 +1992,10 @@ pub const Backend = struct {
                 if (score > max_score) max_score = score;
             }
             var sum_exp: f32 = 0;
-            for (scores) |*s| { s.* = std.math.exp(s.* - max_score); sum_exp += s.*; }
+            for (scores) |*s| {
+                s.* = std.math.exp(s.* - max_score);
+                sum_exp += s.*;
+            }
             for (0..d_k) |feat| {
                 var res: f32 = 0;
                 for (0..seq_len) |m| res += (scores[m] / sum_exp) * v[m * d_k + feat];
@@ -2336,23 +2004,10 @@ pub const Backend = struct {
         }
     }
 
-
     /// GRU forward step
-    pub fn gruForwardStep(self: Backend,
-        gates_ih: []const f32, gates_ih_buf: ?*const metal.MTLBuffer,
-        gates_hh: []const f32, gates_hh_buf: ?*const metal.MTLBuffer,
-        bias: []const f32, bias_buf: ?*const metal.MTLBuffer,
-        h_prev: []const f32, h_prev_buf: ?*const metal.MTLBuffer,
-        h_curr: []f32, h_curr_buf: ?*const metal.MTLBuffer,
-        gate_acts: []f32, gate_acts_buf: ?*const metal.MTLBuffer,
-        n_hh_out: []f32, n_hh_out_buf: ?*const metal.MTLBuffer,
-        hidden_size: usize
-    ) !void {
+    pub fn gruForwardStep(self: Backend, gates_ih: []const f32, gates_ih_buf: ?*const metal.MTLBuffer, gates_hh: []const f32, gates_hh_buf: ?*const metal.MTLBuffer, bias: []const f32, bias_buf: ?*const metal.MTLBuffer, h_prev: []const f32, h_prev_buf: ?*const metal.MTLBuffer, h_curr: []f32, h_curr_buf: ?*const metal.MTLBuffer, gate_acts: []f32, gate_acts_buf: ?*const metal.MTLBuffer, n_hh_out: []f32, n_hh_out_buf: ?*const metal.MTLBuffer, hidden_size: usize) !void {
         switch (self.type) {
-            .gpu => |gpu| switch (gpu) {
-                .metal => try self.metalGruForwardStep(gates_ih, gates_ih_buf, gates_hh, gates_hh_buf, bias, bias_buf, h_prev, h_prev_buf, h_curr, h_curr_buf, gate_acts, gate_acts_buf, n_hh_out, n_hh_out_buf, hidden_size),
-                .vulkan => return error.NotAvailable,
-            },
+            .gpu => try self.metalGruForwardStep(gates_ih, gates_ih_buf, gates_hh, gates_hh_buf, bias, bias_buf, h_prev, h_prev_buf, h_curr, h_curr_buf, gate_acts, gate_acts_buf, n_hh_out, n_hh_out_buf, hidden_size),
             .cpu => {
                 // CPU implementation
                 for (0..hidden_size) |j| {
@@ -2374,18 +2029,9 @@ pub const Backend = struct {
     }
 
     /// Vanilla RNN forward step
-    pub fn rnnForwardStep(self: Backend,
-        gates_ih: []const f32, gates_ih_buf: ?*const metal.MTLBuffer,
-        gates_hh: []const f32, gates_hh_buf: ?*const metal.MTLBuffer,
-        bias: []const f32, bias_buf: ?*const metal.MTLBuffer,
-        h_curr: []f32, h_curr_buf: ?*const metal.MTLBuffer,
-        hidden_size: usize
-    ) !void {
+    pub fn rnnForwardStep(self: Backend, gates_ih: []const f32, gates_ih_buf: ?*const metal.MTLBuffer, gates_hh: []const f32, gates_hh_buf: ?*const metal.MTLBuffer, bias: []const f32, bias_buf: ?*const metal.MTLBuffer, h_curr: []f32, h_curr_buf: ?*const metal.MTLBuffer, hidden_size: usize) !void {
         switch (self.type) {
-            .gpu => |gpu| switch (gpu) {
-                .metal => try self.metalRnnForwardStep(gates_ih, gates_ih_buf, gates_hh, gates_hh_buf, bias, bias_buf, h_curr, h_curr_buf, hidden_size),
-                .vulkan => return error.NotAvailable,
-            },
+            .gpu => try self.metalRnnForwardStep(gates_ih, gates_ih_buf, gates_hh, gates_hh_buf, bias, bias_buf, h_curr, h_curr_buf, hidden_size),
             .cpu => {
                 for (0..hidden_size) |j| {
                     h_curr[j] = std.math.tanh(gates_ih[j] + gates_hh[j] + bias[j]);
@@ -2395,18 +2041,9 @@ pub const Backend = struct {
     }
 
     /// Vanilla RNN backward step
-    pub fn rnnBackwardStep(self: Backend,
-        grad_h_curr: []const f32, grad_h_curr_buf: ?*const metal.MTLBuffer,
-        grad_h_next: []const f32, grad_h_next_buf: ?*const metal.MTLBuffer,
-        h_curr: []const f32, h_curr_buf: ?*const metal.MTLBuffer,
-        grad_after_act: []f32, grad_after_act_buf: ?*const metal.MTLBuffer,
-        hidden_size: usize
-    ) !void {
+    pub fn rnnBackwardStep(self: Backend, grad_h_curr: []const f32, grad_h_curr_buf: ?*const metal.MTLBuffer, grad_h_next: []const f32, grad_h_next_buf: ?*const metal.MTLBuffer, h_curr: []const f32, h_curr_buf: ?*const metal.MTLBuffer, grad_after_act: []f32, grad_after_act_buf: ?*const metal.MTLBuffer, hidden_size: usize) !void {
         switch (self.type) {
-            .gpu => |gpu| switch (gpu) {
-                .metal => try self.metalRnnBackwardStep(grad_h_curr, grad_h_curr_buf, grad_h_next, grad_h_next_buf, h_curr, h_curr_buf, grad_after_act, grad_after_act_buf, hidden_size),
-                .vulkan => return error.NotAvailable,
-            },
+            .gpu => try self.metalRnnBackwardStep(grad_h_curr, grad_h_curr_buf, grad_h_next, grad_h_next_buf, h_curr, h_curr_buf, grad_after_act, grad_after_act_buf, hidden_size),
             .cpu => {
                 for (0..hidden_size) |j| {
                     const gh = grad_h_curr[j] + grad_h_next[j];
@@ -2418,21 +2055,9 @@ pub const Backend = struct {
     }
 
     /// LSTM forward step
-    pub fn lstmForwardStep(self: Backend,
-        gates_ih: []const f32, gates_ih_buf: ?*const metal.MTLBuffer,
-        gates_hh: []const f32, gates_hh_buf: ?*const metal.MTLBuffer,
-        bias: []const f32, bias_buf: ?*const metal.MTLBuffer,
-        c_prev: []const f32, c_prev_buf: ?*const metal.MTLBuffer,
-        c_curr: []f32, c_curr_buf: ?*const metal.MTLBuffer,
-        h_curr: []f32, h_curr_buf: ?*const metal.MTLBuffer,
-        gate_acts: []f32, gate_acts_buf: ?*const metal.MTLBuffer,
-        hidden_size: usize
-    ) !void {
+    pub fn lstmForwardStep(self: Backend, gates_ih: []const f32, gates_ih_buf: ?*const metal.MTLBuffer, gates_hh: []const f32, gates_hh_buf: ?*const metal.MTLBuffer, bias: []const f32, bias_buf: ?*const metal.MTLBuffer, c_prev: []const f32, c_prev_buf: ?*const metal.MTLBuffer, c_curr: []f32, c_curr_buf: ?*const metal.MTLBuffer, h_curr: []f32, h_curr_buf: ?*const metal.MTLBuffer, gate_acts: []f32, gate_acts_buf: ?*const metal.MTLBuffer, hidden_size: usize) !void {
         switch (self.type) {
-            .gpu => |gpu| switch (gpu) {
-                .metal => try self.metalLstmForwardStep(gates_ih, gates_ih_buf, gates_hh, gates_hh_buf, bias, bias_buf, c_prev, c_prev_buf, c_curr, c_curr_buf, h_curr, h_curr_buf, gate_acts, gate_acts_buf, hidden_size),
-                .vulkan => return error.NotAvailable,
-            },
+            .gpu => try self.metalLstmForwardStep(gates_ih, gates_ih_buf, gates_hh, gates_hh_buf, bias, bias_buf, c_prev, c_prev_buf, c_curr, c_curr_buf, h_curr, h_curr_buf, gate_acts, gate_acts_buf, hidden_size),
             .cpu => {
                 for (0..hidden_size) |j| {
                     const i = 1.0 / (1.0 + std.math.exp(-(gates_ih[j] + gates_hh[j] + bias[j])));
@@ -2453,16 +2078,7 @@ pub const Backend = struct {
         }
     }
 
-    fn metalLstmForwardStep(self: Backend,
-        gates_ih: []const f32, gates_ih_buf: ?*const metal.MTLBuffer,
-        gates_hh: []const f32, gates_hh_buf: ?*const metal.MTLBuffer,
-        bias: []const f32, bias_buf: ?*const metal.MTLBuffer,
-        c_prev: []const f32, c_prev_buf: ?*const metal.MTLBuffer,
-        c_curr: []f32, c_curr_buf: ?*const metal.MTLBuffer,
-        h_curr: []f32, h_curr_buf: ?*const metal.MTLBuffer,
-        gate_acts: []f32, gate_acts_buf: ?*const metal.MTLBuffer,
-        hidden_size: usize
-    ) !void {
+    fn metalLstmForwardStep(self: Backend, gates_ih: []const f32, gates_ih_buf: ?*const metal.MTLBuffer, gates_hh: []const f32, gates_hh_buf: ?*const metal.MTLBuffer, bias: []const f32, bias_buf: ?*const metal.MTLBuffer, c_prev: []const f32, c_prev_buf: ?*const metal.MTLBuffer, c_curr: []f32, c_curr_buf: ?*const metal.MTLBuffer, h_curr: []f32, h_curr_buf: ?*const metal.MTLBuffer, gate_acts: []f32, gate_acts_buf: ?*const metal.MTLBuffer, hidden_size: usize) !void {
         const ctx = self.metal_ctx orelse return error.NotAvailable;
         var buffer_ih = try self.getBuffer(gates_ih, gates_ih_buf);
         defer if (gates_ih_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_ih.buffer);
@@ -2504,13 +2120,7 @@ pub const Backend = struct {
         }
     }
 
-    fn metalRnnForwardStep(self: Backend,
-        gates_ih: []const f32, gates_ih_buf: ?*const metal.MTLBuffer,
-        gates_hh: []const f32, gates_hh_buf: ?*const metal.MTLBuffer,
-        bias: []const f32, bias_buf: ?*const metal.MTLBuffer,
-        h_curr: []f32, h_curr_buf: ?*const metal.MTLBuffer,
-        hidden_size: usize
-    ) !void {
+    fn metalRnnForwardStep(self: Backend, gates_ih: []const f32, gates_ih_buf: ?*const metal.MTLBuffer, gates_hh: []const f32, gates_hh_buf: ?*const metal.MTLBuffer, bias: []const f32, bias_buf: ?*const metal.MTLBuffer, h_curr: []f32, h_curr_buf: ?*const metal.MTLBuffer, hidden_size: usize) !void {
         const ctx = self.metal_ctx orelse return error.NotAvailable;
         var buffer_ih = try self.getBuffer(gates_ih, gates_ih_buf);
         defer if (gates_ih_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_ih.buffer);
@@ -2543,13 +2153,7 @@ pub const Backend = struct {
         }
     }
 
-    fn metalRnnBackwardStep(self: Backend,
-        grad_h_curr: []const f32, grad_h_curr_buf: ?*const metal.MTLBuffer,
-        grad_h_next: []const f32, grad_h_next_buf: ?*const metal.MTLBuffer,
-        h_curr: []const f32, h_curr_buf: ?*const metal.MTLBuffer,
-        grad_after_act: []f32, grad_after_act_buf: ?*const metal.MTLBuffer,
-        hidden_size: usize
-    ) !void {
+    fn metalRnnBackwardStep(self: Backend, grad_h_curr: []const f32, grad_h_curr_buf: ?*const metal.MTLBuffer, grad_h_next: []const f32, grad_h_next_buf: ?*const metal.MTLBuffer, h_curr: []const f32, h_curr_buf: ?*const metal.MTLBuffer, grad_after_act: []f32, grad_after_act_buf: ?*const metal.MTLBuffer, hidden_size: usize) !void {
         const ctx = self.metal_ctx orelse return error.NotAvailable;
         var buffer_ghc = try self.getBuffer(grad_h_curr, grad_h_curr_buf);
         defer if (grad_h_curr_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_ghc.buffer);
@@ -2582,16 +2186,7 @@ pub const Backend = struct {
         }
     }
 
-    fn metalGruForwardStep(self: Backend,
-        gates_ih: []const f32, gates_ih_buf: ?*const metal.MTLBuffer,
-        gates_hh: []const f32, gates_hh_buf: ?*const metal.MTLBuffer,
-        bias: []const f32, bias_buf: ?*const metal.MTLBuffer,
-        h_prev: []const f32, h_prev_buf: ?*const metal.MTLBuffer,
-        h_curr: []f32, h_curr_buf: ?*const metal.MTLBuffer,
-        gate_acts: []f32, gate_acts_buf: ?*const metal.MTLBuffer,
-        n_hh_out: []f32, n_hh_out_buf: ?*const metal.MTLBuffer,
-        hidden_size: usize
-    ) !void {
+    fn metalGruForwardStep(self: Backend, gates_ih: []const f32, gates_ih_buf: ?*const metal.MTLBuffer, gates_hh: []const f32, gates_hh_buf: ?*const metal.MTLBuffer, bias: []const f32, bias_buf: ?*const metal.MTLBuffer, h_prev: []const f32, h_prev_buf: ?*const metal.MTLBuffer, h_curr: []f32, h_curr_buf: ?*const metal.MTLBuffer, gate_acts: []f32, gate_acts_buf: ?*const metal.MTLBuffer, n_hh_out: []f32, n_hh_out_buf: ?*const metal.MTLBuffer, hidden_size: usize) !void {
         const ctx = self.metal_ctx orelse return error.NotAvailable;
         var buffer_ih = try self.getBuffer(gates_ih, gates_ih_buf);
         defer if (gates_ih_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_ih.buffer);
@@ -2634,23 +2229,9 @@ pub const Backend = struct {
     }
 
     /// LSTM backward step
-    pub fn lstmBackwardStep(self: Backend,
-        grad_h_curr: []const f32, grad_h_curr_buf: ?*const metal.MTLBuffer,
-        grad_h_next: []const f32, grad_h_next_buf: ?*const metal.MTLBuffer,
-        grad_c_next: []const f32, grad_c_next_buf: ?*const metal.MTLBuffer,
-        gate_acts: []const f32, gate_acts_buf: ?*const metal.MTLBuffer,
-        c_curr: []const f32, c_curr_buf: ?*const metal.MTLBuffer,
-        c_prev: []const f32, c_prev_buf: ?*const metal.MTLBuffer,
-        grad_gates: []f32, grad_gates_buf: ?*const metal.MTLBuffer,
-        grad_c_prev: []f32, grad_c_prev_buf: ?*const metal.MTLBuffer,
-        grad_h_prev_part: []f32, grad_h_prev_part_buf: ?*const metal.MTLBuffer,
-        hidden_size: usize
-    ) !void {
+    pub fn lstmBackwardStep(self: Backend, grad_h_curr: []const f32, grad_h_curr_buf: ?*const metal.MTLBuffer, grad_h_next: []const f32, grad_h_next_buf: ?*const metal.MTLBuffer, grad_c_next: []const f32, grad_c_next_buf: ?*const metal.MTLBuffer, gate_acts: []const f32, gate_acts_buf: ?*const metal.MTLBuffer, c_curr: []const f32, c_curr_buf: ?*const metal.MTLBuffer, c_prev: []const f32, c_prev_buf: ?*const metal.MTLBuffer, grad_gates: []f32, grad_gates_buf: ?*const metal.MTLBuffer, grad_c_prev: []f32, grad_c_prev_buf: ?*const metal.MTLBuffer, grad_h_prev_part: []f32, grad_h_prev_part_buf: ?*const metal.MTLBuffer, hidden_size: usize) !void {
         switch (self.type) {
-            .gpu => |gpu| switch (gpu) {
-                .metal => try self.metalLstmBackwardStep(grad_h_curr, grad_h_curr_buf, grad_h_next, grad_h_next_buf, grad_c_next, grad_c_next_buf, gate_acts, gate_acts_buf, c_curr, c_curr_buf, c_prev, c_prev_buf, grad_gates, grad_gates_buf, grad_c_prev, grad_c_prev_buf, grad_h_prev_part, grad_h_prev_part_buf, hidden_size),
-                .vulkan => return error.NotAvailable,
-            },
+            .gpu => try self.metalLstmBackwardStep(grad_h_curr, grad_h_curr_buf, grad_h_next, grad_h_next_buf, grad_c_next, grad_c_next_buf, gate_acts, gate_acts_buf, c_curr, c_curr_buf, c_prev, c_prev_buf, grad_gates, grad_gates_buf, grad_c_prev, grad_c_prev_buf, grad_h_prev_part, grad_h_prev_part_buf, hidden_size),
             .cpu => {
                 for (0..hidden_size) |j| {
                     const i = gate_acts[j];
@@ -2677,22 +2258,9 @@ pub const Backend = struct {
     }
 
     /// GRU backward step
-    pub fn gruBackwardStep(self: Backend,
-        grad_h_curr: []const f32, grad_h_curr_buf: ?*const metal.MTLBuffer,
-        grad_h_next: []const f32, grad_h_next_buf: ?*const metal.MTLBuffer,
-        gate_acts: []const f32, gate_acts_buf: ?*const metal.MTLBuffer,
-        h_prev: []const f32, h_prev_buf: ?*const metal.MTLBuffer,
-        n_hh: []const f32, n_hh_buf: ?*const metal.MTLBuffer,
-        grad_gates_ih: []f32, grad_gates_ih_buf: ?*const metal.MTLBuffer,
-        grad_gates_hh: []f32, grad_gates_hh_buf: ?*const metal.MTLBuffer,
-        grad_h_prev: []f32, grad_h_prev_buf: ?*const metal.MTLBuffer,
-        hidden_size: usize
-    ) !void {
+    pub fn gruBackwardStep(self: Backend, grad_h_curr: []const f32, grad_h_curr_buf: ?*const metal.MTLBuffer, grad_h_next: []const f32, grad_h_next_buf: ?*const metal.MTLBuffer, gate_acts: []const f32, gate_acts_buf: ?*const metal.MTLBuffer, h_prev: []const f32, h_prev_buf: ?*const metal.MTLBuffer, n_hh: []const f32, n_hh_buf: ?*const metal.MTLBuffer, grad_gates_ih: []f32, grad_gates_ih_buf: ?*const metal.MTLBuffer, grad_gates_hh: []f32, grad_gates_hh_buf: ?*const metal.MTLBuffer, grad_h_prev: []f32, grad_h_prev_buf: ?*const metal.MTLBuffer, hidden_size: usize) !void {
         switch (self.type) {
-            .gpu => |gpu| switch (gpu) {
-                .metal => try self.metalGruBackwardStep(grad_h_curr, grad_h_curr_buf, grad_h_next, grad_h_next_buf, gate_acts, gate_acts_buf, h_prev, h_prev_buf, n_hh, n_hh_buf, grad_gates_ih, grad_gates_ih_buf, grad_gates_hh, grad_gates_hh_buf, grad_h_prev, grad_h_prev_buf, hidden_size),
-                .vulkan => return error.NotAvailable,
-            },
+            .gpu => try self.metalGruBackwardStep(grad_h_curr, grad_h_curr_buf, grad_h_next, grad_h_next_buf, gate_acts, gate_acts_buf, h_prev, h_prev_buf, n_hh, n_hh_buf, grad_gates_ih, grad_gates_ih_buf, grad_gates_hh, grad_gates_hh_buf, grad_h_prev, grad_h_prev_buf, hidden_size),
             .cpu => {
                 for (0..hidden_size) |j| {
                     const z = gate_acts[j];
@@ -2726,18 +2294,7 @@ pub const Backend = struct {
         }
     }
 
-    fn metalLstmBackwardStep(self: Backend,
-        grad_h_curr: []const f32, grad_h_curr_buf: ?*const metal.MTLBuffer,
-        grad_h_next: []const f32, grad_h_next_buf: ?*const metal.MTLBuffer,
-        grad_c_next: []const f32, grad_c_next_buf: ?*const metal.MTLBuffer,
-        gate_acts: []const f32, gate_acts_buf: ?*const metal.MTLBuffer,
-        c_curr: []const f32, c_curr_buf: ?*const metal.MTLBuffer,
-        c_prev: []const f32, c_prev_buf: ?*const metal.MTLBuffer,
-        grad_gates: []f32, grad_gates_buf: ?*const metal.MTLBuffer,
-        grad_c_prev: []f32, grad_c_prev_buf: ?*const metal.MTLBuffer,
-        grad_h_prev_part: []f32, grad_h_prev_part_buf: ?*const metal.MTLBuffer,
-        hidden_size: usize
-    ) !void {
+    fn metalLstmBackwardStep(self: Backend, grad_h_curr: []const f32, grad_h_curr_buf: ?*const metal.MTLBuffer, grad_h_next: []const f32, grad_h_next_buf: ?*const metal.MTLBuffer, grad_c_next: []const f32, grad_c_next_buf: ?*const metal.MTLBuffer, gate_acts: []const f32, gate_acts_buf: ?*const metal.MTLBuffer, c_curr: []const f32, c_curr_buf: ?*const metal.MTLBuffer, c_prev: []const f32, c_prev_buf: ?*const metal.MTLBuffer, grad_gates: []f32, grad_gates_buf: ?*const metal.MTLBuffer, grad_c_prev: []f32, grad_c_prev_buf: ?*const metal.MTLBuffer, grad_h_prev_part: []f32, grad_h_prev_part_buf: ?*const metal.MTLBuffer, hidden_size: usize) !void {
         const ctx = self.metal_ctx orelse return error.NotAvailable;
         var buffer_gh = try self.getBuffer(grad_h_curr, grad_h_curr_buf);
         defer if (grad_h_curr_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_gh.buffer);
@@ -2785,17 +2342,7 @@ pub const Backend = struct {
         }
     }
 
-    fn metalGruBackwardStep(self: Backend,
-        grad_h_curr: []const f32, grad_h_curr_buf: ?*const metal.MTLBuffer,
-        grad_h_next: []const f32, grad_h_next_buf: ?*const metal.MTLBuffer,
-        gate_acts: []const f32, gate_acts_buf: ?*const metal.MTLBuffer,
-        h_prev: []const f32, h_prev_buf: ?*const metal.MTLBuffer,
-        n_hh: []const f32, n_hh_buf: ?*const metal.MTLBuffer,
-        grad_gates_ih: []f32, grad_gates_ih_buf: ?*const metal.MTLBuffer,
-        grad_gates_hh: []f32, grad_gates_hh_buf: ?*const metal.MTLBuffer,
-        grad_h_prev: []f32, grad_h_prev_buf: ?*const metal.MTLBuffer,
-        hidden_size: usize
-    ) !void {
+    fn metalGruBackwardStep(self: Backend, grad_h_curr: []const f32, grad_h_curr_buf: ?*const metal.MTLBuffer, grad_h_next: []const f32, grad_h_next_buf: ?*const metal.MTLBuffer, gate_acts: []const f32, gate_acts_buf: ?*const metal.MTLBuffer, h_prev: []const f32, h_prev_buf: ?*const metal.MTLBuffer, n_hh: []const f32, n_hh_buf: ?*const metal.MTLBuffer, grad_gates_ih: []f32, grad_gates_ih_buf: ?*const metal.MTLBuffer, grad_gates_hh: []f32, grad_gates_hh_buf: ?*const metal.MTLBuffer, grad_h_prev: []f32, grad_h_prev_buf: ?*const metal.MTLBuffer, hidden_size: usize) !void {
         const ctx = self.metal_ctx orelse return error.NotAvailable;
         var buffer_gh = try self.getBuffer(grad_h_curr, grad_h_curr_buf);
         defer if (grad_h_curr_buf == null and ctx.active_command_buffer == null) self.releaseBuffer(buffer_gh.buffer);
@@ -2843,17 +2390,27 @@ pub const Backend = struct {
     /// Batch Normalization forward pass (training mode)
     pub fn batchNormForwardTraining(
         self: Backend,
-        input: []const f32, input_buf: ?*const metal.MTLBuffer,
-        output: []f32, output_buf: ?*const metal.MTLBuffer,
-        gamma: []const f32, gamma_buf: ?*const metal.MTLBuffer,
-        beta: []const f32, beta_buf: ?*const metal.MTLBuffer,
+        input: []const f32,
+        input_buf: ?*const metal.MTLBuffer,
+        output: []f32,
+        output_buf: ?*const metal.MTLBuffer,
+        gamma: []const f32,
+        gamma_buf: ?*const metal.MTLBuffer,
+        beta: []const f32,
+        beta_buf: ?*const metal.MTLBuffer,
         epsilon: f32,
         momentum: f32,
-        running_mean: []f32, running_mean_buf: ?*const metal.MTLBuffer,
-        running_var: []f32, running_var_buf: ?*const metal.MTLBuffer,
+        running_mean: []f32,
+        running_mean_buf: ?*const metal.MTLBuffer,
+        running_var: []f32,
+        running_var_buf: ?*const metal.MTLBuffer,
     ) !void {
-        _ = input_buf; _ = output_buf; _ = gamma_buf; _ = beta_buf;
-        _ = running_mean_buf; _ = running_var_buf;
+        _ = input_buf;
+        _ = output_buf;
+        _ = gamma_buf;
+        _ = beta_buf;
+        _ = running_mean_buf;
+        _ = running_var_buf;
 
         // Compute batch mean
         var batch_mean: f32 = 0.0;
@@ -2889,16 +2446,27 @@ pub const Backend = struct {
     /// Batch Normalization forward pass (inference mode)
     pub fn batchNormForwardInference(
         self: Backend,
-        input: []const f32, input_buf: ?*const metal.MTLBuffer,
-        output: []f32, output_buf: ?*const metal.MTLBuffer,
-        gamma: []const f32, gamma_buf: ?*const metal.MTLBuffer,
-        beta: []const f32, beta_buf: ?*const metal.MTLBuffer,
+        input: []const f32,
+        input_buf: ?*const metal.MTLBuffer,
+        output: []f32,
+        output_buf: ?*const metal.MTLBuffer,
+        gamma: []const f32,
+        gamma_buf: ?*const metal.MTLBuffer,
+        beta: []const f32,
+        beta_buf: ?*const metal.MTLBuffer,
         epsilon: f32,
-        running_mean: []const f32, running_mean_buf: ?*const metal.MTLBuffer,
-        running_var: []const f32, running_var_buf: ?*const metal.MTLBuffer,
+        running_mean: []const f32,
+        running_mean_buf: ?*const metal.MTLBuffer,
+        running_var: []const f32,
+        running_var_buf: ?*const metal.MTLBuffer,
     ) !void {
-        _ = input_buf; _ = output_buf; _ = gamma_buf; _ = beta_buf;
-        _ = running_mean_buf; _ = running_var_buf; _ = self;
+        _ = input_buf;
+        _ = output_buf;
+        _ = gamma_buf;
+        _ = beta_buf;
+        _ = running_mean_buf;
+        _ = running_var_buf;
+        _ = self;
 
         // Use running statistics
         for (input, 0..) |x, i| {
@@ -2913,16 +2481,27 @@ pub const Backend = struct {
     /// Batch Normalization backward pass
     pub fn batchNormBackward(
         self: Backend,
-        input: []const f32, input_buf: ?*const metal.MTLBuffer,
-        grad_output: []const f32, grad_output_buf: ?*const metal.MTLBuffer,
-        grad_input: []f32, grad_input_buf: ?*const metal.MTLBuffer,
-        gamma: []const f32, gamma_buf: ?*const metal.MTLBuffer,
-        grad_gamma: []f32, grad_gamma_buf: ?*const metal.MTLBuffer,
-        grad_beta: []f32, grad_beta_buf: ?*const metal.MTLBuffer,
+        input: []const f32,
+        input_buf: ?*const metal.MTLBuffer,
+        grad_output: []const f32,
+        grad_output_buf: ?*const metal.MTLBuffer,
+        grad_input: []f32,
+        grad_input_buf: ?*const metal.MTLBuffer,
+        gamma: []const f32,
+        gamma_buf: ?*const metal.MTLBuffer,
+        grad_gamma: []f32,
+        grad_gamma_buf: ?*const metal.MTLBuffer,
+        grad_beta: []f32,
+        grad_beta_buf: ?*const metal.MTLBuffer,
         epsilon: f32,
     ) !void {
-        _ = input_buf; _ = grad_output_buf; _ = grad_input_buf;
-        _ = gamma_buf; _ = grad_gamma_buf; _ = grad_beta_buf; _ = self;
+        _ = input_buf;
+        _ = grad_output_buf;
+        _ = grad_input_buf;
+        _ = gamma_buf;
+        _ = grad_gamma_buf;
+        _ = grad_beta_buf;
+        _ = self;
 
         // Compute batch mean and variance
         var batch_mean: f32 = 0.0;
