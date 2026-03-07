@@ -1169,9 +1169,11 @@ pub const Backend = struct {
 
         // Optimize threadgroup size for Apple GPU (SIMD width = 32)
         // Use multiples of 32 for better occupancy
+        // Total threads = tg_x * tg_y * tg_z must be <= 256-512 (Apple Silicon limit)
         const max_threads = pipeline.maxTotalThreadsPerThreadgroup();
         const tg_size = @min(32, max_threads);
-        encoder.dispatchThreads(metal.MTLSize.make(n, 1, batch_size), metal.MTLSize.make(tg_size, 1, tg_size));
+        // Use (32, 1, 1) threadgroup: 32 threads total, well within limits
+        encoder.dispatchThreads(metal.MTLSize.make(n, 1, batch_size), metal.MTLSize.make(tg_size, 1, 1));
         encoder.endEncoding();
 
         if (ctx.active_command_buffer == null) {
@@ -2248,8 +2250,32 @@ pub const Backend = struct {
                                 const a_val = a[i * k + p];
                                 const b_row = b[p * n ..];
                                 const c_row = c[i * n ..];
-                                for (jj..j_end) |j| {
-                                    c_row[j] += a_val * b_row[j];
+
+                                // SIMD vectorized inner loop - process 8 elements at a time
+                                // Only use SIMD if memory is properly aligned (32 bytes for Vec8)
+                                const Vec8 = @Vector(8, f32);
+                                const vec_end = (j_end / 8) * 8;
+                                const b_aligned = (@intFromPtr(b_row.ptr) % 32) == 0;
+                                const c_aligned = (@intFromPtr(c_row.ptr) % 32) == 0;
+
+                                if (b_aligned and c_aligned) {
+                                    var j_vec: usize = jj;
+                                    while (j_vec < vec_end) : (j_vec += 8) {
+                                        const b_vec: Vec8 = @as(*const Vec8, @ptrCast(@alignCast(b_row.ptr + j_vec))).*;
+                                        const c_vec: Vec8 = @as(*const Vec8, @ptrCast(@alignCast(c_row.ptr + j_vec))).*;
+                                        const a_splat: Vec8 = @splat(a_val);
+                                        const result = c_vec + a_splat * b_vec;
+                                        @as(*Vec8, @ptrCast(@alignCast(c_row.ptr + j_vec))).* = result;
+                                    }
+                                    // Process remaining elements
+                                    for (j_vec..j_end) |j| {
+                                        c_row[j] += a_val * b_row[j];
+                                    }
+                                } else {
+                                    // Fallback to scalar for unaligned memory
+                                    for (jj..j_end) |j| {
+                                        c_row[j] += a_val * b_row[j];
+                                    }
                                 }
                             }
                         }
@@ -2260,8 +2286,34 @@ pub const Backend = struct {
             for (0..m) |i| {
                 for (0..k) |p| {
                     const a_val = a[i * k + p];
-                    for (0..n) |j| {
-                        c[i * n + j] += a_val * b[p * n + j];
+                    const b_row = b[p * n ..];
+                    const c_row = c[i * n ..];
+
+                    // SIMD vectorized inner loop - process 8 elements at a time
+                    // Only use SIMD if memory is properly aligned (32 bytes for Vec8)
+                    const Vec8 = @Vector(8, f32);
+                    const vec_end = (n / 8) * 8;
+                    const b_aligned = (@intFromPtr(b_row.ptr) % 32) == 0;
+                    const c_aligned = (@intFromPtr(c_row.ptr) % 32) == 0;
+
+                    if (b_aligned and c_aligned) {
+                        var j: usize = 0;
+                        while (j < vec_end) : (j += 8) {
+                            const b_vec: Vec8 = @as(*const Vec8, @ptrCast(@alignCast(b_row.ptr + j))).*;
+                            const c_vec: Vec8 = @as(*const Vec8, @ptrCast(@alignCast(c_row.ptr + j))).*;
+                            const a_splat: Vec8 = @splat(a_val);
+                            const result = c_vec + a_splat * b_vec;
+                            @as(*Vec8, @ptrCast(@alignCast(c_row.ptr + j))).* = result;
+                        }
+                        // Process remaining elements
+                        for (j..n) |jr| {
+                            c_row[jr] += a_val * b_row[jr];
+                        }
+                    } else {
+                        // Fallback to scalar for unaligned memory
+                        for (0..n) |j| {
+                            c_row[j] += a_val * b_row[j];
+                        }
                     }
                 }
             }
