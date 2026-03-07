@@ -13,7 +13,9 @@ const BenchmarkResult = struct {
 };
 
 fn benchmarkFNN(backend: zn.backend.Backend, allocator: std.mem.Allocator, comptime name: []const u8) !BenchmarkResult {
-    const start_total = std.time.milliTimestamp();
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const start_clock = std.Io.Clock.now(.real, io);
+    const start_total = @divTrunc(start_clock.nanoseconds, 1_000_000);
 
     // Create network: 4-16-16-1 (similar to FNN comprehensive example)
     const network = try zn.network.Network.init(allocator, backend);
@@ -68,7 +70,8 @@ fn benchmarkFNN(backend: zn.backend.Backend, allocator: std.mem.Allocator, compt
         }
     }
 
-    const end_total = std.time.milliTimestamp();
+    const end_clock = std.Io.Clock.now(.real, io);
+    const end_total = @divTrunc(end_clock.nanoseconds, 1_000_000);
     const total_time_ms = @as(u64, @intCast(end_total - start_total));
 
     // Memory usage estimation

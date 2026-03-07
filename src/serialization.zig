@@ -46,7 +46,8 @@ const FileHeader = packed struct {
 /// Save a network to a file
 /// Returns the number of bytes written
 pub fn saveModel(layers: []const layer.Layer, path: []const u8) !usize {
-    const file = try std.fs.cwd().createFile(path, .{ .truncate = true });
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const file = try std.Io.Dir.cwd().createFile(io, path, .{ .truncate = true });
     defer file.close();
 
     var writer = file.writer();
@@ -72,7 +73,8 @@ pub fn saveModel(layers: []const layer.Layer, path: []const u8) !usize {
 /// Load a network from a file
 /// Caller owns the returned layers and must deinit them
 pub fn loadModel(allocator: std.mem.Allocator, path: []const u8, backend_inst: backend.Backend) !std.ArrayList(layer.Layer) {
-    const file = try std.fs.cwd().openFile(path, .{});
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const file = try std.Io.Dir.cwd().openFile(io, path, .{});
     defer file.close();
 
     var reader = file.reader();

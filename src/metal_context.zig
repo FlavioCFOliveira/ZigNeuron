@@ -58,7 +58,8 @@ pub const MetalContext = struct {
         }
 
         for (shader_paths, 0..) |path, i| {
-            sources[i] = try std.fs.cwd().readFileAlloc(allocator, path, 1024 * 1024);
+            const io = std.Io.Threaded.global_single_threaded.io();
+            sources[i] = try std.Io.Dir.cwd().readFileAlloc(io, path, allocator, std.Io.Limit.limited(1024 * 1024));
         }
 
         const shader_source = try std.mem.concat(allocator, u8, &sources);

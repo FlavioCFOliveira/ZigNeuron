@@ -256,13 +256,15 @@ pub const Backend = struct {
 
     /// Execute matrix multiplication with transposed B: C = A * B^T
     pub fn matMulTransposeB(self: Backend, a: []const f32, a_buf: ?*const metal.MTLBuffer, b: []const f32, b_buf: ?*const metal.MTLBuffer, c: []f32, c_buf: ?*const metal.MTLBuffer, m: usize, n: usize, k: usize, accumulate: bool) !void {
-        if (m > 1) {
-            try self.metalMatMulBatchTransposeB(a, a_buf, b, b_buf, c, c_buf, m, n, k, accumulate);
-            return;
-        }
         switch (self.type) {
             .gpu => |gpu| switch (gpu) {
-                .metal => try self.metalMatMul(a, a_buf, b, b_buf, c, c_buf, m, n, k, true, accumulate),
+                .metal => {
+                    if (m > 1) {
+                        try self.metalMatMulBatchTransposeB(a, a_buf, b, b_buf, c, c_buf, m, n, k, accumulate);
+                    } else {
+                        try self.metalMatMul(a, a_buf, b, b_buf, c, c_buf, m, n, k, true, accumulate);
+                    }
+                },
             },
             .cpu => cpuMatMulTransposeB(a, b, c, m, n, k, accumulate),
         }

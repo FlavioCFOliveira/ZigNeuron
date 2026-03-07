@@ -74,9 +74,11 @@ fn testFNN(allocator: std.mem.Allocator, backend: zn.backend.Backend, name: []co
     const num_epochs = 50;
     std.debug.print("  Training for {d} epochs...\n", .{num_epochs});
 
-    var timer = try std.time.Timer.start();
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const start_clock = std.Io.Clock.now(.real, io);
     try network.train(training_data, training_targets, num_epochs, 0.01, loss_fn, null, null);
-    const elapsed_ns = timer.read();
+    const end_clock = std.Io.Clock.now(.real, io);
+    const elapsed_ns = @as(u64, @intCast(end_clock.nanoseconds - start_clock.nanoseconds));
     const elapsed_ms = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000.0;
 
     std.debug.print("  Completed in {d:.2}ms\n", .{elapsed_ms});
@@ -94,7 +96,7 @@ fn testFNN(allocator: std.mem.Allocator, backend: zn.backend.Backend, name: []co
 
     // Test inference speed
     std.debug.print("  Testing inference speed...\n", .{});
-    timer.reset();
+    const inference_start = std.Io.Clock.now(.real, io);
 
     const num_inferences = 1000;
     var output: [2]f32 = undefined;
@@ -102,7 +104,8 @@ fn testFNN(allocator: std.mem.Allocator, backend: zn.backend.Backend, name: []co
         _ = i;
         _ = try network.forward(training_data[0], &output);
     }
-    const inference_ns = timer.read();
+    const inference_end = std.Io.Clock.now(.real, io);
+    const inference_ns = @as(u64, @intCast(inference_end.nanoseconds - inference_start.nanoseconds));
     const inference_ms = @as(f64, @floatFromInt(inference_ns)) / 1_000_000.0;
 
     std.debug.print("  {d} inferences in {d:.2}ms\n", .{num_inferences, inference_ms});

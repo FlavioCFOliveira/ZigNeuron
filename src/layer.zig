@@ -32,20 +32,16 @@
 /// - Attention: Vaswani, A., et al. (2017). Attention is all you need. NeurIPS.
 ///
 /// Generate a cryptographically secure random seed
-/// Uses getrandom() when available, falls back to timestamp + counter
+/// Uses CSPRNG from Io system, falls back to timestamp + counter
 var seed_counter: u64 = 0;
 fn secureRandomSeed() u64 {
     seed_counter +%= 1;
 
-    // Try to get random bytes from OS
+    // Try to use CSPRNG from Io system
+    const io = std.Io.Threaded.global_single_threaded.io();
     var buf: [8]u8 = undefined;
-    const got_random = std.posix.getrandom(&buf);
-    if (got_random) {
-        return std.mem.readInt(u64, &buf, .little) +% seed_counter;
-    } else |_| {
-        // Fallback to timestamp + counter
-        return @as(u64, @bitCast(std.time.timestamp())) +% seed_counter;
-    }
+    io.random(&buf);
+    return std.mem.readInt(u64, &buf, .little) +% seed_counter;
 }
 const std = @import("std");
 const activation = @import("activation.zig");

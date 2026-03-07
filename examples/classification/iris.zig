@@ -141,7 +141,9 @@ fn normalizeFeatures(data: []const [4]f32, normalized: [][4]f32) void {
 fn shuffleDataset(_allocator: std.mem.Allocator, data: []const [4]f32, _labels: []const [3]f32, indices: []usize) !void {
     _ = _allocator;
     _ = _labels;
-    var prng = std.Random.DefaultPrng.init(@intCast(std.time.timestamp()));
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const timestamp = std.Io.Clock.now(.real, io);
+    var prng = std.Random.DefaultPrng.init(@intCast(timestamp.nanoseconds));
     const random = prng.random();
 
     for (0..data.len) |i| {

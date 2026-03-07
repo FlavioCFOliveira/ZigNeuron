@@ -597,29 +597,36 @@ pub const Memory = struct {
 
 /// Performance monitoring utilities
 pub const Performance = struct {
-    timer: std.time.Timer,
-    start_time: u64,
+    start_time: u64, // nanoseconds
 
     pub fn init() !Performance {
-        const timer = try std.time.Timer.start();
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const now = std.Io.Clock.now(.real, io);
+        const start_ns = @as(u64, @intCast(now.nanoseconds));
         return Performance{
-            .timer = timer,
-            .start_time = timer.read(),
+            .start_time = start_ns,
         };
     }
 
     pub fn reset(self: *Performance) void {
-        self.start_time = self.timer.read();
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const now = std.Io.Clock.now(.real, io);
+        self.start_time = @as(u64, @intCast(now.nanoseconds));
+    }
+
+    pub fn elapsedNs(self: *Performance) u64 {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const now = std.Io.Clock.now(.real, io);
+        const current_ns = @as(u64, @intCast(now.nanoseconds));
+        return current_ns - self.start_time;
     }
 
     pub fn elapsedMs(self: *Performance) f64 {
-        const elapsed = self.timer.read() - self.start_time;
-        return @as(f64, @floatFromInt(elapsed)) / 1_000_000.0;
+        return @as(f64, @floatFromInt(self.elapsedNs())) / 1_000_000.0;
     }
 
     pub fn elapsedUs(self: *Performance) f64 {
-        const elapsed = self.timer.read() - self.start_time;
-        return @as(f64, @floatFromInt(elapsed)) / 1_000.0;
+        return @as(f64, @floatFromInt(self.elapsedNs())) / 1_000.0;
     }
 
     pub fn benchmark(comptime func: anytype, args: anytype) struct { result: @TypeOf(@call(.auto, func, args)), elapsed_ms: f64 } {

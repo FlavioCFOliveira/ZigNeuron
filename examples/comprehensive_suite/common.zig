@@ -35,20 +35,25 @@ pub const MinMaxScaler = struct {
 };
 
 pub fn loadStockData(allocator: std.mem.Allocator, path: []const u8, window_size: usize, target_size: usize) !Dataset {
-    const file = try std.fs.cwd().openFile(path, .{});
-    defer file.close();
-
-    var buf: [4096]u8 = undefined;
-    var reader = file.reader(&buf);
-
-    // Skip header
-    _ = try reader.interface.takeDelimiter('\n');
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const content = try std.Io.Dir.cwd().readFileAlloc(io, path, allocator, std.Io.Limit.limited(10 * 1024 * 1024));
+    defer allocator.free(content);
 
     var prices = std.ArrayList(f32).empty;
     defer prices.deinit(allocator);
 
-    while (try reader.interface.takeDelimiter('\n')) |line| {
-        var it = std.mem.splitSequence(u8, line, ",");
+    // Parse CSV content line by line
+    var lines = std.mem.splitScalar(u8, content, '\n');
+    var line_idx: usize = 0;
+    while (lines.next()) |line| {
+        if (line_idx == 0) {
+            // Skip header
+            line_idx += 1;
+            continue;
+        }
+        if (line.len == 0) continue;
+
+        var it = std.mem.splitScalar(u8, line, ',');
         _ = it.next(); // Date
         _ = it.next(); // Open
         _ = it.next(); // High
@@ -56,6 +61,7 @@ pub fn loadStockData(allocator: std.mem.Allocator, path: []const u8, window_size
         const close_str = it.next() orelse continue;
         const close = std.fmt.parseFloat(f32, close_str) catch continue;
         try prices.append(allocator, close);
+        line_idx += 1;
     }
 
     const scaler = MinMaxScaler.fitTransform(prices.items);
