@@ -152,13 +152,10 @@ pub const CUdevice_attribute = enum(c_int) {
     MAX_GRID_DIM_X = 5,
     MAX_GRID_DIM_Y = 6,
     MAX_GRID_DIM_Z = 7,
-    MAX_SHARED_MEMORY_PER_BLOCK = 8,
-    SHARED_MEMORY_PER_BLOCK = 8,
     TOTAL_CONSTANT_MEMORY = 9,
     WARP_SIZE = 10,
     MAX_PITCH = 11,
     MAX_REGISTERS_PER_BLOCK = 12,
-    REGISTERS_PER_BLOCK = 12,
     CLOCK_RATE = 13,
     TEXTURE_ALIGNMENT = 14,
     GPU_OVERLAP = 15,
@@ -481,33 +478,33 @@ pub const CUmemLocationType = enum(c_int) {
 // CUDA Function Pointer Types
 // =============================================================================
 
-const CUinit_fn = *const fn (flags: c_uint) callconv(.C) CUresult;
-const CUdeviceGetCount_fn = *const fn (count: *c_int) callconv(.C) CUresult;
-const CUdeviceGet_fn = *const fn (device: *CUdevice, ordinal: c_int) callconv(.C) CUresult;
-const CUdeviceGetAttribute_fn = *const fn (pi: *c_int, attrib: CUdevice_attribute, dev: CUdevice) callconv(.C) CUresult;
-const CUdeviceGetName_fn = *const fn (name: [*c]u8, len: c_int, dev: CUdevice) callconv(.C) CUresult;
-const CUdeviceTotalMem_fn = *const fn (bytes: *usize, dev: CUdevice) callconv(.C) CUresult;
-const CUctxCreate_fn = *const fn (pctx: **CUcontext, flags: c_uint, dev: CUdevice) callconv(.C) CUresult;
-const CUctxDestroy_fn = *const fn (ctx: *CUcontext) callconv(.C) CUresult;
-const CUctxPushCurrent_fn = *const fn (ctx: *CUcontext) callconv(.C) CUresult;
-const CUctxPopCurrent_fn = *const fn (pctx: **CUcontext) callconv(.C) CUresult;
-const CUctxSetCurrent_fn = *const fn (ctx: ?*CUcontext) callconv(.C) CUresult;
-const CUctxGetCurrent_fn = *const fn (pctx: **CUcontext) callconv(.C) CUresult;
-const CUctxSynchronize_fn = *const fn () callconv(.C) CUresult;
-const CUmoduleLoadData_fn = *const fn (module: **CUmodule, image: ?*const anyopaque) callconv(.C) CUresult;
-const CUmoduleUnload_fn = *const fn (module: *CUmodule) callconv(.C) CUresult;
-const CUmoduleGetFunction_fn = *const fn (hfunc: **CUfunction, hmod: *CUmodule, name: [*c]const u8) callconv(.C) CUresult;
-const CUmemAlloc_fn = *const fn (dptr: *CUdeviceptr, bytesize: usize) callconv(.C) CUresult;
-const CUmemFree_fn = *const fn (dptr: CUdeviceptr) callconv(.C) CUresult;
-const CUmemAllocManaged_fn = *const fn (dptr: *CUdeviceptr, bytesize: usize, flags: c_uint) callconv(.C) CUresult;
-const CUmemAllocHost_fn = *const fn (pp: **anyopaque, bytesize: usize) callconv(.C) CUresult;
-const CUmemFreeHost_fn = *const fn (p: ?*anyopaque) callconv(.C) CUresult;
-const CUmemcpyHtoD_fn = *const fn (dstDevice: CUdeviceptr, srcHost: ?*const anyopaque, ByteCount: usize) callconv(.C) CUresult;
-const CUmemcpyDtoH_fn = *const fn (dstHost: ?*anyopaque, srcDevice: CUdeviceptr, ByteCount: usize) callconv(.C) CUresult;
-const CUmemcpyDtoD_fn = *const fn (dstDevice: CUdeviceptr, srcDevice: CUdeviceptr, ByteCount: usize) callconv(.C) CUresult;
-const CUmemcpyHtoDAsync_fn = *const fn (dstDevice: CUdeviceptr, srcHost: ?*const anyopaque, ByteCount: usize, hStream: ?*CUstream) callconv(.C) CUresult;
-const CUmemcpyDtoHAsync_fn = *const fn (dstHost: ?*anyopaque, srcDevice: CUdeviceptr, ByteCount: usize, hStream: ?*CUstream) callconv(.C) CUresult;
-const CUmemcpyDtoDAsync_fn = *const fn (dstDevice: CUdeviceptr, srcDevice: CUdeviceptr, ByteCount: usize, hStream: ?*CUstream) callconv(.C) CUresult;
+const CUinit_fn = *const fn (flags: c_uint) callconv(.c) CUresult;
+const CUdeviceGetCount_fn = *const fn (count: *c_int) callconv(.c) CUresult;
+const CUdeviceGet_fn = *const fn (device: *CUdevice, ordinal: c_int) callconv(.c) CUresult;
+const CUdeviceGetAttribute_fn = *const fn (pi: *c_int, attrib: CUdevice_attribute, dev: CUdevice) callconv(.c) CUresult;
+const CUdeviceGetName_fn = *const fn (name: [*c]u8, len: c_int, dev: CUdevice) callconv(.c) CUresult;
+const CUdeviceTotalMem_fn = *const fn (bytes: *usize, dev: CUdevice) callconv(.c) CUresult;
+const CUctxCreate_fn = *const fn (pctx: **CUcontext, flags: c_uint, dev: CUdevice) callconv(.c) CUresult;
+const CUctxDestroy_fn = *const fn (ctx: *CUcontext) callconv(.c) CUresult;
+const CUctxPushCurrent_fn = *const fn (ctx: *CUcontext) callconv(.c) CUresult;
+const CUctxPopCurrent_fn = *const fn (pctx: **CUcontext) callconv(.c) CUresult;
+const CUctxSetCurrent_fn = *const fn (ctx: ?*CUcontext) callconv(.c) CUresult;
+const CUctxGetCurrent_fn = *const fn (pctx: **CUcontext) callconv(.c) CUresult;
+const CUctxSynchronize_fn = *const fn () callconv(.c) CUresult;
+const CUmoduleLoadData_fn = *const fn (module: **CUmodule, image: ?*const anyopaque) callconv(.c) CUresult;
+const CUmoduleUnload_fn = *const fn (module: *CUmodule) callconv(.c) CUresult;
+const CUmoduleGetFunction_fn = *const fn (hfunc: **CUfunction, hmod: *CUmodule, name: [*c]const u8) callconv(.c) CUresult;
+const CUmemAlloc_fn = *const fn (dptr: *CUdeviceptr, bytesize: usize) callconv(.c) CUresult;
+const CUmemFree_fn = *const fn (dptr: CUdeviceptr) callconv(.c) CUresult;
+const CUmemAllocManaged_fn = *const fn (dptr: *CUdeviceptr, bytesize: usize, flags: c_uint) callconv(.c) CUresult;
+const CUmemAllocHost_fn = *const fn (pp: **anyopaque, bytesize: usize) callconv(.c) CUresult;
+const CUmemFreeHost_fn = *const fn (p: ?*anyopaque) callconv(.c) CUresult;
+const CUmemcpyHtoD_fn = *const fn (dstDevice: CUdeviceptr, srcHost: ?*const anyopaque, ByteCount: usize) callconv(.c) CUresult;
+const CUmemcpyDtoH_fn = *const fn (dstHost: ?*anyopaque, srcDevice: CUdeviceptr, ByteCount: usize) callconv(.c) CUresult;
+const CUmemcpyDtoD_fn = *const fn (dstDevice: CUdeviceptr, srcDevice: CUdeviceptr, ByteCount: usize) callconv(.c) CUresult;
+const CUmemcpyHtoDAsync_fn = *const fn (dstDevice: CUdeviceptr, srcHost: ?*const anyopaque, ByteCount: usize, hStream: ?*CUstream) callconv(.c) CUresult;
+const CUmemcpyDtoHAsync_fn = *const fn (dstHost: ?*anyopaque, srcDevice: CUdeviceptr, ByteCount: usize, hStream: ?*CUstream) callconv(.c) CUresult;
+const CUmemcpyDtoDAsync_fn = *const fn (dstDevice: CUdeviceptr, srcDevice: CUdeviceptr, ByteCount: usize, hStream: ?*CUstream) callconv(.c) CUresult;
 const CUlaunchKernel_fn = *const fn (
     f: *CUfunction,
     gridDimX: c_uint,
@@ -520,32 +517,32 @@ const CUlaunchKernel_fn = *const fn (
     hStream: ?*CUstream,
     kernelParams: [*c]?*anyopaque,
     extra: [*c]?*anyopaque,
-) callconv(.C) CUresult;
-const CUstreamCreate_fn = *const fn (phStream: **CUstream, flags: c_uint) callconv(.C) CUresult;
-const CUstreamDestroy_fn = *const fn (hStream: *CUstream) callconv(.C) CUresult;
-const CUstreamSynchronize_fn = *const fn (hStream: *CUstream) callconv(.C) CUresult;
-const CUstreamWaitEvent_fn = *const fn (hStream: *CUstream, hEvent: *CUevent, flags: c_uint) callconv(.C) CUresult;
-const CUeventCreate_fn = *const fn (phEvent: **CUevent, flags: c_uint) callconv(.C) CUresult;
-const CUeventDestroy_fn = *const fn (hEvent: *CUevent) callconv(.C) CUresult;
-const CUeventRecord_fn = *const fn (hEvent: *CUevent, hStream: *CUstream) callconv(.C) CUresult;
-const CUeventSynchronize_fn = *const fn (hEvent: *CUevent) callconv(.C) CUresult;
-const CUeventElapsedTime_fn = *const fn (pMilliseconds: *f32, hStart: *CUevent, hEnd: *CUevent) callconv(.C) CUresult;
-const CUmemsetD32_fn = *const fn (dstDevice: CUdeviceptr, ui: c_uint, N: usize) callconv(.C) CUresult;
-const CUmemsetD32Async_fn = *const fn (dstDevice: CUdeviceptr, ui: c_uint, N: usize, hStream: ?*CUstream) callconv(.C) CUresult;
-const CUmemHostRegister_fn = *const fn (p: ?*anyopaque, bytesize: usize, flags: c_uint) callconv(.C) CUresult;
-const CUmemHostUnregister_fn = *const fn (p: ?*anyopaque) callconv(.C) CUresult;
-const CUpointerGetAttribute_fn = *const fn (data: ?*anyopaque, attribute: CUpointer_attribute, ptr: CUdeviceptr) callconv(.C) CUresult;
-const CUlinkCreate_fn = *const fn (numOptions: c_uint, options: [*c]const CUjit_option, optionValues: [*c]?*anyopaque, stateOut: **CUlinkState) callconv(.C) CUresult;
-const CUlinkAddData_fn = *const fn (state: *CUlinkState, type_: c_uint, data: ?*anyopaque, size: usize, name: [*c]const u8, numOptions: c_uint, options: [*c]const CUjit_option, optionValues: [*c]?*anyopaque) callconv(.C) CUresult;
-const CUlinkComplete_fn = *const fn (state: *CUlinkState, cubinOut: **anyopaque, sizeOut: *usize) callconv(.C) CUresult;
-const CUlinkDestroy_fn = *const fn (state: *CUlinkState) callconv(.C) CUresult;
-const CUoccupancyMaxPotentialBlockSize_fn = *const fn (minGridSize: *c_int, blockSize: *c_int, func: *CUfunction, blockSizeToDynamicSMemSize: CUoccupancyB2DSize, dynamicSMemSize: usize, flags: c_uint) callconv(.C) CUresult;
-const CUgetErrorString_fn = *const fn (err: CUresult, pStr: [*c][*c]const u8) callconv(.C) CUresult;
-const CUgetErrorName_fn = *const fn (err: CUresult, pStr: [*c][*c]const u8) callconv(.C) CUresult;
-const CUmemPoolCreate_fn = *const fn (pool: **CUmemoryPool, poolProps: *const CUmemPoolProps) callconv(.C) CUresult;
-const CUmemPoolDestroy_fn = *const fn (pool: *CUmemoryPool) callconv(.C) CUresult;
-const CUmemAllocFromPoolAsync_fn = *const fn (dptr: *CUdeviceptr, bytesize: usize, pool: *CUmemoryPool, hStream: ?*CUstream) callconv(.C) CUresult;
-const CUmemPoolTrimTo_fn = *const fn (pool: *CUmemoryPool, minBytesToKeep: usize) callconv(.C) CUresult;
+) callconv(.c) CUresult;
+const CUstreamCreate_fn = *const fn (phStream: **CUstream, flags: c_uint) callconv(.c) CUresult;
+const CUstreamDestroy_fn = *const fn (hStream: *CUstream) callconv(.c) CUresult;
+const CUstreamSynchronize_fn = *const fn (hStream: *CUstream) callconv(.c) CUresult;
+const CUstreamWaitEvent_fn = *const fn (hStream: *CUstream, hEvent: *CUevent, flags: c_uint) callconv(.c) CUresult;
+const CUeventCreate_fn = *const fn (phEvent: **CUevent, flags: c_uint) callconv(.c) CUresult;
+const CUeventDestroy_fn = *const fn (hEvent: *CUevent) callconv(.c) CUresult;
+const CUeventRecord_fn = *const fn (hEvent: *CUevent, hStream: *CUstream) callconv(.c) CUresult;
+const CUeventSynchronize_fn = *const fn (hEvent: *CUevent) callconv(.c) CUresult;
+const CUeventElapsedTime_fn = *const fn (pMilliseconds: *f32, hStart: *CUevent, hEnd: *CUevent) callconv(.c) CUresult;
+const CUmemsetD32_fn = *const fn (dstDevice: CUdeviceptr, ui: c_uint, N: usize) callconv(.c) CUresult;
+const CUmemsetD32Async_fn = *const fn (dstDevice: CUdeviceptr, ui: c_uint, N: usize, hStream: ?*CUstream) callconv(.c) CUresult;
+const CUmemHostRegister_fn = *const fn (p: ?*anyopaque, bytesize: usize, flags: c_uint) callconv(.c) CUresult;
+const CUmemHostUnregister_fn = *const fn (p: ?*anyopaque) callconv(.c) CUresult;
+const CUpointerGetAttribute_fn = *const fn (data: ?*anyopaque, attribute: CUpointer_attribute, ptr: CUdeviceptr) callconv(.c) CUresult;
+const CUlinkCreate_fn = *const fn (numOptions: c_uint, options: [*c]const CUjit_option, optionValues: [*c]?*anyopaque, stateOut: **CUlinkState) callconv(.c) CUresult;
+const CUlinkAddData_fn = *const fn (state: *CUlinkState, type_: c_uint, data: ?*anyopaque, size: usize, name: [*c]const u8, numOptions: c_uint, options: [*c]const CUjit_option, optionValues: [*c]?*anyopaque) callconv(.c) CUresult;
+const CUlinkComplete_fn = *const fn (state: *CUlinkState, cubinOut: **anyopaque, sizeOut: *usize) callconv(.c) CUresult;
+const CUlinkDestroy_fn = *const fn (state: *CUlinkState) callconv(.c) CUresult;
+const CUoccupancyMaxPotentialBlockSize_fn = *const fn (minGridSize: *c_int, blockSize: *c_int, func: *CUfunction, blockSizeToDynamicSMemSize: CUoccupancyB2DSize, dynamicSMemSize: usize, flags: c_uint) callconv(.c) CUresult;
+const CUgetErrorString_fn = *const fn (err: CUresult, pStr: [*c][*c]const u8) callconv(.c) CUresult;
+const CUgetErrorName_fn = *const fn (err: CUresult, pStr: [*c][*c]const u8) callconv(.c) CUresult;
+const CUmemPoolCreate_fn = *const fn (pool: **CUmemoryPool, poolProps: *const CUmemPoolProps) callconv(.c) CUresult;
+const CUmemPoolDestroy_fn = *const fn (pool: *CUmemoryPool) callconv(.c) CUresult;
+const CUmemAllocFromPoolAsync_fn = *const fn (dptr: *CUdeviceptr, bytesize: usize, pool: *CUmemoryPool, hStream: ?*CUstream) callconv(.c) CUresult;
+const CUmemPoolTrimTo_fn = *const fn (pool: *CUmemoryPool, minBytesToKeep: usize) callconv(.c) CUresult;
 
 // =============================================================================
 // CUDA Driver Structure

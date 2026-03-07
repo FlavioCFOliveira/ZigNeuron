@@ -127,7 +127,7 @@ pub const CudaBackend = struct {
 
     /// Free device buffer
     pub fn freeBuffer(self: *CudaBackend, buffer: DeviceBuffer) void {
-        var buf = CudaContext.DeviceBuffer{
+        const buf = CudaContext.DeviceBuffer{
             .ptr = buffer.ptr,
             .size = buffer.size,
             .pool_index = null,
@@ -241,7 +241,7 @@ pub const CudaBackend = struct {
         k: usize,
         accumulate: bool,
     ) !void {
-        const size_per_batch = n * k * @sizeOf(f32);
+        
         const total_size_a = batch_size * k * @sizeOf(f32); // a is batch_size x k
         const total_size_b = batch_size * n * k * @sizeOf(f32);
         const total_size_c = batch_size * n * @sizeOf(f32);
@@ -737,7 +737,7 @@ pub const DeviceBuffer = struct {
     context: *CudaContext,
 
     pub fn deinit(self: *DeviceBuffer) void {
-        var buf = CudaContext.DeviceBuffer{
+        const buf = CudaContext.DeviceBuffer{
             .ptr = self.ptr,
             .size = self.size,
             .pool_index = null,
@@ -781,47 +781,6 @@ pub const ActivationType = enum {
 
 /// PTX header for sm_60+ (Pascal and newer)
 pub const PTX_HEADER = ".version 7.0\\n.target sm_60\\n.address_size 64\\n";
-
-/// Template for element-wise operations kernel
-pub const EW_TEMPLATE = PTX_HEADER ++
-    \\n    \\.visible .entry {s}(
-    \\n    .param .u64 a,
-    \\n    .param .u64 b,
-    \\n    .param .u64 c,
-    \\n    .param .u32 n
-    \\n)
-    \\n{{
-    \\n    .reg .pred %p<2>;
-    \\n    .reg .b32 %r<4>;
-    \\n    .reg .b64 %rd<11>;
-    \\n    .reg .f32 %f<4>;
-    \\n
-    \\n    ld.param.u64 %rd1, [a];
-    \\n    ld.param.u64 %rd2, [b];
-    \\n    ld.param.u64 %rd3, [c];
-    \\n    ld.param.u32 %r1, [n];
-    \\n
-    \\n    mov.u32 %r2, %ctaid.x;
-    \\n    mov.u32 %r3, %ntid.x;
-    \\n    mov.u32 %r4, %tid.x;
-    \\n    mad.lo.s32 %r2, %r2, %r3, %r4;
-    \\n    cvt.s64.s32 %rd4, %r2;
-    \\n    setp.ge.s32 %p1, %r2, %r1;
-    \\n    @%p1 bra $L__exit;
-    \\n
-    \\n    shl.b64 %rd5, %rd4, 2;
-    \\n    add.s64 %rd6, %rd1, %rd5;
-    \\n    add.s64 %rd7, %rd2, %rd5;
-    \\n    add.s64 %rd8, %rd3, %rd5;
-    \\n
-    \\n    ld.global.f32 %f1, [%rd6];
-    \\n    ld.global.f32 %f2, [%rd7];
-    \\n    {s} %f3, %f1, %f2;
-    \\n    st.global.f32 [%rd8], %f3;
-    \\n
-    \\$L__exit:
-    \\n    ret;
-    \\n}};
 
 // =============================================================================
 // Tests

@@ -61,3 +61,77 @@
 3. Optimize matmul tiling (biggest CPU speedup)
 4. Welford algorithm for LayerNorm
 5. SBO for tensor shapes
+
+## CUDA Implementation Patterns (2026-03-07)
+
+### Dynamic Library Loading
+- Use `std.DynLib` to load `libcuda.so`/`nvcuda.dll`
+- All CUDA Driver API functions loaded at runtime
+- Graceful fallback if CUDA unavailable
+
+### Zero-Allocation Buffer Management
+- Power-of-2 bucket-based pooling (4 bytes to 128MB)
+- Reuse device buffers across operations
+- Thread-safe with per-context pools
+
+### PTX Kernel Loading
+- Pre-compiled PTX from `.cu` files at build time
+- Runtime loading via `cuModuleLoadData`
+- Kernel caching in hash map
+
+### Stream-Based Async Execution
+- Single default stream per context
+- Async H2D/D2H transfers overlap with compute
+- Event-based synchronization
+
+### Error Handling Pattern
+```zig
+try cuda_driver.checkCuda(cu_result);
+// Converts CUresult to Zig error union
+```
+
+### Memory Transfer Optimization
+- Batch multiple transfers
+- Use pinned host memory when available
+- Minimize CPU-GPU synchronization points
+
+### Files Created
+- `src/cuda_driver.zig` - Complete CUDA Driver API bindings
+- `src/cuda_context.zig` - Context management with pooling
+- `src/cuda.zig` - Backend operations (matmul, activations, etc.)
+- `shaders/cuda/kernels.cu` - CUDA kernel source
+- `build.zig` - Updated with CUDA compilation support
+- `docs/CUDA_INTEGRATION.md` - Comprehensive documentation
+
+## CUDA Implementation Patterns (2026-03-07)
+
+### Dynamic Library Loading
+- Use `std.DynLib` to load `libcuda.so`/`nvcuda.dll`
+- All CUDA Driver API functions loaded at runtime
+- Graceful fallback if CUDA unavailable
+
+### Zero-Allocation Buffer Management
+- Power-of-2 bucket-based pooling (4 bytes to 128MB)
+- Reuse device buffers across operations
+- Thread-safe with per-context pools
+
+### PTX Kernel Loading
+- Pre-compiled PTX from `.cu` files at build time
+- Runtime loading via `cuModuleLoadData`
+- Kernel caching in hash map
+
+### Stream-Based Async Execution
+- Single default stream per context
+- Async H2D/D2H transfers overlap with compute
+- Event-based synchronization
+
+### Error Handling Pattern
+```zig
+try cuda_driver.checkCuda(cu_result);
+// Converts CUresult to Zig error union
+```
+
+### Memory Transfer Optimization
+- Batch multiple transfers
+- Use pinned host memory when available
+- Minimize CPU-GPU synchronization points

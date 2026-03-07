@@ -240,8 +240,12 @@ pub const CudaContext = struct {
 
     /// Pop context from current thread
     pub fn pop(self: *CudaContext) !void {
+        var ctx: ?*anyopaque = null;
+        try cuda_driver.checkCuda(self.driver.ctxPopCurrent.?(@ptrCast(&ctx)));
     }
 
+    /// Set this as the current context
+    pub fn setCurrent(self: *CudaContext) !void {
         try cuda_driver.checkCuda(self.driver.ctxSetCurrent.?(self.context));
     }
 
