@@ -13,17 +13,12 @@ const backend_module = @import("backend.zig");
 const tensor = @import("tensor.zig");
 const metal = @import("metal.zig");
 
-/// Generate a cryptographically secure random seed
-/// Uses CSPRNG from Io system, falls back to timestamp + counter
+/// Generate a random seed for PRNG
+/// Uses a static counter for reproducibility across calls
 var seed_counter: u64 = 0;
 fn secureRandomSeed() u64 {
     seed_counter +%= 1;
-
-    // Try to use CSPRNG from Io system
-    const io = std.Io.Threaded.global_single_threaded.io();
-    var buf: [8]u8 = undefined;
-    io.random(&buf);
-    return std.mem.readInt(u64, &buf, .little) +% seed_counter;
+    return seed_counter;
 }
 
 /// Vanilla RNN Layer

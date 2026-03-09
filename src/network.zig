@@ -410,9 +410,14 @@ pub const Network = struct {
             }
         }
 
-        if (self.grad_work_1 == null or self.grad_work_1.?.slice.len < max_needed) {
-            if (self.grad_work_1) |*t| t.deinit();
-            if (self.grad_work_2) |*t| t.deinit();
+        if (self.grad_work_1) |gw| {
+            if (gw.slice.len < max_needed) {
+                self.grad_work_1.?.deinit();
+                self.grad_work_2.?.deinit();
+                self.grad_work_1 = try tensor.Tensor.init(self.allocator, &.{max_needed}, self.backend);
+                self.grad_work_2 = try tensor.Tensor.init(self.allocator, &.{max_needed}, self.backend);
+            }
+        } else {
             self.grad_work_1 = try tensor.Tensor.init(self.allocator, &.{max_needed}, self.backend);
             self.grad_work_2 = try tensor.Tensor.init(self.allocator, &.{max_needed}, self.backend);
         }
@@ -486,11 +491,16 @@ pub const Network = struct {
         if (target.len != output_size) return error.OutputSizeMismatch;
 
         // Use pre-allocated output buffer
-        if (self.output_buffer == null or self.output_buffer.?.len < output_size) {
-            if (self.output_buffer) |buf| self.allocator.free(buf);
+        if (self.output_buffer) |buf| {
+            if (buf.len < output_size) {
+                self.allocator.free(buf);
+                self.output_buffer = try self.allocator.alloc(f32, output_size);
+            }
+        } else {
             self.output_buffer = try self.allocator.alloc(f32, output_size);
         }
-        const output = self.output_buffer.?[0..output_size];
+        const output_buffer = self.output_buffer orelse return error.OutputBufferNotInitialized;
+        const output = output_buffer[0..output_size];
 
         _ = try self.forward(input, output);
 

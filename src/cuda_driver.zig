@@ -238,6 +238,7 @@ pub const CUdevice_attribute = enum(c_int) {
     CAN_USE_STREAM_WAIT_VALUE_NOR = 93,
     COOPERATIVE_LAUNCH = 95,
     COOPERATIVE_MULTI_DEVICE_LAUNCH = 96,
+    MAX_SHARED_MEMORY_PER_BLOCK = 8,
     MAX_SHARED_MEMORY_PER_BLOCK_OPTIN = 97,
     CAN_FLUSH_REMOTE_WRITES = 98,
     HOST_REGISTER_SUPPORTED = 99,
@@ -550,7 +551,7 @@ const CUmemPoolTrimTo_fn = *const fn (pool: *CUmemoryPool, minBytesToKeep: usize
 
 /// CUDA driver handle for dynamic loading
 pub const CudaDriver = struct {
-    handle: ?*anyopaque,
+    handle: ?std.DynLib,
     allocator: std.mem.Allocator,
     is_initialized: bool,
 
@@ -678,13 +679,14 @@ pub const CudaDriver = struct {
         };
 
         // Try to load the CUDA driver library
-        driver.handle = std.DynLib.open(lib_name) catch |err| {
+        const lib = std.DynLib.open(lib_name) catch |err| {
             std.log.debug("Failed to load CUDA driver library '{s}': {s}", .{ lib_name, @errorName(err) });
             return error.CudaDriverNotFound;
         };
+        driver.handle = lib;
 
         // Load all function pointers
-        try driver.loadFunction("cuInit", &driver.initdriver.cuInitdriver.cuInit);
+        try driver.loadFunction("cuInit", &driver.cuInit);
         try driver.loadFunction("cuDeviceGetCount", &driver.deviceGetCount);
         try driver.loadFunction("cuDeviceGet", &driver.deviceGet);
         try driver.loadFunction("cuDeviceGetAttribute", &driver.deviceGetAttribute);
@@ -748,18 +750,20 @@ pub const CudaDriver = struct {
         return driver;
     }
 
-    fn loadFunction(self: *CudaDriver, name: []const u8, ptr: *?*const anyopaque) !void {
-        const func = self.handle.?.lookup(*const anyopaque, name) orelse {
+    fn loadFunction(self: *CudaDriver, name: [:0]const u8, ptr: anytype) !void {
+        const func = self.handle.?.lookup(*const anyopaque, @ptrCast(name)) orelse {
             std.log.debug("Failed to find CUDA function: {s}", .{name});
             return error.CudaFunctionNotFound;
         };
-        ptr.* = func;
+        // Cast to the appropriate function pointer type
+        ptr.* = @ptrCast(func);
     }
 
-    /// Deinitialize the CUDA driver
+        /// Deinitialize the CUDA driver
     pub fn deinit(self: *CudaDriver) void {
         if (self.handle) |h| {
-            h.close();
+            var h_mut = h;
+            h_mut.close();
             self.handle = null;
         }
         self.is_initialized = false;

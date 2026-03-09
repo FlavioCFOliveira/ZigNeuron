@@ -1,7 +1,7 @@
 /// Backend for neural network computation
-/// Supports GPU (Metal) and CPU execution
+/// Supports GPU (Metal, CUDA) and CPU execution
 /// GPU is the PRIORITY for all training and inference operations
-/// Priority: Metal (Apple Silicon) > CPU
+/// Priority: Metal (Apple Silicon) > CUDA (NVIDIA) > CPU
 const std = @import("std");
 const activation = @import("activation.zig");
 const loss = @import("loss.zig");
@@ -13,6 +13,8 @@ const optimization = @import("optimization.zig");
 pub const GpuBackend = enum {
     /// Apple Silicon - Metal compute shaders
     metal,
+    /// NVIDIA GPUs - CUDA compute
+    cuda,
 };
 
 /// Backend selection - GPU preferred, CPU fallback
@@ -136,6 +138,7 @@ pub const Backend = struct {
         switch (self.type) {
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalMatMul(a, a_buf, b, b_buf, c, c_buf, m, n, k, false, accumulate),
+                else => return error.CudaNotYetImplemented,
             },
             .cpu => cpuMatMul(a, b, c, m, n, k, accumulate),
         }
@@ -147,6 +150,7 @@ pub const Backend = struct {
         switch (self.type) {
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalMatMulBatchGPU(a, a_buf, b, b_buf, c, c_buf, batch_size, n, k, accumulate),
+                else => return error.CudaNotYetImplemented,
             },
             .cpu => cpuMatMulBatch(a, b, c, batch_size, n, k, accumulate),
         }
@@ -159,6 +163,7 @@ pub const Backend = struct {
         switch (self.type) {
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalMatMulBias(a, a_buf, b, b_buf, bias, bias_buf, c, c_buf, batch_size, n, k),
+                else => return error.CudaNotYetImplemented,
             },
             .cpu => {
                 // CPU fallback: compute matmul then add bias
@@ -182,6 +187,7 @@ pub const Backend = struct {
         switch (self.type) {
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalMatMulBiasRelu(a, a_buf, b, b_buf, bias, bias_buf, c, c_buf, batch_size, n, k),
+                else => return error.CudaNotYetImplemented,
             },
             .cpu => {
                 // CPU fallback: compute matmul, add bias, then apply ReLU
@@ -205,6 +211,7 @@ pub const Backend = struct {
         switch (self.type) {
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalMatMulBiasSigmoid(a, a_buf, b, b_buf, bias, bias_buf, c, c_buf, batch_size, n, k),
+                else => return error.CudaNotYetImplemented,
             },
             .cpu => {
                 // CPU fallback: compute matmul, add bias, then apply sigmoid
@@ -228,6 +235,7 @@ pub const Backend = struct {
         switch (self.type) {
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalMatMulBiasTanh(a, a_buf, b, b_buf, bias, bias_buf, c, c_buf, batch_size, n, k),
+                else => return error.CudaNotYetImplemented,
             },
             .cpu => {
                 // CPU fallback: compute matmul, add bias, then apply tanh
@@ -249,6 +257,7 @@ pub const Backend = struct {
         switch (self.type) {
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalMatMulTransposeA(a, a_buf, b, b_buf, c, c_buf, m, n, k, accumulate),
+                else => return error.CudaNotYetImplemented,
             },
             .cpu => cpuMatMulTransposeA(a, b, c, m, n, k, accumulate),
         }
@@ -265,6 +274,7 @@ pub const Backend = struct {
                         try self.metalMatMul(a, a_buf, b, b_buf, c, c_buf, m, n, k, true, accumulate);
                     }
                 },
+                else => return error.CudaNotYetImplemented,
             },
             .cpu => cpuMatMulTransposeB(a, b, c, m, n, k, accumulate),
         }
@@ -316,6 +326,7 @@ pub const Backend = struct {
         switch (self.type) {
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalActivationForward(act, input, input_buf, output, output_buf),
+                else => return error.CudaNotYetImplemented,
             },
             .cpu => {
                 if (act == .softmax) {
@@ -335,6 +346,7 @@ pub const Backend = struct {
         switch (self.type) {
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalActivationBackward(act, input, input_buf, grad_output, grad_output_buf, grad_input, grad_input_buf),
+                else => return error.CudaNotYetImplemented,
             },
             .cpu => cpuActivationBackward(act, input, grad_output, grad_input),
         }
@@ -346,6 +358,7 @@ pub const Backend = struct {
         switch (self.type) {
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalLossBackward(loss_fn, output, output_buf, target, target_buf, grad_output, grad_output_buf),
+                else => return error.CudaNotYetImplemented,
             },
             .cpu => try self.cpuLossBackwardGeneric(loss_fn, output, target, grad_output),
         }
@@ -361,6 +374,7 @@ pub const Backend = struct {
         switch (self.type) {
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalSgdUpdate(weights, weights_buf, gradients, gradients_buf, learning_rate, weight_decay),
+                else => return error.CudaNotYetImplemented,
             },
             .cpu => cpuSgdUpdate(weights, gradients, learning_rate, weight_decay),
         }
@@ -371,6 +385,7 @@ pub const Backend = struct {
         switch (self.type) {
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalAdamUpdate(weights, weights_buf, gradients, gradients_buf, m, m_buf, v, v_buf, lr, beta1, beta2, eps, bias_corr1, bias_corr2),
+                else => return error.CudaNotYetImplemented,
             },
             .cpu => try self.cpuAdamUpdate(weights, gradients, m, v, lr, beta1, beta2, eps, bias_corr1, bias_corr2),
         }
@@ -381,6 +396,7 @@ pub const Backend = struct {
         switch (self.type) {
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalRmspropUpdate(weights, weights_buf, gradients, gradients_buf, g_avg, g_avg_buf, lr, rho, eps),
+                else => return error.CudaNotYetImplemented,
             },
             .cpu => try self.cpuRmspropUpdate(weights, gradients, g_avg, lr, rho, eps),
         }
@@ -391,6 +407,7 @@ pub const Backend = struct {
         switch (self.type) {
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalLayerNormForward(input, input_buf, output, output_buf, gamma, gamma_buf, beta, beta_buf, eps),
+                else => return error.CudaNotYetImplemented,
             },
             .cpu => try self.cpuLayerNormForward(input, output, gamma, beta, eps),
         }
@@ -401,6 +418,7 @@ pub const Backend = struct {
         switch (self.type) {
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalLayerNormBackward(input, input_buf, grad_output, grad_output_buf, grad_input, grad_input_buf, gamma, gamma_buf, grad_gamma, grad_gamma_buf, grad_beta, grad_beta_buf, eps),
+                else => return error.CudaNotYetImplemented,
             },
             .cpu => try self.cpuLayerNormBackward(input, grad_output, grad_input, gamma, grad_gamma, grad_beta, eps),
         }
@@ -411,6 +429,7 @@ pub const Backend = struct {
         switch (self.type) {
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalConv1dForward(input, input_buf, weights, weights_buf, bias, bias_buf, output, output_buf, in_channels, out_channels, kernel_size, in_len, out_len),
+                else => return error.CudaNotYetImplemented,
             },
             .cpu => try self.cpuConv1dForward(input, weights, bias, output, in_channels, out_channels, kernel_size, in_len, out_len),
         }
@@ -421,6 +440,7 @@ pub const Backend = struct {
         switch (self.type) {
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalConv1dBackward(input, input_buf, weights, weights_buf, grad_after_act, grad_after_act_buf, grad_input, grad_input_buf, grad_weights, grad_weights_buf, grad_bias, grad_bias_buf, in_channels, out_channels, kernel_size, in_len, out_len),
+                else => return error.CudaNotYetImplemented,
             },
             .cpu => try self.cpuConv1dBackward(input, weights, grad_after_act, grad_input, grad_weights, grad_bias, in_channels, out_channels, kernel_size, in_len, out_len),
         }
@@ -431,6 +451,7 @@ pub const Backend = struct {
         switch (self.type) {
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalConv2dForward(input, input_buf, weights, weights_buf, bias, bias_buf, output, output_buf, in_channels, out_channels, kernel_h, kernel_w, input_h, input_w, output_h, output_w, stride_h, stride_w, padding_h, padding_w),
+                else => return error.CudaNotYetImplemented,
             },
             .cpu => try self.cpuConv2dForward(input, weights, bias, output, in_channels, out_channels, kernel_h, kernel_w, input_h, input_w, output_h, output_w, stride_h, stride_w, padding_h, padding_w),
         }
@@ -441,6 +462,7 @@ pub const Backend = struct {
         switch (self.type) {
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalConv2dBackward(input, input_buf, weights, weights_buf, grad_output, grad_output_buf, grad_input, grad_input_buf, grad_weights, grad_weights_buf, grad_bias, grad_bias_buf, in_channels, out_channels, kernel_h, kernel_w, input_h, input_w, output_h, output_w, stride_h, stride_w, padding_h, padding_w),
+                else => return error.CudaNotYetImplemented,
             },
             .cpu => try self.cpuConv2dBackward(input, weights, grad_output, grad_input, grad_weights, grad_bias, in_channels, out_channels, kernel_h, kernel_w, input_h, input_w, output_h, output_w, stride_h, stride_w, padding_h, padding_w),
         }
@@ -451,6 +473,7 @@ pub const Backend = struct {
         switch (self.type) {
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalDropoutForward(input, input_buf, output, output_buf, mask, mask_buf, rate, scaling_factor, seed),
+                else => return error.CudaNotYetImplemented,
             },
             .cpu => try self.cpuDropoutForward(input, output, mask, rate, scaling_factor, seed),
         }
@@ -461,6 +484,7 @@ pub const Backend = struct {
         switch (self.type) {
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalVaeSamplingForward(input, input_buf, output, output_buf, epsilon, epsilon_buf, seed, latent_dim),
+                else => return error.CudaNotYetImplemented,
             },
             .cpu => try self.cpuVaeSamplingForward(input, output, epsilon, seed, latent_dim),
         }
@@ -3231,6 +3255,7 @@ pub const Backend = struct {
                     running_var,
                     running_var_buf,
                 ),
+                else => return error.CudaNotYetImplemented,
             },
             .cpu => try self.cpuBatchNormForwardTraining(
                 input,
@@ -3279,6 +3304,7 @@ pub const Backend = struct {
                     running_var,
                     running_var_buf,
                 ),
+                else => return error.CudaNotYetImplemented,
             },
             .cpu => try self.cpuBatchNormForwardInference(
                 input,
@@ -3334,6 +3360,7 @@ pub const Backend = struct {
                     running_var,
                     running_var_buf,
                 ),
+                else => return error.CudaNotYetImplemented,
             },
             .cpu => try self.cpuBatchNormBackward(
                 input,
