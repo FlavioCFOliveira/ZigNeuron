@@ -18,6 +18,8 @@ pub const Activation = union(enum) {
     softmax,
     linear, // Identity activation (no transformation)
     gelu, // Gaussian Error Linear Unit
+    leaky_relu, // Leaky ReLU: f(x) = x if x > 0, else alpha * x (alpha = 0.01)
+    elu, // Exponential Linear Unit: f(x) = x if x > 0, else alpha * (exp(x) - 1) (alpha = 1.0)
 
     pub fn forward(self: Activation, x: f32) f32 {
         return switch (self) {
@@ -27,6 +29,8 @@ pub const Activation = union(enum) {
             .softmax => @panic("softmax forward not implemented for single value"),
             .linear => x, // Identity: f(x) = x
             .gelu => geluForward(x),
+            .leaky_relu => leakyReluForward(x),
+            .elu => eluForward(x),
         };
     }
 
@@ -38,6 +42,8 @@ pub const Activation = union(enum) {
             .softmax => @panic("softmax backward not implemented for single value"),
             .linear => grad, // Derivative of identity is 1
             .gelu => geluBackward(y) * grad,
+            .leaky_relu => leakyReluBackward(y) * grad,
+            .elu => eluBackward(y) * grad,
         };
     }
 
@@ -141,5 +147,38 @@ pub const Activation = union(enum) {
         const tanh_inner = std.math.tanh(inner);
         const sech2_inner = 1.0 - tanh_inner * tanh_inner;
         return 0.5 * (1.0 + tanh_inner) + 0.5 * x * sech2_inner * sqrt_2_over_pi * (1.0 + 3.0 * coeff * x * x);
+    }
+
+    /// LeakyReLU forward: f(x) = x if x > 0, else alpha * x
+    /// Default alpha = 0.01 (common value)
+    /// Reference: Maas, A. L., et al. (2013). Rectifier nonlinearities improve neural network acoustic models. ICML.
+    fn leakyReluForward(x: f32) f32 {
+        const alpha: f32 = 0.01;
+        return if (x > 0) x else alpha * x;
+    }
+
+    /// LeakyReLU backward derivative
+    /// f'(x) = 1 if x > 0, else alpha
+    fn leakyReluBackward(y: f32) f32 {
+        const alpha: f32 = 0.01;
+        // y > 0 means x was > 0 (since leaky_relu preserves sign for positive x)
+        return if (y > 0) 1.0 else alpha;
+    }
+
+    /// ELU forward: f(x) = x if x > 0, else alpha * (exp(x) - 1)
+    /// Default alpha = 1.0
+    /// Reference: Clevert, D. A., et al. (2015). Fast and accurate deep network learning by exponential linear units. ICLR.
+    fn eluForward(x: f32) f32 {
+        const alpha: f32 = 1.0;
+        return if (x > 0) x else alpha * (std.math.exp(x) - 1.0);
+    }
+
+    /// ELU backward derivative
+    /// f'(x) = 1 if x > 0, else alpha * exp(x) = f(x) + alpha
+    fn eluBackward(y: f32) f32 {
+        const alpha: f32 = 1.0;
+        // For ELU, if y > 0 then x was > 0 and derivative is 1
+        // If y <= 0, then x was <= 0 and derivative is y + alpha
+        return if (y > 0) 1.0 else y + alpha;
     }
 };

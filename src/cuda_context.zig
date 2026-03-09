@@ -364,17 +364,27 @@ pub const CudaContext = struct {
     }
 
     /// Return a buffer to the pool
+    /// SECURITY FIX: Validate buffer state before returning to pool (VULN-004)
     pub fn returnBuffer(self: *CudaContext, buffer: DeviceBuffer) void {
+        // Validate buffer pointer is not null (already freed)
+        if (buffer.ptr == 0) {
+            std.log.warn("Attempting to return already-freed buffer to pool", .{});
+            return;
+        }
+
         if (buffer.pool_index) |idx| {
             if (idx < MEMORY_POOL_BUCKETS) {
-                self.buffer_pools[idx].append(self.allocator, buffer) catch {
-                    // If pool is full, just free the buffer
-                    buffer.deinit(self.driver);
+                self.buffer_pools[idx].append(self.allocator, buffer) catch |err| {
+                    std.log.warn("Failed to append to pool ({}), freeing buffer", .{err});
+                    var buf = buffer;
+                    buf.deinit(self.driver);
                 };
                 return;
+            } else {
+                std.log.warn("Invalid pool index {}, freeing buffer", .{idx});
             }
         }
-        // Not poolable, free directly
+        // Not poolable or invalid pool index, free directly
         var buf = buffer;
         buf.deinit(self.driver);
     }
@@ -391,7 +401,12 @@ pub const CudaContext = struct {
     }
 
     /// Free a buffer
+    /// SECURITY FIX: Validate buffer state before freeing (VULN-004)
     pub fn freeBuffer(self: *CudaContext, buffer: *DeviceBuffer) void {
+        if (buffer.ptr == 0) {
+            std.log.warn("Attempting to free already-freed buffer", .{});
+            return;
+        }
         buffer.deinit(self.driver);
     }
 

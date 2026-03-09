@@ -3,6 +3,17 @@ const std = @import("std");
 const backend_module = @import("backend.zig");
 const metal = @import("metal.zig");
 
+// SECURITY FIX: Explicit error types for Tensor operations (VULN-002)
+pub const TensorError = error{
+    EmptyShape,
+    ZeroDimension,
+    DimensionTooLarge,
+    ShapeTooManyDimensions,
+    TensorSizeOverflow,
+    TensorTooLarge,
+    MetalContextMissing,
+};
+
 pub const Tensor = struct {
     allocator: std.mem.Allocator,
     size: usize,
@@ -12,12 +23,27 @@ pub const Tensor = struct {
     backend_type: backend_module.Backend.BackendType,
 
     pub fn init(allocator: std.mem.Allocator, shape: []const usize, backend: backend_module.Backend) !Tensor {
+        // SECURITY FIX: Validate shape is not empty (VULN-002)
+        if (shape.len == 0) return error.EmptyShape;
+
+        // SECURITY FIX: Limit number of dimensions to prevent abuse
+        if (shape.len > 8) return error.ShapeTooManyDimensions;
+
         var size: usize = 1;
         for (shape) |dim| {
-            if (dim > 0 and size > std.math.maxInt(usize) / dim) {
+            // SECURITY FIX: Validate each dimension is > 0
+            if (dim == 0) return error.ZeroDimension;
+
+            // SECURITY FIX: Validate dimension size (prevent excessive allocation)
+            if (dim > 1_000_000_000) return error.DimensionTooLarge;
+
+            // SECURITY FIX: Use std.math.mul for overflow checking
+            size = std.math.mul(usize, size, dim) catch {
                 return error.TensorSizeOverflow;
-            }
-            size *= dim;
+            };
+
+            // SECURITY FIX: Limit total tensor size to prevent DoS
+            if (size > 1 << 32) return error.TensorTooLarge;
         }
 
         const shape_copy = try allocator.alloc(usize, shape.len);

@@ -18,6 +18,7 @@ pub const GpuBackend = enum {
 };
 
 /// Backend selection - GPU preferred, CPU fallback
+/// SECURITY NOTE: Backend is NOT thread-safe. Use separate instances per thread.
 pub const Backend = struct {
     type: BackendType,
     metal_ctx: ?*metal_context.MetalContext = null,
@@ -68,6 +69,8 @@ pub const Backend = struct {
     }
 
     /// Begin a batch of commands to be executed together (Metal only)
+    /// SECURITY NOTE: This function is NOT thread-safe. Backend should be used from a single thread.
+    /// For multi-threading, create separate Backend instances per thread.
     pub fn beginCommandBatch(self: Backend) !void {
         if (self.metal_ctx) |ctx| {
             if (ctx.active_command_buffer == null) {
@@ -77,6 +80,7 @@ pub const Backend = struct {
     }
 
     /// End a batch of commands and execute them (Metal only)
+    /// SECURITY NOTE: This function is NOT thread-safe. Backend should be used from a single thread.
     pub fn endCommandBatch(self: *Backend) !void {
         if (self.metal_ctx) |ctx| {
             if (ctx.active_command_buffer) |cb| {
@@ -468,6 +472,70 @@ pub const Backend = struct {
         }
     }
 
+    /// MaxPool1D forward pass
+    pub fn maxPool1dForward(self: Backend, input: []const f32, input_buf: ?*const metal.MTLBuffer, output: []f32, output_buf: ?*const metal.MTLBuffer, max_indices: []f32, max_indices_buf: ?*const metal.MTLBuffer, channels: usize, input_len: usize, output_len: usize, pool_size: usize, stride: usize) !void {
+        _ = input_buf;
+        _ = output_buf;
+        _ = max_indices_buf;
+        // CPU implementation only for now
+        if (self.type != .cpu) return error.GpuNotImplemented;
+        try self.cpuMaxPool1dForward(input, output, max_indices, channels, input_len, output_len, pool_size, stride);
+    }
+
+    /// MaxPool1D backward pass
+    pub fn maxPool1dBackward(self: Backend, grad_output: []const f32, grad_output_buf: ?*const metal.MTLBuffer, grad_input: []f32, grad_input_buf: ?*const metal.MTLBuffer, max_indices: []const f32, max_indices_buf: ?*const metal.MTLBuffer, channels: usize, input_len: usize, output_len: usize, pool_size: usize, stride: usize) !void {
+        _ = grad_output_buf;
+        _ = grad_input_buf;
+        _ = max_indices_buf;
+        _ = input_len;
+        _ = pool_size;
+        _ = stride;
+        // CPU implementation only for now
+        if (self.type != .cpu) return error.GpuNotImplemented;
+        @memset(grad_input, 0);
+        for (0..channels * output_len) |out_idx| {
+            const max_idx: usize = @intFromFloat(max_indices[out_idx]);
+            // SECURITY: Bounds check to prevent out-of-bounds access
+            if (max_idx < grad_input.len) {
+                grad_input[max_idx] += grad_output[out_idx];
+            }
+        }
+    }
+
+    /// MaxPool2D forward pass
+    pub fn maxPool2dForward(self: Backend, input: []const f32, input_buf: ?*const metal.MTLBuffer, output: []f32, output_buf: ?*const metal.MTLBuffer, max_indices: []f32, max_indices_buf: ?*const metal.MTLBuffer, channels: usize, input_h: usize, input_w: usize, output_h: usize, output_w: usize, pool_h: usize, pool_w: usize, stride_h: usize, stride_w: usize) !void {
+        _ = input_buf;
+        _ = output_buf;
+        _ = max_indices_buf;
+        // CPU implementation only for now
+        if (self.type != .cpu) return error.GpuNotImplemented;
+        try self.cpuMaxPool2dForward(input, output, max_indices, channels, input_h, input_w, output_h, output_w, pool_h, pool_w, stride_h, stride_w);
+    }
+
+    /// MaxPool2D backward pass
+    pub fn maxPool2dBackward(self: Backend, grad_output: []const f32, grad_output_buf: ?*const metal.MTLBuffer, grad_input: []f32, grad_input_buf: ?*const metal.MTLBuffer, max_indices: []const f32, max_indices_buf: ?*const metal.MTLBuffer, channels: usize, input_h: usize, input_w: usize, output_h: usize, output_w: usize, pool_h: usize, pool_w: usize, stride_h: usize, stride_w: usize) !void {
+        _ = grad_output_buf;
+        _ = grad_input_buf;
+        _ = max_indices_buf;
+        _ = input_h;
+        _ = input_w;
+        _ = pool_h;
+        _ = pool_w;
+        _ = stride_h;
+        _ = stride_w;
+        // CPU implementation only for now
+        if (self.type != .cpu) return error.GpuNotImplemented;
+        @memset(grad_input, 0);
+        const output_size = channels * output_h * output_w;
+        for (0..output_size) |out_idx| {
+            const max_idx: usize = @intFromFloat(max_indices[out_idx]);
+            // SECURITY: Bounds check to prevent out-of-bounds access
+            if (max_idx < grad_input.len) {
+                grad_input[max_idx] += grad_output[out_idx];
+            }
+        }
+    }
+
     /// Dropout forward pass
     pub fn dropoutForward(self: Backend, input: []const f32, input_buf: ?*const metal.MTLBuffer, output: []f32, output_buf: ?*const metal.MTLBuffer, mask: []f32, mask_buf: ?*const metal.MTLBuffer, rate: f32, scaling_factor: f32, seed: u64) !void {
         switch (self.type) {
@@ -499,10 +567,11 @@ pub const Backend = struct {
     }
 
     /// Attention forward pass (scaled dot-product)
-    pub fn attentionForward(self: Backend, q: []const f32, q_buf: ?*const metal.MTLBuffer, k: []const f32, k_buf: ?*const metal.MTLBuffer, v: []const f32, v_buf: ?*const metal.MTLBuffer, output: []f32, output_buf: ?*const metal.MTLBuffer, seq_len: usize, d_k: usize, scaling_factor: f32) !void {
+    /// PERFORMANCE FIX: scores_buffer must be pre-allocated with size >= seq_len (F2.1)
+    pub fn attentionForward(self: Backend, q: []const f32, q_buf: ?*const metal.MTLBuffer, k: []const f32, k_buf: ?*const metal.MTLBuffer, v: []const f32, v_buf: ?*const metal.MTLBuffer, output: []f32, output_buf: ?*const metal.MTLBuffer, scores_buffer: []f32, seq_len: usize, d_k: usize, scaling_factor: f32) !void {
         switch (self.type) {
             .gpu => try self.metalAttentionForward(q, q_buf, k, k_buf, v, v_buf, output, output_buf, seq_len, d_k, scaling_factor),
-            .cpu => try self.cpuAttentionForward(q, k, v, output, seq_len, d_k, scaling_factor),
+            .cpu => try self.cpuAttentionForward(q, k, v, output, scores_buffer, seq_len, d_k, scaling_factor),
         }
     }
 
@@ -1382,6 +1451,8 @@ pub const Backend = struct {
             .softmax => "softmax_forward",
             .linear => "linear_forward",
             .gelu => "gelu_forward", // TODO: Add Metal kernel for GELU
+            .leaky_relu => "leaky_relu_forward", // TODO: Add Metal kernel
+            .elu => "elu_forward", // TODO: Add Metal kernel
         };
         const pipeline = ctx.getPipeline(pipeline_name) orelse return error.PipelineNotFound;
 
@@ -1437,6 +1508,8 @@ pub const Backend = struct {
             .softmax => "softmax_backward",
             .linear => "linear_backward",
             .gelu => "gelu_backward", // TODO: Add Metal kernel for GELU
+            .leaky_relu => "leaky_relu_backward", // TODO: Add Metal kernel
+            .elu => "elu_backward", // TODO: Add Metal kernel
         };
         const pipeline = ctx.getPipeline(pipeline_name) orelse return error.PipelineNotFound;
 
@@ -2398,8 +2471,8 @@ pub const Backend = struct {
                 .tanh => optimization.SIMD.tanhBackwardVectorized(input, grad_output, grad_input),
                 .linear => @memcpy(grad_input, grad_output),
                 .softmax => unreachable, // Handled above
-                .gelu => {
-                    // GELU backward using scalar implementation for now
+                .gelu, .leaky_relu, .elu => {
+                    // Generic backward using scalar implementation
                     for (input, grad_output, grad_input) |y, go, *gi| {
                         gi.* = act.backward(y, go);
                     }
@@ -2492,23 +2565,39 @@ pub const Backend = struct {
         }
     }
 
+    /// Compute mean and variance using Welford's online algorithm
+    /// PERFORMANCE FIX: Single-pass algorithm reduces memory bandwidth by 2x (F2.2)
+    fn welfordMeanVariance(data: []const f32) struct { mean: f32, variance: f32 } {
+        var mean: f32 = 0.0;
+        var m2: f32 = 0.0; // Sum of squares of differences from the mean
+        var count: f32 = 0.0;
+
+        for (data) |x| {
+            count += 1.0;
+            const delta = x - mean;
+            mean += delta / count;
+            const delta2 = x - mean;
+            m2 += delta * delta2;
+        }
+
+        const variance = if (count > 1.0) m2 / count else 0.0;
+        return .{ .mean = mean, .variance = variance };
+    }
+
     fn cpuLayerNormForward(self: Backend, input: []const f32, output: []f32, gamma: []const f32, beta: []const f32, eps: f32) !void {
         _ = self;
+        const optimization_module = @import("optimization.zig");
         const batch_size = input.len / gamma.len;
         const size = gamma.len;
         for (0..batch_size) |b| {
             const in = input[b * size .. (b + 1) * size];
             const out = output[b * size .. (b + 1) * size];
-            var mean: f32 = 0;
-            for (in) |x| mean += x;
-            mean /= @as(f32, @floatFromInt(size));
-            var variance: f32 = 0;
-            for (in) |x| variance += (x - mean) * (x - mean);
-            variance /= @as(f32, @floatFromInt(size));
-            const std_inv = 1.0 / @sqrt(variance + eps);
-            for (in, out, 0..) |x, *o, i| {
-                o.* = (x - mean) * std_inv * gamma[i] + beta[i];
-            }
+            // PERFORMANCE FIX: Use Welford's algorithm for single-pass mean/variance (F2.2)
+            const stats = welfordMeanVariance(in);
+            const mean = stats.mean;
+            const std_inv = 1.0 / @sqrt(stats.variance + eps);
+            // PERFORMANCE FIX: Use SIMD for normalization (F2.3)
+            optimization_module.SIMD.layerNormVectorized(in, out, gamma, beta, mean, std_inv);
         }
     }
 
@@ -2520,13 +2609,10 @@ pub const Backend = struct {
             const in = input[b * size .. (b + 1) * size];
             const go = grad_output[b * size .. (b + 1) * size];
             const gi = grad_input[b * size .. (b + 1) * size];
-            var mean: f32 = 0;
-            for (in) |x| mean += x;
-            mean /= @as(f32, @floatFromInt(size));
-            var variance: f32 = 0;
-            for (in) |x| variance += (x - mean) * (x - mean);
-            variance /= @as(f32, @floatFromInt(size));
-            const std_inv = 1.0 / @sqrt(variance + eps);
+            // PERFORMANCE FIX: Use Welford's algorithm for single-pass mean/variance (F2.2)
+            const stats = welfordMeanVariance(in);
+            const mean = stats.mean;
+            const std_inv = 1.0 / @sqrt(stats.variance + eps);
             for (in, go, gi, 0..) |x, gov, *giv, i| {
                 const x_hat = (x - mean) * std_inv;
                 grad_gamma[i] += gov * x_hat;
@@ -2763,6 +2849,67 @@ pub const Backend = struct {
         }
     }
 
+    fn cpuMaxPool1dForward(self: Backend, input: []const f32, output: []f32, max_indices: []f32, channels: usize, input_len: usize, output_len: usize, pool_size: usize, stride: usize) !void {
+        _ = self;
+        const batch_size = if (input.len > 0) input.len / (channels * input_len) else 1;
+        for (0..batch_size) |b| {
+            for (0..channels) |ch| {
+                for (0..output_len) |out_pos| {
+                    const start_idx = b * channels * input_len + ch * input_len + out_pos * stride;
+                    var max_val: f32 = -std.math.inf(f32);
+                    var max_idx: usize = start_idx;
+                    for (0..pool_size) |p| {
+                        const idx = start_idx + p;
+                        if (idx < (b * channels + ch + 1) * input_len and idx >= b * channels * input_len) {
+                            const val = input[idx];
+                            if (val > max_val) {
+                                max_val = val;
+                                max_idx = idx;
+                            }
+                        }
+                    }
+                    const out_idx = b * channels * output_len + ch * output_len + out_pos;
+                    output[out_idx] = max_val;
+                    max_indices[out_idx] = @floatFromInt(max_idx);
+                }
+            }
+        }
+    }
+
+    fn cpuMaxPool2dForward(self: Backend, input: []const f32, output: []f32, max_indices: []f32, channels: usize, input_h: usize, input_w: usize, output_h: usize, output_w: usize, pool_h: usize, pool_w: usize, stride_h: usize, stride_w: usize) !void {
+        _ = self;
+        const batch_size = if (input.len > 0) input.len / (channels * input_h * input_w) else 1;
+        for (0..batch_size) |b| {
+            for (0..channels) |ch| {
+                for (0..output_h) |oh| {
+                    for (0..output_w) |ow| {
+                        const ih_start = oh * stride_h;
+                        const iw_start = ow * stride_w;
+                        var max_val: f32 = -std.math.inf(f32);
+                        var max_idx: usize = 0;
+                        for (0..pool_h) |ph| {
+                            for (0..pool_w) |pw| {
+                                const ih = ih_start + ph;
+                                const iw = iw_start + pw;
+                                if (ih < input_h and iw < input_w) {
+                                    const in_idx = ((b * channels + ch) * input_h + ih) * input_w + iw;
+                                    const val = input[in_idx];
+                                    if (val > max_val) {
+                                        max_val = val;
+                                        max_idx = in_idx;
+                                    }
+                                }
+                            }
+                        }
+                        const out_idx = ((b * channels + ch) * output_h + oh) * output_w + ow;
+                        output[out_idx] = max_val;
+                        max_indices[out_idx] = @floatFromInt(max_idx);
+                    }
+                }
+            }
+        }
+    }
+
     fn cpuDropoutForward(self: Backend, input: []const f32, output: []f32, mask: []f32, rate: f32, scaling_factor: f32, seed: u64) !void {
         _ = self;
         var prng = std.Random.DefaultPrng.init(seed);
@@ -2802,17 +2949,10 @@ pub const Backend = struct {
         }
     }
 
-    fn cpuAttentionForward(self: Backend, q: []const f32, k: []const f32, v: []const f32, output: []f32, seq_len: usize, d_k: usize, scaling_factor: f32) !void {
+    fn cpuAttentionForward(self: Backend, q: []const f32, k: []const f32, v: []const f32, output: []f32, scores_buffer: []f32, seq_len: usize, d_k: usize, scaling_factor: f32) !void {
         _ = self;
-        // Use stack buffer for small sequences to avoid allocation
-        const STACK_BUFFER_SIZE = 1024;
-        var stack_buffer: [STACK_BUFFER_SIZE]f32 = undefined;
-
-        const scores: []f32 = if (seq_len <= STACK_BUFFER_SIZE)
-            stack_buffer[0..seq_len]
-        else
-            try std.heap.page_allocator.alloc(f32, seq_len);
-        defer if (seq_len > STACK_BUFFER_SIZE) std.heap.page_allocator.free(scores);
+        // PERFORMANCE FIX: Use pre-allocated buffer instead of allocating in hot path (F2.1)
+        const scores = scores_buffer[0..seq_len];
 
         for (0..seq_len) |i| {
             var max_score: f32 = -std.math.inf(f32);

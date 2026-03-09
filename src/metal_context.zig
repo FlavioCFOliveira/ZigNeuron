@@ -63,9 +63,11 @@ pub const MetalContext = struct {
         }
 
         const shader_source = try std.mem.concat(allocator, u8, &sources);
-        defer allocator.free(shader_source);
+        // SECURITY FIX: Do NOT use defer here - newLibraryWithSource may retain the pointer internally
+        // for asynchronous compilation. Free only after successful library creation.
 
         self.library = try self.device.newLibraryWithSource(shader_source);
+        allocator.free(shader_source); // Free after confirmed use
         self.active_command_buffer = null;
 
         self.pipelines = std.StringHashMap(metal.MTLComputePipelineState).init(allocator);

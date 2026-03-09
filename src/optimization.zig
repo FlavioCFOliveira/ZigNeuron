@@ -299,6 +299,73 @@ pub const SIMD = struct {
             gi.* = go * (1.0 - y * y);
         }
     }
+
+    /// PERFORMANCE FIX: Vectorized Layer Normalization (F2.3)
+    /// Normalizes input using pre-computed mean and inverse std
+    pub fn layerNormVectorized(input: []const f32, output: []f32, gamma: []const f32, beta: []const f32, mean: f32, inv_std: f32) void {
+        if (!isNeonAvailable()) {
+            for (input, output, 0..) |x, *o, i| {
+                const normalized = (x - mean) * inv_std;
+                o.* = normalized * gamma[i] + beta[i];
+            }
+            return;
+        }
+
+        var i: usize = 0;
+        const vector_len = VECTOR_WIDTH;
+        const mean_vec = @as(@Vector(VECTOR_WIDTH, f32), @splat(mean));
+        const inv_std_vec = @as(@Vector(VECTOR_WIDTH, f32), @splat(inv_std));
+
+        // Process 4 elements at a time
+        while (i + vector_len <= input.len) : (i += vector_len) {
+            const x_vec: @Vector(VECTOR_WIDTH, f32) = input[i..][0..VECTOR_WIDTH].*;
+            const g_vec: @Vector(VECTOR_WIDTH, f32) = gamma[i..][0..VECTOR_WIDTH].*;
+            const b_vec: @Vector(VECTOR_WIDTH, f32) = beta[i..][0..VECTOR_WIDTH].*;
+
+            const normalized = (x_vec - mean_vec) * inv_std_vec;
+            const result = normalized * g_vec + b_vec;
+            output[i..][0..VECTOR_WIDTH].* = result;
+        }
+
+        // Handle remaining elements
+        for (input[i..], output[i..], gamma[i..], beta[i..]) |x, *o, g, b| {
+            const normalized = (x - mean) * inv_std;
+            o.* = normalized * g + b;
+        }
+    }
+
+    /// PERFORMANCE FIX: Vectorized Batch Normalization (F2.3)
+    pub fn batchNormVectorized(input: []const f32, output: []f32, gamma: []const f32, beta: []const f32, mean: f32, inv_std: f32) void {
+        if (!isNeonAvailable()) {
+            for (input, output, 0..) |x, *o, i| {
+                const normalized = (x - mean) * inv_std;
+                o.* = normalized * gamma[i] + beta[i];
+            }
+            return;
+        }
+
+        var i: usize = 0;
+        const vector_len = VECTOR_WIDTH;
+        const mean_vec = @as(@Vector(VECTOR_WIDTH, f32), @splat(mean));
+        const inv_std_vec = @as(@Vector(VECTOR_WIDTH, f32), @splat(inv_std));
+
+        // Process 4 elements at a time
+        while (i + vector_len <= input.len) : (i += vector_len) {
+            const x_vec: @Vector(VECTOR_WIDTH, f32) = input[i..][0..VECTOR_WIDTH].*;
+            const g_vec: @Vector(VECTOR_WIDTH, f32) = gamma[i..][0..VECTOR_WIDTH].*;
+            const b_vec: @Vector(VECTOR_WIDTH, f32) = beta[i..][0..VECTOR_WIDTH].*;
+
+            const normalized = (x_vec - mean_vec) * inv_std_vec;
+            const result = normalized * g_vec + b_vec;
+            output[i..][0..VECTOR_WIDTH].* = result;
+        }
+
+        // Handle remaining elements
+        for (input[i..], output[i..], gamma[i..], beta[i..]) |x, *o, g, b| {
+            const normalized = (x - mean) * inv_std;
+            o.* = normalized * g + b;
+        }
+    }
 };
 
 /// Multi-threading utilities for parallel computation

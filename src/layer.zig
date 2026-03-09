@@ -52,6 +52,9 @@ pub const Layer = union(enum) {
     gru: *recurrent.GRU,
     sampling: *SamplingLayer,
     conv1d: *Conv1D,
+    conv2d: *Conv2D,
+    max_pool1d: *MaxPool1D,  // FEATURE: Max pooling for 1D sequences (F3.2)
+    max_pool2d: *MaxPool2D,  // FEATURE: Max pooling for 2D images (F3.2)
     layer_norm: *LayerNorm,
     batch_norm: *BatchNorm,
     dropout: *Dropout,
@@ -67,6 +70,9 @@ pub const Layer = union(enum) {
             .gru => |g| g.deinit(),
             .sampling => |s| s.deinit(),
             .conv1d => |c| c.deinit(),
+            .conv2d => |c| c.deinit(),
+            .max_pool1d => |mp| mp.deinit(),
+            .max_pool2d => |mp| mp.deinit(),
             .layer_norm => |ln| ln.deinit(),
             .batch_norm => |bn| bn.deinit(),
             .dropout => |dr| dr.deinit(),
@@ -84,6 +90,9 @@ pub const Layer = union(enum) {
             .gru => |g| try g.forward(input, input_buf, output, output_buf),
             .sampling => |s| try s.forward(input, input_buf, output, output_buf),
             .conv1d => |c| try c.forward(input, input_buf, output, output_buf),
+            .conv2d => |c| try c.forward(input, input_buf, output, output_buf),
+            .max_pool1d => |mp| try mp.forward(input, input_buf, output, output_buf),
+            .max_pool2d => |mp| try mp.forward(input, input_buf, output, output_buf),
             .layer_norm => |ln| try ln.forward(input, input_buf, output, output_buf),
             .batch_norm => |bn| try bn.forward(input, input_buf, output, output_buf),
             .dropout => |dr| try dr.forward(input, input_buf, output, output_buf),
@@ -106,6 +115,9 @@ pub const Layer = union(enum) {
             .gru => |g| try g.backward(input, input_buf, grad_output, grad_output_buf, grad_input, grad_input_buf, activated_output, activated_output_buf),
             .sampling => |s| try s.backward(input, input_buf, grad_output, grad_output_buf, grad_input, grad_input_buf, activated_output, activated_output_buf),
             .conv1d => |c| try c.backward(input, input_buf, grad_output, grad_output_buf, grad_input, grad_input_buf, activated_output, activated_output_buf),
+            .conv2d => |c| try c.backward(input, input_buf, grad_output, grad_output_buf, grad_input, grad_input_buf, activated_output, activated_output_buf),
+            .max_pool1d => |mp| try mp.backward(input, input_buf, grad_output, grad_output_buf, grad_input, grad_input_buf, activated_output, activated_output_buf),
+            .max_pool2d => |mp| try mp.backward(input, input_buf, grad_output, grad_output_buf, grad_input, grad_input_buf, activated_output, activated_output_buf),
             .layer_norm => |ln| try ln.backward(input, input_buf, grad_output, grad_output_buf, grad_input, grad_input_buf, activated_output, activated_output_buf),
             .batch_norm => |bn| try bn.backward(input, input_buf, grad_output, grad_output_buf, grad_input, grad_input_buf, activated_output, activated_output_buf),
             .dropout => |dr| try dr.backward(input, input_buf, grad_output, grad_output_buf, grad_input, grad_input_buf, activated_output, activated_output_buf),
@@ -123,6 +135,9 @@ pub const Layer = union(enum) {
             .gru => |g| return g.input_size,
             .sampling => |s| return s.input_size,
             .conv1d => |c| return c.input_size,
+            .conv2d => |c| return c.input_size,
+            .max_pool1d => |mp| return mp.input_size,
+            .max_pool2d => |mp| return mp.input_size,
             .layer_norm => |ln| return ln.size,
             .batch_norm => |bn| return bn.size,
             .dropout => |dr| return dr.size,
@@ -140,6 +155,9 @@ pub const Layer = union(enum) {
             .gru => |g| return g.hidden_size,
             .sampling => |s| return s.input_size / 2,
             .conv1d => |c| return c.output_size,
+            .conv2d => |c| return c.output_size,
+            .max_pool1d => |mp| return mp.output_size,
+            .max_pool2d => |mp| return mp.output_size,
             .layer_norm => |ln| return ln.size,
             .batch_norm => |bn| return bn.size,
             .dropout => |dr| return dr.size,
@@ -157,6 +175,9 @@ pub const Layer = union(enum) {
             .gru => |g| return &g.weights_ih,
             .sampling => |s| return &s.epsilon,
             .conv1d => |c| return &c.weights,
+            .conv2d => |c| return &c.weights,
+            .max_pool1d => |mp| return &mp.max_indices, // No weights, return dummy
+            .max_pool2d => |mp| return &mp.max_indices, // No weights, return dummy
             .layer_norm => |ln| return &ln.gamma,
             .batch_norm => |bn| return &bn.gamma,
             .dropout => |dr| return &dr.mask,
@@ -174,6 +195,9 @@ pub const Layer = union(enum) {
             .gru => |g| return &g.bias,
             .sampling => |s| return &s.epsilon,
             .conv1d => |c| return &c.bias,
+            .conv2d => |c| return &c.bias,
+            .max_pool1d => |mp| return &mp.max_indices, // No bias, return dummy
+            .max_pool2d => |mp| return &mp.max_indices, // No bias, return dummy
             .layer_norm => |ln| return &ln.beta,
             .batch_norm => |bn| return &bn.beta,
             .dropout => |dr| return &dr.mask,
@@ -191,6 +215,9 @@ pub const Layer = union(enum) {
             .gru => |g| return &g.grad_weights_ih,
             .sampling => |s| return &s.epsilon,
             .conv1d => |c| return &c.grad_weights,
+            .conv2d => |c| return &c.grad_weights,
+            .max_pool1d => |mp| return &mp.max_indices, // No grad weights, return dummy
+            .max_pool2d => |mp| return &mp.max_indices, // No grad weights, return dummy
             .layer_norm => |ln| return &ln.grad_gamma,
             .batch_norm => |bn| return &bn.grad_gamma,
             .dropout => |dr| return &dr.mask,
@@ -208,6 +235,9 @@ pub const Layer = union(enum) {
             .gru => |g| return &g.grad_bias,
             .sampling => |s| return &s.epsilon,
             .conv1d => |c| return &c.grad_bias,
+            .conv2d => |c| return &c.grad_bias,
+            .max_pool1d => |mp| return &mp.max_indices, // No grad bias, return dummy
+            .max_pool2d => |mp| return &mp.max_indices, // No grad bias, return dummy
             .layer_norm => |ln| return &ln.grad_beta,
             .batch_norm => |bn| return &bn.grad_beta,
             .dropout => |dr| return &dr.mask,
@@ -225,7 +255,11 @@ pub const Layer = union(enum) {
             .gru => return .tanh,
             .sampling => return .linear,
             .conv1d => |c| return c.act,
+            .conv2d => |c| return c.act,
+            .max_pool1d => return .linear,
+            .max_pool2d => return .linear,
             .layer_norm => return .linear,
+            .batch_norm => return .linear,
             .dropout => return .linear,
             .attention => return .linear,
             .bidirectional => return .tanh,
@@ -241,6 +275,9 @@ pub const Layer = union(enum) {
             .gru => |g| return g.backend,
             .sampling => |s| return s.backend,
             .conv1d => |c| return c.backend,
+            .conv2d => |c| return c.backend,
+            .max_pool1d => |mp| return mp.backend,
+            .max_pool2d => |mp| return mp.backend,
             .layer_norm => |ln| return ln.backend,
             .batch_norm => |bn| return bn.backend,
             .dropout => |dr| return dr.backend,
@@ -291,8 +328,8 @@ pub const Dense = struct {
         const random = prng.random();
 
         const scale = switch (act) {
-            .relu => @sqrt(2.0 / @as(f32, @floatFromInt(input_size))),
-            .sigmoid, .tanh, .softmax, .gelu => @sqrt(2.0 / @as(f32, @floatFromInt(input_size + output_size))),
+            .relu, .leaky_relu => @sqrt(2.0 / @as(f32, @floatFromInt(input_size))),
+            .sigmoid, .tanh, .softmax, .gelu, .elu => @sqrt(2.0 / @as(f32, @floatFromInt(input_size + output_size))),
             .linear => @sqrt(1.0 / @as(f32, @floatFromInt(input_size))),
         };
 
@@ -584,6 +621,8 @@ pub const Conv2D = struct {
     input_w: usize,
     output_h: usize,
     output_w: usize,
+    input_size: usize,  // Flattened input size (in_channels * input_h * input_w)
+    output_size: usize, // Flattened output size (out_channels * output_h * output_w)
     act: activation.Activation,
     backend: backend_module.Backend,
     allocator: std.mem.Allocator,
@@ -607,6 +646,8 @@ pub const Conv2D = struct {
         // Calculate output dimensions
         self.output_h = (input_h - kernel_h) / self.stride_h + 1;
         self.output_w = (input_w - kernel_w) / self.stride_w + 1;
+        self.input_size = in_channels * input_h * input_w;
+        self.output_size = out_channels * self.output_h * self.output_w;
 
         self.weights = try tensor.Tensor.init(allocator, &.{ out_channels, in_channels, kernel_h, kernel_w }, backend);
         self.bias = try tensor.Tensor.init(allocator, &.{out_channels}, backend);
@@ -745,6 +786,246 @@ pub const Conv2D = struct {
                     }
                 }
             }
+        }
+    }
+};
+
+/// MaxPool1D Layer for downsampling 1D sequences
+/// Performs max pooling to reduce spatial dimensions
+///
+/// Reference:
+/// - Boureau, Y. L., et al. (2010). A theoretical analysis of feature pooling in
+///   visual recognition. ICML.
+pub const MaxPool1D = struct {
+    pool_size: usize,
+    stride: usize,
+    input_size: usize, // channels * length
+    output_size: usize, // channels * output_length
+    channels: usize,
+    input_len: usize,
+    output_len: usize,
+    backend: backend_module.Backend,
+    allocator: std.mem.Allocator,
+
+    // Store indices of max values for backpropagation
+    max_indices: tensor.Tensor,
+
+    pub fn init(allocator: std.mem.Allocator, pool_size: usize, channels: usize, input_len: usize, backend: backend_module.Backend) !*MaxPool1D {
+        if (pool_size == 0) return error.InvalidPoolSize;
+        if (pool_size > input_len) return error.PoolSizeLargerThanInput;
+
+        const self = try allocator.create(MaxPool1D);
+        self.pool_size = pool_size;
+        self.stride = pool_size; // Default stride = pool_size
+        self.channels = channels;
+        self.input_len = input_len;
+        self.input_size = channels * input_len;
+        self.output_len = (input_len - pool_size) / self.stride + 1;
+        self.output_size = channels * self.output_len;
+        self.backend = backend;
+        self.allocator = allocator;
+
+        // Store max indices for backpropagation (need one index per output element)
+        self.max_indices = try tensor.Tensor.init(allocator, &.{self.output_size}, backend);
+
+        return self;
+    }
+
+    pub fn deinit(self: *MaxPool1D) void {
+        self.max_indices.deinit();
+        self.allocator.destroy(self);
+    }
+
+    pub fn forward(self: *MaxPool1D, input: []const f32, input_buf: ?*const metal.MTLBuffer, output: []f32, output_buf: ?*const metal.MTLBuffer) !void {
+        if (input.len != self.input_size) return error.InvalidInputSize;
+        if (output.len != self.output_size) return error.InvalidOutputSize;
+
+        // Use GPU if available
+        if (self.backend.type != .cpu) {
+            try self.backend.maxPool1dForward(input, input_buf, output, output_buf, self.max_indices.slice, self.max_indices.getMtlBuffer(), self.channels, self.input_len, self.output_len, self.pool_size, self.stride);
+            return;
+        }
+
+        // CPU implementation
+        self.cpuForward(input, output);
+    }
+
+    fn cpuForward(self: *MaxPool1D, input: []const f32, output: []f32) void {
+        for (0..self.channels) |ch| {
+            for (0..self.output_len) |out_pos| {
+                const start_idx = ch * self.input_len + out_pos * self.stride;
+                const max_idx_ch_offset = ch * self.output_len;
+
+                var max_val: f32 = -std.math.inf(f32);
+                var max_idx: usize = 0;
+
+                for (0..self.pool_size) |p| {
+                    const idx = start_idx + p;
+                    if (idx < self.input_len * (ch + 1)) {
+                        const val = input[idx];
+                        if (val > max_val) {
+                            max_val = val;
+                            max_idx = idx;
+                        }
+                    }
+                }
+
+                const out_idx = max_idx_ch_offset + out_pos;
+                output[out_idx] = max_val;
+                self.max_indices.slice[out_idx] = @floatFromInt(max_idx);
+            }
+        }
+    }
+
+    pub fn backward(self: *MaxPool1D, input: []const f32, input_buf: ?*const metal.MTLBuffer, grad_output: []const f32, grad_output_buf: ?*const metal.MTLBuffer, grad_input: []f32, grad_input_buf: ?*const metal.MTLBuffer, activated_output: []const f32, activated_output_buf: ?*const metal.MTLBuffer) !void {
+        _ = input;
+        _ = input_buf;
+        _ = activated_output;
+        _ = activated_output_buf;
+
+        if (grad_output.len != self.output_size) return error.InvalidGradOutputSize;
+        if (grad_input.len != self.input_size) return error.InvalidGradInputSize;
+
+        // Zero out gradient input
+        @memset(grad_input, 0);
+
+        // Use GPU if available
+        if (self.backend.type != .cpu) {
+            try self.backend.maxPool1dBackward(grad_output, grad_output_buf, grad_input, grad_input_buf, self.max_indices.slice, self.max_indices.getMtlBuffer(), self.channels, self.input_len, self.output_len, self.pool_size, self.stride);
+            return;
+        }
+
+        // CPU implementation: route gradient to max position
+        for (0..self.output_size) |out_idx| {
+            const max_idx: usize = @intFromFloat(self.max_indices.slice[out_idx]);
+            grad_input[max_idx] += grad_output[out_idx];
+        }
+    }
+};
+
+/// MaxPool2D Layer for downsampling 2D images
+/// Performs max pooling to reduce spatial dimensions
+///
+/// Reference:
+/// - Boureau, Y. L., et al. (2010). A theoretical analysis of feature pooling in
+///   visual recognition. ICML.
+pub const MaxPool2D = struct {
+    pool_h: usize,
+    pool_w: usize,
+    stride_h: usize,
+    stride_w: usize,
+    channels: usize,
+    input_h: usize,
+    input_w: usize,
+    output_h: usize,
+    output_w: usize,
+    input_size: usize,
+    output_size: usize,
+    backend: backend_module.Backend,
+    allocator: std.mem.Allocator,
+
+    // Store indices of max values for backpropagation
+    max_indices: tensor.Tensor,
+
+    pub fn init(allocator: std.mem.Allocator, pool_h: usize, pool_w: usize, channels: usize, input_h: usize, input_w: usize, backend: backend_module.Backend) !*MaxPool2D {
+        if (pool_h == 0 or pool_w == 0) return error.InvalidPoolSize;
+        if (pool_h > input_h or pool_w > input_w) return error.PoolSizeLargerThanInput;
+
+        const self = try allocator.create(MaxPool2D);
+        self.pool_h = pool_h;
+        self.pool_w = pool_w;
+        self.stride_h = pool_h; // Default stride = pool_size
+        self.stride_w = pool_w;
+        self.channels = channels;
+        self.input_h = input_h;
+        self.input_w = input_w;
+        self.output_h = (input_h - pool_h) / self.stride_h + 1;
+        self.output_w = (input_w - pool_w) / self.stride_w + 1;
+        self.input_size = channels * input_h * input_w;
+        self.output_size = channels * self.output_h * self.output_w;
+        self.backend = backend;
+        self.allocator = allocator;
+
+        // Store max indices for backpropagation
+        self.max_indices = try tensor.Tensor.init(allocator, &.{self.output_size}, backend);
+
+        return self;
+    }
+
+    pub fn deinit(self: *MaxPool2D) void {
+        self.max_indices.deinit();
+        self.allocator.destroy(self);
+    }
+
+    pub fn forward(self: *MaxPool2D, input: []const f32, input_buf: ?*const metal.MTLBuffer, output: []f32, output_buf: ?*const metal.MTLBuffer) !void {
+        if (input.len != self.input_size) return error.InvalidInputSize;
+        if (output.len != self.output_size) return error.InvalidOutputSize;
+
+        // Use GPU if available
+        if (self.backend.type != .cpu) {
+            try self.backend.maxPool2dForward(input, input_buf, output, output_buf, self.max_indices.slice, self.max_indices.getMtlBuffer(), self.channels, self.input_h, self.input_w, self.output_h, self.output_w, self.pool_h, self.pool_w, self.stride_h, self.stride_w);
+            return;
+        }
+
+        // CPU implementation
+        self.cpuForward(input, output);
+    }
+
+    fn cpuForward(self: *MaxPool2D, input: []const f32, output: []f32) void {
+        for (0..self.channels) |ch| {
+            for (0..self.output_h) |oh| {
+                for (0..self.output_w) |ow| {
+                    const ih_start = oh * self.stride_h;
+                    const iw_start = ow * self.stride_w;
+
+                    var max_val: f32 = -std.math.inf(f32);
+                    var max_idx: usize = 0;
+
+                    for (0..self.pool_h) |ph| {
+                        for (0..self.pool_w) |pw| {
+                            const ih = ih_start + ph;
+                            const iw = iw_start + pw;
+                            if (ih < self.input_h and iw < self.input_w) {
+                                const in_idx = ch * self.input_h * self.input_w + ih * self.input_w + iw;
+                                const val = input[in_idx];
+                                if (val > max_val) {
+                                    max_val = val;
+                                    max_idx = in_idx;
+                                }
+                            }
+                        }
+                    }
+
+                    const out_idx = ch * self.output_h * self.output_w + oh * self.output_w + ow;
+                    output[out_idx] = max_val;
+                    self.max_indices.slice[out_idx] = @floatFromInt(max_idx);
+                }
+            }
+        }
+    }
+
+    pub fn backward(self: *MaxPool2D, input: []const f32, input_buf: ?*const metal.MTLBuffer, grad_output: []const f32, grad_output_buf: ?*const metal.MTLBuffer, grad_input: []f32, grad_input_buf: ?*const metal.MTLBuffer, activated_output: []const f32, activated_output_buf: ?*const metal.MTLBuffer) !void {
+        _ = input;
+        _ = input_buf;
+        _ = activated_output;
+        _ = activated_output_buf;
+
+        if (grad_output.len != self.output_size) return error.InvalidGradOutputSize;
+        if (grad_input.len != self.input_size) return error.InvalidGradInputSize;
+
+        // Zero out gradient input
+        @memset(grad_input, 0);
+
+        // Use GPU if available
+        if (self.backend.type != .cpu) {
+            try self.backend.maxPool2dBackward(grad_output, grad_output_buf, grad_input, grad_input_buf, self.max_indices.slice, self.max_indices.getMtlBuffer(), self.channels, self.input_h, self.input_w, self.output_h, self.output_w, self.pool_h, self.pool_w, self.stride_h, self.stride_w);
+            return;
+        }
+
+        // CPU implementation: route gradient to max position
+        for (0..self.output_size) |out_idx| {
+            const max_idx: usize = @intFromFloat(self.max_indices.slice[out_idx]);
+            grad_input[max_idx] += grad_output[out_idx];
         }
     }
 };
@@ -975,7 +1256,9 @@ pub const Attention = struct {
     pub fn forward(self: *Attention, input: []const f32, input_buf: ?*const metal.MTLBuffer, output: []f32, output_buf: ?*const metal.MTLBuffer) !void {
         const seq_len = input.len / self.size;
         const scale = 1.0 / @sqrt(@as(f32, @floatFromInt(self.size)));
-        try self.backend.attentionForward(input, input_buf, input, input_buf, input, input_buf, output, output_buf, seq_len, self.size, scale);
+        // PERFORMANCE FIX: Use pre-allocated scores buffer (F2.1)
+        const scores_buffer = try self.ensureAttentionBuffer(seq_len);
+        try self.backend.attentionForward(input, input_buf, input, input_buf, input, input_buf, output, output_buf, scores_buffer, seq_len, self.size, scale);
     }
 
     pub fn backward(self: *Attention, input: []const f32, input_buf: ?*const metal.MTLBuffer, grad_output: []const f32, grad_output_buf: ?*const metal.MTLBuffer, grad_input: []f32, grad_input_buf: ?*const metal.MTLBuffer, activated_output: []const f32, activated_output_buf: ?*const metal.MTLBuffer) !void {

@@ -43,6 +43,7 @@ pub const LRScheduler = union(enum) {
 pub const Optimizer = union(enum) {
     sgd: Sgd,
     adam: Adam,
+    adamw: AdamW,  // FEATURE: AdamW with decoupled weight decay (F3.1)
     rmsprop: Rmsprop,
 
     /// Initialize the optimizer for a layer
@@ -50,6 +51,7 @@ pub const Optimizer = union(enum) {
         switch (self.*) {
             .sgd => |*opt| try opt.init(allocator, lyr),
             .adam => |*opt| try opt.init(allocator, lyr),
+            .adamw => |*opt| try opt.init(allocator, lyr),
             .rmsprop => |*opt| try opt.init(allocator, lyr),
         }
     }
@@ -59,6 +61,7 @@ pub const Optimizer = union(enum) {
         switch (self.*) {
             .sgd => |*opt| opt.deinit(),
             .adam => |*opt| opt.deinit(),
+            .adamw => |*opt| opt.deinit(),
             .rmsprop => |*opt| opt.deinit(),
         }
     }
@@ -68,6 +71,7 @@ pub const Optimizer = union(enum) {
         switch (self.*) {
             .sgd => |*opt| try opt.step(lyr, learning_rate),
             .adam => |*opt| try opt.step(lyr, learning_rate),
+            .adamw => |*opt| try opt.step(lyr, learning_rate),
             .rmsprop => |*opt| try opt.step(lyr, learning_rate),
         }
     }
@@ -77,6 +81,8 @@ pub const Optimizer = union(enum) {
 pub const Sgd = struct {
     /// Momentum term for SGD with momentum
     momentum: f32 = 0.0,
+    /// Weight decay coefficient (L2 regularization)
+    weight_decay: f32 = 0.0,
     /// Velocity for momentum
     velocity_weights: ?tensor.Tensor = null,
     velocity_bias: ?tensor.Tensor = null,
@@ -153,7 +159,7 @@ pub const Sgd = struct {
             try backend.elementWise(.add, temp_b, b.getMtlBuffer(), vb.slice, vb.getMtlBuffer(), b.slice, b.getMtlBuffer());
         } else {
             // Standard SGD without momentum
-            try backend.sgdUpdate(w.slice, w.getMtlBuffer(), gw.slice, gw.getMtlBuffer(), learning_rate, 0.0);
+            try backend.sgdUpdate(w.slice, w.getMtlBuffer(), gw.slice, gw.getMtlBuffer(), learning_rate, self.weight_decay);
             try backend.sgdUpdateBias(b.slice, b.getMtlBuffer(), gb.slice, gb.getMtlBuffer(), learning_rate);
         }
     }
@@ -172,6 +178,8 @@ pub const Adam = struct {
     beta2: f32 = 0.999,
     /// Small value for numerical stability
     eps: f32 = 1e-8,
+    /// L2 weight decay coefficient (NOTE: For true weight decay, use AdamW instead)
+    weight_decay: f32 = 0.0,
     /// Time step
     t: usize = 0,
 
@@ -210,8 +218,93 @@ pub const Adam = struct {
         const gb = lyr.getGradBias();
         const backend = lyr.getBackendFromLayer();
 
+        // Apply L2 weight decay to gradients if specified (standard Adam L2 penalty)
+        if (self.weight_decay > 0.0) {
+            for (w.slice, gw.slice) |weight, *grad| {
+                grad.* += self.weight_decay * weight;
+            }
+            for (b.slice, gb.slice) |bias_val, *grad| {
+                grad.* += self.weight_decay * bias_val;
+            }
+        }
+
         try backend.adamUpdate(w.slice, w.getMtlBuffer(), gw.slice, gw.getMtlBuffer(), self.m_weights.?.slice, self.m_weights.?.getMtlBuffer(), self.v_weights.?.slice, self.v_weights.?.getMtlBuffer(), learning_rate, self.beta1, self.beta2, self.eps, bias_corr1, bias_corr2);
         try backend.adamUpdate(b.slice, b.getMtlBuffer(), gb.slice, gb.getMtlBuffer(), self.m_bias.?.slice, self.m_bias.?.getMtlBuffer(), self.v_bias.?.slice, self.v_bias.?.getMtlBuffer(), learning_rate, self.beta1, self.beta2, self.eps, bias_corr1, bias_corr2);
+    }
+};
+
+/// AdamW optimizer (Adam with decoupled weight decay)
+/// Reference: Loshchilov & Hutter, 2017 - "Decoupled Weight Decay Regularization"
+/// Key difference from Adam: weight decay is applied directly to weights, not to gradients
+pub const AdamW = struct {
+    /// First moment estimate (mean)
+    m_weights: ?tensor.Tensor = null,
+    m_bias: ?tensor.Tensor = null,
+    /// Second moment estimate (uncentered variance)
+    v_weights: ?tensor.Tensor = null,
+    v_bias: ?tensor.Tensor = null,
+    /// Decay rates
+    beta1: f32 = 0.9,
+    beta2: f32 = 0.999,
+    /// Small value for numerical stability
+    eps: f32 = 1e-8,
+    /// Weight decay coefficient (decoupled from learning rate)
+    /// Default: 0.01 (common value from the paper)
+    weight_decay: f32 = 0.01,
+    /// Time step
+    t: usize = 0,
+
+    pub fn init(self: *AdamW, allocator: std.mem.Allocator, lyr: *const layer_module.Layer) !void {
+        const w = lyr.getWeights();
+        const b = lyr.getBias();
+        const backend = lyr.getBackendFromLayer();
+
+        self.m_weights = try tensor.Tensor.init(allocator, w.shape, backend);
+        self.m_bias = try tensor.Tensor.init(allocator, b.shape, backend);
+        self.v_weights = try tensor.Tensor.init(allocator, w.shape, backend);
+        self.v_bias = try tensor.Tensor.init(allocator, b.shape, backend);
+    }
+
+    pub fn deinit(self: *AdamW) void {
+        if (self.m_weights) |*v| v.deinit();
+        if (self.m_bias) |*v| v.deinit();
+        if (self.v_weights) |*v| v.deinit();
+        if (self.v_bias) |*v| v.deinit();
+        self.m_weights = null;
+        self.m_bias = null;
+        self.v_weights = null;
+        self.v_bias = null;
+    }
+
+    /// Main step function
+    /// Implements AdamW update: w = w - lr * (m_hat / sqrt(v_hat) + eps) - lr * wd * w
+    /// where wd is weight_decay (decoupled from learning rate)
+    pub fn step(self: *AdamW, lyr: *layer_module.Layer, learning_rate: f32) !void {
+        self.t += 1;
+        const t_f = @as(f32, @floatFromInt(self.t));
+        const bias_corr1 = 1.0 - std.math.pow(f32, self.beta1, t_f);
+        const bias_corr2 = 1.0 - std.math.pow(f32, self.beta2, t_f);
+
+        const w = lyr.getWeights();
+        const b = lyr.getBias();
+        const gw = lyr.getGradWeights();
+        const gb = lyr.getGradBias();
+        const backend = lyr.getBackendFromLayer();
+
+        // Use adamUpdate for the adaptive learning rate part
+        // Then apply weight decay separately (decoupled)
+        try backend.adamUpdate(w.slice, w.getMtlBuffer(), gw.slice, gw.getMtlBuffer(), self.m_weights.?.slice, self.m_weights.?.getMtlBuffer(), self.v_weights.?.slice, self.v_weights.?.getMtlBuffer(), learning_rate, self.beta1, self.beta2, self.eps, bias_corr1, bias_corr2);
+        try backend.adamUpdate(b.slice, b.getMtlBuffer(), gb.slice, gb.getMtlBuffer(), self.m_bias.?.slice, self.m_bias.?.getMtlBuffer(), self.v_bias.?.slice, self.v_bias.?.getMtlBuffer(), learning_rate, self.beta1, self.beta2, self.eps, bias_corr1, bias_corr2);
+
+        // Apply decoupled weight decay: w = w - lr * weight_decay * w
+        // This is the key difference from L2 regularization in Adam
+        const weight_decay_lr = learning_rate * self.weight_decay;
+        for (w.slice) |*weight| {
+            weight.* = weight.* * (1.0 - weight_decay_lr);
+        }
+        for (b.slice) |*bias| {
+            bias.* = bias.* * (1.0 - weight_decay_lr);
+        }
     }
 };
 
@@ -224,6 +317,8 @@ pub const Rmsprop = struct {
     rho: f32 = 0.9,
     /// Small value for numerical stability
     eps: f32 = 1e-8,
+    /// Weight decay coefficient (L2 regularization)
+    weight_decay: f32 = 0.0,
 
     pub fn init(self: *Rmsprop, allocator: std.mem.Allocator, lyr: *const layer_module.Layer) !void {
         const w = lyr.getWeights();
@@ -248,6 +343,16 @@ pub const Rmsprop = struct {
         const gw = lyr.getGradWeights();
         const gb = lyr.getGradBias();
         const backend = lyr.getBackendFromLayer();
+
+        // Apply L2 weight decay to gradients if specified
+        if (self.weight_decay > 0.0) {
+            for (w.slice, gw.slice) |weight, *grad| {
+                grad.* += self.weight_decay * weight;
+            }
+            for (b.slice, gb.slice) |bias_val, *grad| {
+                grad.* += self.weight_decay * bias_val;
+            }
+        }
 
         try backend.rmspropUpdate(w.slice, w.getMtlBuffer(), gw.slice, gw.getMtlBuffer(), self.g_weights.?.slice, self.g_weights.?.getMtlBuffer(), learning_rate, self.rho, self.eps);
         try backend.rmspropUpdate(b.slice, b.getMtlBuffer(), gb.slice, gb.getMtlBuffer(), self.g_bias.?.slice, self.g_bias.?.getMtlBuffer(), learning_rate, self.rho, self.eps);
