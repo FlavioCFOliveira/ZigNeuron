@@ -172,10 +172,10 @@ pub const CudaBackend = struct {
         transpose_b: bool,
         accumulate: bool,
     ) !void {
-        // Allocate device buffers
-        const size_a = m * k * @sizeOf(f32);
-        const size_b = k * n * @sizeOf(f32);
-        const size_c = m * n * @sizeOf(f32);
+        // Allocate device buffers with overflow checking
+        const size_a = try std.math.mul(usize, try std.math.mul(usize, m, k), @sizeOf(f32));
+        const size_b = try std.math.mul(usize, try std.math.mul(usize, k, n), @sizeOf(f32));
+        const size_c = try std.math.mul(usize, try std.math.mul(usize, m, n), @sizeOf(f32));
 
         var d_a = try self.context.getBuffer(size_a);
         defer self.context.returnBuffer(d_a);
@@ -241,10 +241,10 @@ pub const CudaBackend = struct {
         k: usize,
         accumulate: bool,
     ) !void {
-        
-        const total_size_a = batch_size * k * @sizeOf(f32); // a is batch_size x k
-        const total_size_b = batch_size * n * k * @sizeOf(f32);
-        const total_size_c = batch_size * n * @sizeOf(f32);
+        // Allocate device buffers with overflow checking
+        const total_size_a = try std.math.mul(usize, try std.math.mul(usize, batch_size, k), @sizeOf(f32)); // a is batch_size x k
+        const total_size_b = try std.math.mul(usize, try std.math.mul(usize, try std.math.mul(usize, batch_size, n), k), @sizeOf(f32));
+        const total_size_c = try std.math.mul(usize, try std.math.mul(usize, batch_size, n), @sizeOf(f32));
 
         var d_a = try self.context.getBuffer(total_size_a);
         defer self.context.returnBuffer(d_a);
@@ -698,10 +698,9 @@ pub const CudaBackend = struct {
     // =============================================================================
 
     fn loadBuiltinKernels(self: *CudaBackend) !void {
-        // Load built-in PTX for essential kernels from pre-compiled files
-        // Kernels should be compiled separately and loaded at runtime
+        // Kernels are loaded by CudaContext.loadBuiltinKernels()
+        // This function is called after context initialization
         _ = self;
-        // TODO: Load compiled PTX files from disk or embed them
     }
 
     /// Load a kernel from PTX file
@@ -774,13 +773,6 @@ pub const ActivationType = enum {
     linear,
     gelu,
 };
-
-// =============================================================================
-// PTX Templates for Built-in Kernels
-// =============================================================================
-
-/// PTX header for sm_60+ (Pascal and newer)
-pub const PTX_HEADER = ".version 7.0\\n.target sm_60\\n.address_size 64\\n";
 
 // =============================================================================
 // Tests

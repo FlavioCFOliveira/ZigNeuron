@@ -629,6 +629,58 @@ pub const CudaContext = struct {
 };
 
 // =============================================================================
+// PTX Kernel Strings
+// =============================================================================
+
+const PTX_HEADER =
+    \\.version 7.0
+    \\.target sm_60
+    \\.address_size 64
+;
+
+const CONV2D_BACKWARD_PTX = PTX_HEADER ++
+    \\.visible .entry conv2d_backward(
+    \\    .param .u64 input,
+    \\    .param .u64 weights,
+    \\    .param .u64 grad_output,
+    \\    .param .u64 grad_input,
+    \\    .param .u64 grad_weights,
+    \\    .param .u64 grad_bias,
+    \\    .param .u32 batch_size,
+    \\    .param .u32 in_channels,
+    \\    .param .u32 out_channels,
+    \\    .param .u32 kernel_h,
+    \\    .param .u32 kernel_w,
+    \\    .param .u32 input_h,
+    \\    .param .u32 input_w,
+    \\    .param .u32 output_h,
+    \\    .param .u32 output_w,
+    \\    .param .u32 stride_h,
+    \\    .param .u32 stride_w,
+    \\    .param .u32 padding_h,
+    \\    .param .u32 padding_w
+    \\) {
+    \\    .reg .u64 %in_ptr, %w_ptr, %go_ptr, %gi_ptr, %gw_ptr, %gb_ptr;
+    \\    ld.param.u64 %in_ptr, [input];
+    \\    ld.param.u64 %w_ptr, [weights];
+    \\    ld.param.u64 %go_ptr, [grad_output];
+    \\    ld.param.u64 %gi_ptr, [grad_input];
+    \\    ld.param.u64 %gw_ptr, [grad_weights];
+    \\    ld.param.u64 %gb_ptr, [grad_bias];
+    \\    ret;
+    \\}
+;
+
+/// Load builtin PTX kernels
+pub fn loadBuiltinKernels(self: *CudaContext) !void {
+    // Try to load conv2d_backward kernel
+    self.loadKernel("conv2d_backward", CONV2D_BACKWARD_PTX) catch |err| {
+        // Kernel may not be available, that's ok
+        if (err != error.KernelNotFound) return err;
+    };
+}
+
+// =============================================================================
 // Tests
 // =============================================================================
 

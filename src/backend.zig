@@ -8,6 +8,7 @@ const loss = @import("loss.zig");
 const metal = @import("metal.zig");
 const metal_context = @import("metal_context.zig");
 const optimization = @import("optimization.zig");
+const cuda_context = @import("cuda_context.zig");
 
 /// Available GPU backends
 pub const GpuBackend = enum {
@@ -15,6 +16,8 @@ pub const GpuBackend = enum {
     metal,
     /// NVIDIA GPUs - CUDA compute
     cuda,
+    /// CPU fallback
+    cpu,
 };
 
 /// Backend selection - GPU preferred, CPU fallback
@@ -22,6 +25,7 @@ pub const GpuBackend = enum {
 pub const Backend = struct {
     type: BackendType,
     metal_ctx: ?*metal_context.MetalContext = null,
+    cuda_ctx: ?*cuda_context.CudaContext = null,
 
     pub const BackendType = union(enum) {
         gpu: GpuBackend,
@@ -466,7 +470,8 @@ pub const Backend = struct {
         switch (self.type) {
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalConv2dBackward(input, input_buf, weights, weights_buf, grad_output, grad_output_buf, grad_input, grad_input_buf, grad_weights, grad_weights_buf, grad_bias, grad_bias_buf, in_channels, out_channels, kernel_h, kernel_w, input_h, input_w, output_h, output_w, stride_h, stride_w, padding_h, padding_w),
-                else => return error.CudaNotYetImplemented,
+                .cuda => try self.cudaConv2dBackward(input, input_buf, weights, weights_buf, grad_output, grad_output_buf, grad_input, grad_input_buf, grad_weights, grad_weights_buf, grad_bias, grad_bias_buf, in_channels, out_channels, kernel_h, kernel_w, input_h, input_w, output_h, output_w, stride_h, stride_w, padding_h, padding_w),
+                .cpu => try self.cpuConv2dBackward(input, weights, grad_output, grad_input, grad_weights, grad_bias, in_channels, out_channels, kernel_h, kernel_w, input_h, input_w, output_h, output_w, stride_h, stride_w, padding_h, padding_w),
             },
             .cpu => try self.cpuConv2dBackward(input, weights, grad_output, grad_input, grad_weights, grad_bias, in_channels, out_channels, kernel_h, kernel_w, input_h, input_w, output_h, output_w, stride_h, stride_w, padding_h, padding_w),
         }
@@ -2195,6 +2200,101 @@ pub const Backend = struct {
             cb.commit();
             cb.waitUntilCompleted();
         }
+    }
+
+    /// CUDA 2D Convolution backward pass
+    fn cudaConv2dBackward(self: Backend, input: []const f32, input_buf: ?*const metal.MTLBuffer, weights: []const f32, weights_buf: ?*const metal.MTLBuffer, grad_output: []const f32, grad_output_buf: ?*const metal.MTLBuffer, grad_input: []f32, grad_input_buf: ?*const metal.MTLBuffer, grad_weights: []f32, grad_weights_buf: ?*const metal.MTLBuffer, grad_bias: []f32, grad_bias_buf: ?*const metal.MTLBuffer, in_channels: usize, out_channels: usize, kernel_h: usize, kernel_w: usize, input_h: usize, input_w: usize, output_h: usize, output_w: usize, stride_h: usize, stride_w: usize, padding_h: usize, padding_w: usize) !void {
+        _ = input_buf;
+        _ = weights_buf;
+        _ = grad_output_buf;
+        _ = grad_input_buf;
+        _ = grad_weights_buf;
+        _ = grad_bias_buf;
+
+        const ctx = self.cuda_ctx orelse return error.NotAvailable;
+
+        const batch_size = input.len / (in_channels * input_h * input_w);
+
+        // Allocate device buffers with overflow checking
+        const input_size = try std.math.mul(usize, try std.math.mul(usize, try std.math.mul(usize, batch_size, in_channels), input_h), input_w);
+        const weights_size = try std.math.mul(usize, try std.math.mul(usize, try std.math.mul(usize, out_channels, in_channels), kernel_h), kernel_w);
+        const output_size = try std.math.mul(usize, try std.math.mul(usize, try std.math.mul(usize, batch_size, out_channels), output_h), output_w);
+        const grad_input_size = input_size;
+        const grad_weights_size = weights_size;
+        const grad_bias_size = out_channels;
+
+        var d_input = try ctx.allocBuffer(input_size * @sizeOf(f32));
+        defer ctx.freeBuffer(&d_input);
+        var d_weights = try ctx.allocBuffer(weights_size * @sizeOf(f32));
+        defer ctx.freeBuffer(&d_weights);
+        var d_grad_output = try ctx.allocBuffer(output_size * @sizeOf(f32));
+        defer ctx.freeBuffer(&d_grad_output);
+        var d_grad_input = try ctx.allocBuffer(grad_input_size * @sizeOf(f32));
+        defer ctx.freeBuffer(&d_grad_input);
+        var d_grad_weights = try ctx.allocBuffer(grad_weights_size * @sizeOf(f32));
+        defer ctx.freeBuffer(&d_grad_weights);
+        var d_grad_bias = try ctx.allocBuffer(grad_bias_size * @sizeOf(f32));
+        defer ctx.freeBuffer(&d_grad_bias);
+
+        // Upload data to device
+        try ctx.upload(d_input.ptr, std.mem.sliceAsBytes(input));
+        try ctx.upload(d_weights.ptr, std.mem.sliceAsBytes(weights));
+        try ctx.upload(d_grad_output.ptr, std.mem.sliceAsBytes(grad_output));
+        try ctx.memset(d_grad_input.ptr, 0, @intCast(grad_input_size * @sizeOf(f32)));
+        try ctx.memset(d_grad_weights.ptr, 0, @intCast(grad_weights_size * @sizeOf(f32)));
+        try ctx.memset(d_grad_bias.ptr, 0, @intCast(grad_bias_size * @sizeOf(f32)));
+
+        // Launch kernel
+        const grid_dim = [3]u32{
+            @intCast((output_w + 7) / 8),
+            @intCast((output_h + 7) / 8),
+            @intCast(batch_size * out_channels),
+        };
+        const block_dim = [3]u32{ 8, 8, 1 };
+
+        var batch_size_var = batch_size;
+        var in_channels_var = in_channels;
+        var out_channels_var = out_channels;
+        var kernel_h_var = kernel_h;
+        var kernel_w_var = kernel_w;
+        var input_h_var = input_h;
+        var input_w_var = input_w;
+        var output_h_var = output_h;
+        var output_w_var = output_w;
+        var stride_h_var = stride_h;
+        var stride_w_var = stride_w;
+        var padding_h_var = padding_h;
+        var padding_w_var = padding_w;
+
+        const args = &[_]?*anyopaque{
+            @ptrCast(&d_input.ptr),
+            @ptrCast(&d_weights.ptr),
+            @ptrCast(&d_grad_output.ptr),
+            @ptrCast(&d_grad_input.ptr),
+            @ptrCast(&d_grad_weights.ptr),
+            @ptrCast(&d_grad_bias.ptr),
+            @ptrCast(&batch_size_var),
+            @ptrCast(&in_channels_var),
+            @ptrCast(&out_channels_var),
+            @ptrCast(&kernel_h_var),
+            @ptrCast(&kernel_w_var),
+            @ptrCast(&input_h_var),
+            @ptrCast(&input_w_var),
+            @ptrCast(&output_h_var),
+            @ptrCast(&output_w_var),
+            @ptrCast(&stride_h_var),
+            @ptrCast(&stride_w_var),
+            @ptrCast(&padding_h_var),
+            @ptrCast(&padding_w_var),
+        };
+
+        try ctx.launchKernel("conv2d_backward", grid_dim, block_dim, 0, args);
+        try ctx.synchronize();
+
+        // Download results
+        try ctx.download(std.mem.sliceAsBytes(grad_input), d_grad_input.ptr);
+        try ctx.download(std.mem.sliceAsBytes(grad_weights), d_grad_weights.ptr);
+        try ctx.download(std.mem.sliceAsBytes(grad_bias), d_grad_bias.ptr);
     }
 
     fn metalDropoutForward(self: Backend, input: []const f32, input_buf: ?*const metal.MTLBuffer, output: []f32, output_buf: ?*const metal.MTLBuffer, mask: []f32, mask_buf: ?*const metal.MTLBuffer, rate: f32, scaling_factor: f32, seed: u64) !void {
