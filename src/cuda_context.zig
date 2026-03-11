@@ -3,8 +3,7 @@
 /// Follows the same pattern as MetalContext for consistency
 const std = @import("std");
 const cuda_driver = @import("cuda_driver.zig");
-
-const CUresult = cuda_driver.CUresult;
+const cuda_kernels = @import("cuda_kernels.zig");
 const CUdevice = cuda_driver.CUdevice;
 const CUcontext = cuda_driver.CUcontext;
 const CUstream = cuda_driver.CUstream;
@@ -197,8 +196,9 @@ pub const CudaContext = struct {
     /// Cleanup CUDA context
     pub fn deinit(self: *CudaContext) void {
         // Free temporary buffers
-        for (self.temp_buffers.items) |*buf| {
-            buf.deinit(self.driver);
+        for (self.temp_buffers.items) |buf| {
+            var b = buf;
+            b.deinit(self.driver);
         }
         self.temp_buffers.deinit(self.allocator);
 
@@ -219,7 +219,7 @@ pub const CudaContext = struct {
         }
 
         // Cleanup modules
-        for (self.modules.items) |*module| {
+        for (self.modules.items) |module| {
             _ = self.driver.moduleUnload.?(module);
         }
         self.modules.deinit(self.allocator);
@@ -676,6 +676,19 @@ pub fn loadBuiltinKernels(self: *CudaContext) !void {
     // Try to load conv2d_backward kernel
     self.loadKernel("conv2d_backward", CONV2D_BACKWARD_PTX) catch |err| {
         // Kernel may not be available, that's ok
+        if (err != error.KernelNotFound) return err;
+    };
+    // Load loss backward kernels
+    self.loadKernel("mse_backward", cuda_kernels.MSE_BACKWARD_PTX) catch |err| {
+        if (err != error.KernelNotFound) return err;
+    };
+    self.loadKernel("cross_entropy_backward", cuda_kernels.CROSS_ENTROPY_BACKWARD_PTX) catch |err| {
+        if (err != error.KernelNotFound) return err;
+    };
+    self.loadKernel("binary_cross_entropy_backward", cuda_kernels.BINARY_CROSS_ENTROPY_BACKWARD_PTX) catch |err| {
+        if (err != error.KernelNotFound) return err;
+    };
+    self.loadKernel("kl_divergence_backward", cuda_kernels.KL_DIVERGENCE_BACKWARD_PTX) catch |err| {
         if (err != error.KernelNotFound) return err;
     };
 }

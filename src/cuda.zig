@@ -22,6 +22,45 @@ pub const CudaError = cuda_driver.CudaError;
 pub const CUdevice = cuda_driver.CUdevice;
 
 // =============================================================================
+// Device Buffer Wrapper
+// =============================================================================
+
+pub const DeviceBuffer = struct {
+    ptr: CUdeviceptr,
+    size: usize,
+    context: *CudaContext,
+
+    pub fn deinit(self: *DeviceBuffer) void {
+        const buf = CudaContext.DeviceBuffer{
+            .ptr = self.ptr,
+            .size = self.size,
+            .pool_index = null,
+        };
+        self.context.returnBuffer(buf);
+    }
+};
+
+// =============================================================================
+// Enums
+// =============================================================================
+
+pub const ElementWiseOp = enum {
+    add,
+    sub,
+    mul,
+    div,
+};
+
+pub const MapOp = enum {
+    exp,
+    log,
+    sqrt,
+    abs,
+    square,
+    inv,
+};
+
+// =============================================================================
 // CudaBackend Structure
 // =============================================================================
 
@@ -203,10 +242,10 @@ pub const CudaBackend = struct {
         const config = self.context.getMatrixConfig(m, n);
 
         // Launch kernel
-        const m_u32: u32 = @intCast(m);
-        const n_u32: u32 = @intCast(n);
-        const k_u32: u32 = @intCast(k);
-        const acc_u32: u32 = @intFromBool(accumulate);
+        var m_u32: u32 = @intCast(m);
+        var n_u32: u32 = @intCast(n);
+        var k_u32: u32 = @intCast(k);
+        var acc_u32: u32 = @intFromBool(accumulate);
 
         const args = [_]?*anyopaque{
             @ptrCast(&d_a.ptr),
@@ -259,10 +298,10 @@ pub const CudaBackend = struct {
             try self.context.upload(d_c.ptr, std.mem.sliceAsBytes(c));
         }
 
-        const bs_u32: u32 = @intCast(batch_size);
-        const n_u32: u32 = @intCast(n);
-        const k_u32: u32 = @intCast(k);
-        const acc_u32: u32 = @intFromBool(accumulate);
+        var bs_u32: u32 = @intCast(batch_size);
+        var n_u32: u32 = @intCast(n);
+        var k_u32: u32 = @intCast(k);
+        var acc_u32: u32 = @intFromBool(accumulate);
 
         const args = [_]?*anyopaque{
             @ptrCast(&d_a.ptr),
@@ -314,7 +353,7 @@ pub const CudaBackend = struct {
             .div => "ew_div",
         };
 
-        const len_u32: u32 = @intCast(a.len);
+        var len_u32: u32 = @intCast(a.len);
         const args = [_]?*anyopaque{
             @ptrCast(&d_a.ptr),
             @ptrCast(&d_b.ptr),
@@ -346,7 +385,7 @@ pub const CudaBackend = struct {
 
         try self.context.upload(d_a.ptr, std.mem.sliceAsBytes(a));
 
-        const len_u32: u32 = @intCast(a.len);
+        var len_u32: u32 = @intCast(a.len);
         const args = [_]?*anyopaque{
             @ptrCast(&d_a.ptr),
             @ptrCast(&scalar),
@@ -392,7 +431,7 @@ pub const CudaBackend = struct {
             .inv => "map_inv",
         };
 
-        const len_u32: u32 = @intCast(input.len);
+        var len_u32: u32 = @intCast(input.len);
         const args = [_]?*anyopaque{
             @ptrCast(&d_input.ptr),
             @ptrCast(&d_output.ptr),
@@ -457,8 +496,8 @@ pub const CudaBackend = struct {
 
         try self.context.upload(d_input.ptr, std.mem.sliceAsBytes(input));
 
-        const batch_u32: u32 = @intCast(batch_size);
-        const feat_u32: u32 = @intCast(features);
+        var batch_u32: u32 = @intCast(batch_size);
+        var feat_u32: u32 = @intCast(features);
         const args = [_]?*anyopaque{
             @ptrCast(&d_input.ptr),
             @ptrCast(&d_output.ptr),
@@ -489,7 +528,7 @@ pub const CudaBackend = struct {
 
         try self.context.upload(d_input.ptr, std.mem.sliceAsBytes(input));
 
-        const len_u32: u32 = @intCast(input.len);
+        var len_u32: u32 = @intCast(input.len);
         const args = [_]?*anyopaque{
             @ptrCast(&d_input.ptr),
             @ptrCast(&d_output.ptr),
@@ -522,7 +561,7 @@ pub const CudaBackend = struct {
         try self.context.upload(d_output.ptr, std.mem.sliceAsBytes(output));
         try self.context.upload(d_grad_output.ptr, std.mem.sliceAsBytes(grad_output));
 
-        const len_u32: u32 = @intCast(output.len);
+        var len_u32: u32 = @intCast(output.len);
         const args = [_]?*anyopaque{
             @ptrCast(&d_output.ptr),
             @ptrCast(&d_grad_output.ptr),
@@ -570,7 +609,7 @@ pub const CudaBackend = struct {
         try self.context.upload(d_output.ptr, std.mem.sliceAsBytes(output));
         try self.context.upload(d_target.ptr, std.mem.sliceAsBytes(target));
 
-        const len_u32: u32 = @intCast(output.len);
+        var len_u32: u32 = @intCast(output.len);
         const args = [_]?*anyopaque{
             @ptrCast(&d_output.ptr),
             @ptrCast(&d_target.ptr),
@@ -613,12 +652,14 @@ pub const CudaBackend = struct {
         try self.context.upload(d_weights.ptr, std.mem.sliceAsBytes(weights));
         try self.context.upload(d_gradients.ptr, std.mem.sliceAsBytes(gradients));
 
-        const len_u32: u32 = @intCast(weights.len);
+        var len_u32: u32 = @intCast(weights.len);
+        var lr = learning_rate;
+        var wd = weight_decay;
         const args = [_]?*anyopaque{
             @ptrCast(&d_weights.ptr),
             @ptrCast(&d_gradients.ptr),
-            @ptrCast(&learning_rate),
-            @ptrCast(&weight_decay),
+            @ptrCast(&lr),
+            @ptrCast(&wd),
             @ptrCast(&len_u32),
         };
 
@@ -664,7 +705,7 @@ pub const CudaBackend = struct {
         try self.context.upload(d_m.ptr, std.mem.sliceAsBytes(m));
         try self.context.upload(d_v.ptr, std.mem.sliceAsBytes(v));
 
-        const len_u32: u32 = @intCast(weights.len);
+        var len_u32: u32 = @intCast(weights.len);
         const args = [_]?*anyopaque{
             @ptrCast(&d_weights.ptr),
             @ptrCast(&d_gradients.ptr),
@@ -693,102 +734,319 @@ pub const CudaBackend = struct {
         try self.context.download(std.mem.sliceAsBytes(v), d_v.ptr);
     }
 
-    // =============================================================================
-    // Internal: Kernel Loading
-    // =============================================================================
+    /// RMSprop update
+    pub fn rmspropUpdate(
+        self: *CudaBackend,
+        weights: []f32,
+        gradients: []const f32,
+        g_avg: []f32,
+        lr: f32,
+        rho: f32,
+        eps: f32,
+    ) !void {
+        const size = weights.len * @sizeOf(f32);
 
-    fn loadBuiltinKernels(self: *CudaBackend) !void {
-        // Kernels are loaded by CudaContext.loadBuiltinKernels()
-        // This function is called after context initialization
-        _ = self;
-    }
+        var d_weights = try self.context.getBuffer(size);
+        defer self.context.returnBuffer(d_weights);
+        var d_gradients = try self.context.getBuffer(size);
+        defer self.context.returnBuffer(d_gradients);
+        var d_g_avg = try self.context.getBuffer(size);
+        defer self.context.returnBuffer(d_g_avg);
 
-    /// Load a kernel from PTX file
-    pub fn loadKernelFromFile(self: *CudaBackend, name: []const u8, path: []const u8) !void {
-        const ptx = try std.fs.cwd().readFileAlloc(self.allocator, path, 10 * 1024 * 1024);
-        errdefer self.allocator.free(ptx);
+        try self.context.upload(d_weights.ptr, std.mem.sliceAsBytes(weights));
+        try self.context.upload(d_gradients.ptr, std.mem.sliceAsBytes(gradients));
+        try self.context.upload(d_g_avg.ptr, std.mem.sliceAsBytes(g_avg));
 
-        try self.context.loadKernel(name, ptx);
-
-        const name_copy = try self.allocator.dupe(u8, name);
-        try self.kernel_ptx.put(name_copy, ptx);
-    }
-
-    /// Load a kernel from PTX string
-    pub fn loadKernelFromString(self: *CudaBackend, name: []const u8, ptx: []const u8) !void {
-        const ptx_copy = try self.allocator.dupe(u8, ptx);
-        errdefer self.allocator.free(ptx_copy);
-
-        try self.context.loadKernel(name, ptx_copy);
-
-        const name_copy = try self.allocator.dupe(u8, name);
-        try self.kernel_ptx.put(name_copy, ptx_copy);
-    }
-};
-
-// =============================================================================
-// Device Buffer Wrapper
-// =============================================================================
-
-pub const DeviceBuffer = struct {
-    ptr: CUdeviceptr,
-    size: usize,
-    context: *CudaContext,
-
-    pub fn deinit(self: *DeviceBuffer) void {
-        const buf = CudaContext.DeviceBuffer{
-            .ptr = self.ptr,
-            .size = self.size,
-            .pool_index = null,
+        var len_u32: u32 = @intCast(weights.len);
+        const args = [_]?*anyopaque{
+            @ptrCast(&d_weights.ptr),
+            @ptrCast(&d_gradients.ptr),
+            @ptrCast(&d_g_avg.ptr),
+            @ptrCast(&lr),
+            @ptrCast(&rho),
+            @ptrCast(&eps),
+            @ptrCast(&len_u32),
         };
-        self.context.returnBuffer(buf);
-    }
-};
 
-// =============================================================================
-// Enums
-// =============================================================================
+        const config = self.context.getElementWiseConfig(weights.len);
 
-pub const ElementWiseOp = enum {
-    add,
-    sub,
-    mul,
-    div,
-};
+        try self.context.launchKernel(
+            "rmsprop_update",
+            .{ config.grid, 1, 1 },
+            .{ config.block, 1, 1 },
+            0,
+            &args,
+        );
 
-pub const MapOp = enum {
-    exp,
-    log,
-    sqrt,
-    abs,
-    square,
-    inv,
-};
-
-pub const ActivationType = enum {
-    relu,
-    sigmoid,
-    tanh,
-    softmax,
-    linear,
-    gelu,
-};
-
-// =============================================================================
-// Tests
-// =============================================================================
-
-test "CUDA availability" {
-    // CUDA should not be available on macOS
-    if (@import("builtin").os.tag == .macos) {
-        try std.testing.expect(!CudaBackend.isAvailable());
-        return;
+        try self.context.download(std.mem.sliceAsBytes(weights), d_weights.ptr);
+        try self.context.download(std.mem.sliceAsBytes(g_avg), d_g_avg.ptr);
     }
 
-    // On Linux/Windows, may or may not be available depending on hardware
-    _ = CudaBackend.isAvailable();
-}
+    // =============================================================================
+    // Layer Normalization
+    // =============================================================================
 
+    /// Layer Normalization forward pass
+    pub fn layerNormForward(
+        self: *CudaBackend,
+        input: []const f32,
+        output: []f32,
+        gamma: []const f32,
+        beta: []const f32,
+        epsilon: f32,
+        batch_size: usize,
+        features: usize,
+    ) !void {
+        const input_size = try std.math.mul(usize, batch_size, features);
+
+        var d_input = try self.context.getBuffer(input_size * @sizeOf(f32));
+        defer self.context.returnBuffer(d_input);
+        var d_output = try self.context.getBuffer(output.len * @sizeOf(f32));
+        defer self.context.returnBuffer(d_output);
+        var d_gamma = try self.context.getBuffer(gamma.len * @sizeOf(f32));
+        defer self.context.returnBuffer(d_gamma);
+        var d_beta = try self.context.getBuffer(beta.len * @sizeOf(f32));
+        defer self.context.returnBuffer(d_beta);
+
+        try self.context.upload(d_input.ptr, std.mem.sliceAsBytes(input));
+        try self.context.upload(d_gamma.ptr, std.mem.sliceAsBytes(gamma));
+        try self.context.upload(d_beta.ptr, std.mem.sliceAsBytes(beta));
+
+        const total_elements = input_size;
+        const block_size: u32 = 256;
+        const grid_size: u32 = @intCast((total_elements + block_size - 1) / block_size);
+
+        var batch_size_i32 = @as(i32, @intCast(batch_size));
+        var features_i32 = @as(i32, @intCast(features));
+        var epsilon_f32 = epsilon;
+
+        const args = [_]?*anyopaque{
+            @ptrCast(&d_input.ptr),
+            @ptrCast(&d_output.ptr),
+            @ptrCast(&d_gamma.ptr),
+            @ptrCast(&d_beta.ptr),
+            @ptrCast(&epsilon_f32),
+            @ptrCast(&batch_size_i32),
+            @ptrCast(&features_i32),
+        };
+
+        try self.context.launchKernel(
+            "layernorm_forward",
+            .{ grid_size, 1, 1 },
+            .{ block_size, 1, 1 },
+            0,
+            &args,
+        );
+
+        try self.context.download(std.mem.sliceAsBytes(output), d_output.ptr);
+    }
+
+    /// Layer Normalization backward pass
+    pub fn layerNormBackward(
+        self: *CudaBackend,
+        input: []const f32,
+        grad_output: []const f32,
+        grad_input: []f32,
+        gamma: []const f32,
+        grad_gamma: []f32,
+        grad_beta: []f32,
+        epsilon: f32,
+        batch_size: usize,
+        features: usize,
+    ) !void {
+        const input_size = try std.math.mul(usize, batch_size, features);
+
+        var d_input = try self.context.getBuffer(input_size * @sizeOf(f32));
+        defer self.context.returnBuffer(d_input);
+        var d_grad_output = try self.context.getBuffer(grad_output.len * @sizeOf(f32));
+        defer self.context.returnBuffer(d_grad_output);
+        var d_grad_input = try self.context.getBuffer(grad_input.len * @sizeOf(f32));
+        defer self.context.returnBuffer(d_grad_input);
+        var d_gamma = try self.context.getBuffer(gamma.len * @sizeOf(f32));
+        defer self.context.returnBuffer(d_gamma);
+        var d_grad_gamma = try self.context.getBuffer(grad_gamma.len * @sizeOf(f32));
+        defer self.context.returnBuffer(d_grad_gamma);
+        var d_grad_beta = try self.context.getBuffer(grad_beta.len * @sizeOf(f32));
+        defer self.context.returnBuffer(d_grad_beta);
+
+        try self.context.upload(d_input.ptr, std.mem.sliceAsBytes(input));
+        try self.context.upload(d_grad_output.ptr, std.mem.sliceAsBytes(grad_output));
+        try self.context.upload(d_gamma.ptr, std.mem.sliceAsBytes(gamma));
+        try self.context.memset(d_grad_gamma.ptr, 0, @intCast(grad_gamma.len * @sizeOf(f32)));
+        try self.context.memset(d_grad_beta.ptr, 0, @intCast(grad_beta.len * @sizeOf(f32)));
+
+        const total_elements = input_size;
+        const block_size: u32 = 256;
+        const grid_size: u32 = @intCast((total_elements + block_size - 1) / block_size);
+
+        var batch_size_i32 = @as(i32, @intCast(batch_size));
+        var features_i32 = @as(i32, @intCast(features));
+        var epsilon_f32 = epsilon;
+
+        const args = [_]?*anyopaque{
+            @ptrCast(&d_input.ptr),
+            @ptrCast(&d_grad_output.ptr),
+            @ptrCast(&d_grad_input.ptr),
+            @ptrCast(&d_gamma.ptr),
+            @ptrCast(&d_grad_gamma.ptr),
+            @ptrCast(&d_grad_beta.ptr),
+            @ptrCast(&epsilon_f32),
+            @ptrCast(&batch_size_i32),
+            @ptrCast(&features_i32),
+        };
+
+        try self.context.launchKernel(
+            "layernorm_backward",
+            .{ grid_size, 1, 1 },
+            .{ block_size, 1, 1 },
+            0,
+            &args,
+        );
+
+        try self.context.download(std.mem.sliceAsBytes(grad_input), d_grad_input.ptr);
+        try self.context.download(std.mem.sliceAsBytes(grad_gamma), d_grad_gamma.ptr);
+        try self.context.download(std.mem.sliceAsBytes(grad_beta), d_grad_beta.ptr);
+    }
+
+    // =============================================================================
+    // Batch Normalization
+    // =============================================================================
+
+    /// Batch Normalization forward pass (training mode)
+    pub fn batchNormForwardTraining(
+        self: *CudaBackend,
+        input: []const f32,
+        output: []f32,
+        gamma: []const f32,
+        beta: []const f32,
+        epsilon: f32,
+        momentum: f32,
+        running_mean: []f32,
+        running_var: []f32,
+        batch_size: usize,
+        num_features: usize,
+    ) !void {
+        const input_size = try std.math.mul(usize, batch_size, num_features);
+
+        var d_input = try self.context.getBuffer(input_size * @sizeOf(f32));
+        defer self.context.returnBuffer(d_input);
+        var d_output = try self.context.getBuffer(output.len * @sizeOf(f32));
+        defer self.context.returnBuffer(d_output);
+        var d_gamma = try self.context.getBuffer(gamma.len * @sizeOf(f32));
+        defer self.context.returnBuffer(d_gamma);
+        var d_beta = try self.context.getBuffer(beta.len * @sizeOf(f32));
+        defer self.context.returnBuffer(d_beta);
+        var d_running_mean = try self.context.getBuffer(running_mean.len * @sizeOf(f32));
+        defer self.context.returnBuffer(d_running_mean);
+        var d_running_var = try self.context.getBuffer(running_var.len * @sizeOf(f32));
+        defer self.context.returnBuffer(d_running_var);
+
+        try self.context.upload(d_input.ptr, std.mem.sliceAsBytes(input));
+        try self.context.upload(d_gamma.ptr, std.mem.sliceAsBytes(gamma));
+        try self.context.upload(d_beta.ptr, std.mem.sliceAsBytes(beta));
+        try self.context.upload(d_running_mean.ptr, std.mem.sliceAsBytes(running_mean));
+        try self.context.upload(d_running_var.ptr, std.mem.sliceAsBytes(running_var));
+
+        const total_elements = input_size;
+        const block_size: u32 = 256;
+        const grid_size: u32 = @intCast((total_elements + block_size - 1) / block_size);
+
+        var batch_size_i32 = @as(i32, @intCast(batch_size));
+        var num_features_i32 = @as(i32, @intCast(num_features));
+        var epsilon_f32 = epsilon;
+        var momentum_f32 = momentum;
+
+        const args = [_]?*anyopaque{
+            @ptrCast(&d_input.ptr),
+            @ptrCast(&d_output.ptr),
+            @ptrCast(&d_gamma.ptr),
+            @ptrCast(&d_beta.ptr),
+            @ptrCast(&epsilon_f32),
+            @ptrCast(&momentum_f32),
+            @ptrCast(&d_running_mean.ptr),
+            @ptrCast(&d_running_var.ptr),
+            @ptrCast(&batch_size_i32),
+            @ptrCast(&num_features_i32),
+        };
+
+        try self.context.launchKernel(
+            "batchnorm_forward_training",
+            .{ grid_size, 1, 1 },
+            .{ block_size, 1, 1 },
+            0,
+            &args,
+        );
+
+        try self.context.download(std.mem.sliceAsBytes(output), d_output.ptr);
+        try self.context.download(std.mem.sliceAsBytes(running_mean), d_running_mean.ptr);
+        try self.context.download(std.mem.sliceAsBytes(running_var), d_running_var.ptr);
+    }
+
+    /// Batch Normalization forward pass (inference mode)
+    pub fn batchNormForwardInference(
+        self: *CudaBackend,
+        input: []const f32,
+        output: []f32,
+        gamma: []const f32,
+        beta: []const f32,
+        epsilon: f32,
+        running_mean: []const f32,
+        running_var: []const f32,
+        batch_size: usize,
+        num_features: usize,
+    ) !void {
+        const input_size = try std.math.mul(usize, batch_size, num_features);
+
+        var d_input = try self.context.getBuffer(input_size * @sizeOf(f32));
+        defer self.context.returnBuffer(d_input);
+        var d_output = try self.context.getBuffer(output.len * @sizeOf(f32));
+        defer self.context.returnBuffer(d_output);
+        var d_gamma = try self.context.getBuffer(gamma.len * @sizeOf(f32));
+        defer self.context.returnBuffer(d_gamma);
+        var d_beta = try self.context.getBuffer(beta.len * @sizeOf(f32));
+        defer self.context.returnBuffer(d_beta);
+        var d_running_mean = try self.context.getBuffer(running_mean.len * @sizeOf(f32));
+        defer self.context.returnBuffer(d_running_mean);
+        var d_running_var = try self.context.getBuffer(running_var.len * @sizeOf(f32));
+        defer self.context.returnBuffer(d_running_var);
+
+        try self.context.upload(d_input.ptr, std.mem.sliceAsBytes(input));
+        try self.context.upload(d_gamma.ptr, std.mem.sliceAsBytes(gamma));
+        try self.context.upload(d_beta.ptr, std.mem.sliceAsBytes(beta));
+        try self.context.upload(d_running_mean.ptr, std.mem.sliceAsBytes(running_mean));
+        try self.context.upload(d_running_var.ptr, std.mem.sliceAsBytes(running_var));
+
+        const total_elements = input_size;
+        const block_size: u32 = 256;
+        const grid_size: u32 = @intCast((total_elements + block_size - 1) / block_size);
+
+        var batch_size_i32 = @as(i32, @intCast(batch_size));
+        var num_features_i32 = @as(i32, @intCast(num_features));
+        var epsilon_f32 = epsilon;
+
+        const args = [_]?*anyopaque{
+            @ptrCast(&d_input.ptr),
+            @ptrCast(&d_output.ptr),
+            @ptrCast(&d_gamma.ptr),
+            @ptrCast(&d_beta.ptr),
+            @ptrCast(&epsilon_f32),
+            @ptrCast(&d_running_mean.ptr),
+            @ptrCast(&d_running_var.ptr),
+            @ptrCast(&batch_size_i32),
+            @ptrCast(&num_features_i32),
+        };
+
+        try self.context.launchKernel(
+            "batchnorm_forward_inference",
+            .{ grid_size, 1, 1 },
+            .{ block_size, 1, 1 },
+            0,
+            &args,
+        );
+
+        try self.context.download(std.mem.sliceAsBytes(output), d_output.ptr);
+    }
+};
 test "CUDA backend initialization" {
     if (@import("builtin").os.tag == .macos) {
         return error.SkipZigTest;

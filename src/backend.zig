@@ -382,7 +382,8 @@ pub const Backend = struct {
         switch (self.type) {
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalSgdUpdate(weights, weights_buf, gradients, gradients_buf, learning_rate, weight_decay),
-                else => return error.CudaNotYetImplemented,
+                .cuda => try self.cudaSgdUpdate(weights, weights_buf, gradients, gradients_buf, learning_rate, weight_decay),
+                .cpu => cpuSgdUpdate(weights, gradients, learning_rate, weight_decay),
             },
             .cpu => cpuSgdUpdate(weights, gradients, learning_rate, weight_decay),
         }
@@ -393,7 +394,8 @@ pub const Backend = struct {
         switch (self.type) {
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalAdamUpdate(weights, weights_buf, gradients, gradients_buf, m, m_buf, v, v_buf, lr, beta1, beta2, eps, bias_corr1, bias_corr2),
-                else => return error.CudaNotYetImplemented,
+                .cuda => try self.cudaAdamUpdate(weights, weights_buf, gradients, gradients_buf, m, m_buf, v, v_buf, lr, beta1, beta2, eps, bias_corr1, bias_corr2),
+                .cpu => try self.cpuAdamUpdate(weights, gradients, m, v, lr, beta1, beta2, eps, bias_corr1, bias_corr2),
             },
             .cpu => try self.cpuAdamUpdate(weights, gradients, m, v, lr, beta1, beta2, eps, bias_corr1, bias_corr2),
         }
@@ -404,7 +406,8 @@ pub const Backend = struct {
         switch (self.type) {
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalRmspropUpdate(weights, weights_buf, gradients, gradients_buf, g_avg, g_avg_buf, lr, rho, eps),
-                else => return error.CudaNotYetImplemented,
+                .cuda => try self.cudaRmspropUpdate(weights, weights_buf, gradients, gradients_buf, g_avg, g_avg_buf, lr, rho, eps),
+                .cpu => try self.cpuRmspropUpdate(weights, gradients, g_avg, lr, rho, eps),
             },
             .cpu => try self.cpuRmspropUpdate(weights, gradients, g_avg, lr, rho, eps),
         }
@@ -2600,6 +2603,36 @@ pub const Backend = struct {
                 }
             },
         }
+    }
+
+    /// CUDA SGD optimizer update
+    fn cudaSgdUpdate(self: Backend, weights: []f32, weights_buf: ?*const metal.MTLBuffer, gradients: []const f32, gradients_buf: ?*const metal.MTLBuffer, learning_rate: f32, weight_decay: f32) !void {
+        _ = weights_buf;
+        _ = gradients_buf;
+        const cuda_be = self.cuda_ctx orelse return error.NotAvailable;
+        try cuda_be.sgdUpdate(weights, gradients, learning_rate, weight_decay);
+    }
+
+    /// CUDA Adam optimizer update
+    fn cudaAdamUpdate(self: Backend, weights: []f32, weights_buf: ?*const metal.MTLBuffer, gradients: []const f32, gradients_buf: ?*const metal.MTLBuffer, m: []f32, m_buf: ?*const metal.MTLBuffer, v: []f32, v_buf: ?*const metal.MTLBuffer, lr: f32, beta1: f32, beta2: f32, eps: f32, bias_corr1: f32, bias_corr2: f32) !void {
+        _ = weights_buf;
+        _ = gradients_buf;
+        _ = m_buf;
+        _ = v_buf;
+        _ = bias_corr1;
+        _ = bias_corr2;
+        const cuda_be = self.cuda_ctx orelse return error.NotAvailable;
+        const t: u32 = 1;
+        try cuda_be.adamUpdate(weights, gradients, m, v, lr, beta1, beta2, eps, t);
+    }
+
+    /// CUDA RMSprop optimizer update
+    fn cudaRmspropUpdate(self: Backend, weights: []f32, weights_buf: ?*const metal.MTLBuffer, gradients: []const f32, gradients_buf: ?*const metal.MTLBuffer, g_avg: []f32, g_avg_buf: ?*const metal.MTLBuffer, lr: f32, rho: f32, eps: f32) !void {
+        _ = weights_buf;
+        _ = gradients_buf;
+        _ = g_avg_buf;
+        const cuda_be = self.cuda_ctx orelse return error.NotAvailable;
+        try cuda_be.rmspropUpdate(weights, gradients, g_avg, lr, rho, eps);
     }
 
     fn cpuSgdUpdate(weights: []f32, gradients: []const f32, learning_rate: f32, weight_decay: f32) void {
