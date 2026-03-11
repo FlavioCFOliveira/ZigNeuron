@@ -705,17 +705,22 @@ pub const CudaBackend = struct {
         try self.context.upload(d_m.ptr, std.mem.sliceAsBytes(m));
         try self.context.upload(d_v.ptr, std.mem.sliceAsBytes(v));
 
+        var lr = learning_rate;
+        var b1 = beta1;
+        var b2 = beta2;
+        var eps = epsilon;
+        var timestep = t;
         var len_u32: u32 = @intCast(weights.len);
         const args = [_]?*anyopaque{
             @ptrCast(&d_weights.ptr),
             @ptrCast(&d_gradients.ptr),
             @ptrCast(&d_m.ptr),
             @ptrCast(&d_v.ptr),
-            @ptrCast(&learning_rate),
-            @ptrCast(&beta1),
-            @ptrCast(&beta2),
-            @ptrCast(&epsilon),
-            @ptrCast(&t),
+            @ptrCast(&lr),
+            @ptrCast(&b1),
+            @ptrCast(&b2),
+            @ptrCast(&eps),
+            @ptrCast(&timestep),
             @ptrCast(&len_u32),
         };
 

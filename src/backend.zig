@@ -9,8 +9,7 @@ const metal = @import("metal.zig");
 const metal_context = @import("metal_context.zig");
 const optimization = @import("optimization.zig");
 const cuda_context = @import("cuda_context.zig");
-
-/// Available GPU backends
+const cuda = @import("cuda.zig");
 pub const GpuBackend = enum {
     /// Apple Silicon - Metal compute shaders
     metal,
@@ -26,6 +25,7 @@ pub const Backend = struct {
     type: BackendType,
     metal_ctx: ?*metal_context.MetalContext = null,
     cuda_ctx: ?*cuda_context.CudaContext = null,
+    cuda_backend: ?*cuda.CudaBackend = null,
 
     pub const BackendType = union(enum) {
         gpu: GpuBackend,
@@ -2609,7 +2609,7 @@ pub const Backend = struct {
     fn cudaSgdUpdate(self: Backend, weights: []f32, weights_buf: ?*const metal.MTLBuffer, gradients: []const f32, gradients_buf: ?*const metal.MTLBuffer, learning_rate: f32, weight_decay: f32) !void {
         _ = weights_buf;
         _ = gradients_buf;
-        const cuda_be = self.cuda_ctx orelse return error.NotAvailable;
+        const cuda_be = self.cuda_backend orelse return error.NotAvailable;
         try cuda_be.sgdUpdate(weights, gradients, learning_rate, weight_decay);
     }
 
@@ -2621,7 +2621,7 @@ pub const Backend = struct {
         _ = v_buf;
         _ = bias_corr1;
         _ = bias_corr2;
-        const cuda_be = self.cuda_ctx orelse return error.NotAvailable;
+        const cuda_be = self.cuda_backend orelse return error.NotAvailable;
         const t: u32 = 1;
         try cuda_be.adamUpdate(weights, gradients, m, v, lr, beta1, beta2, eps, t);
     }
@@ -2631,7 +2631,7 @@ pub const Backend = struct {
         _ = weights_buf;
         _ = gradients_buf;
         _ = g_avg_buf;
-        const cuda_be = self.cuda_ctx orelse return error.NotAvailable;
+        const cuda_be = self.cuda_backend orelse return error.NotAvailable;
         try cuda_be.rmspropUpdate(weights, gradients, g_avg, lr, rho, eps);
     }
 
