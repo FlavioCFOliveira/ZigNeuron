@@ -275,6 +275,9 @@ pub fn build(b: *std.Build) void {
     // Classification Examples
     addExample(b, lib_module, "iris_classification", "examples/classification/iris.zig", target, optimize);
 
+    // CUDA Comparison Example
+    addExample(b, lib_module, "cuda_comparison", "src/cuda_comparison.zig", target, optimize);
+
     // Comprehensive Suite Examples
     const examples = [_][]const u8{
         "01_vanilla_rnn", "02_vanilla_bidirectional", "03_vanilla_twopath",

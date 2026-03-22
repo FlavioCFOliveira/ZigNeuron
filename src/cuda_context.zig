@@ -1333,6 +1333,11 @@ pub const CudaContext = struct {
         std.log.debug("CUDA: Loading kernel '{s}' from PTX ({d} bytes)", .{ name, ptx_code.len });
         std.log.debug("CUDA: PTX preview: {s}", .{ptx_code[0..ptx_preview_len]});
 
+        // DEBUG: Print full PTX for first kernel
+        if (std.mem.eql(u8, name, "matmul")) {
+            std.log.debug("CUDA: FULL PTX for '{s}':\n{s}", .{ name, ptx_code });
+        }
+
         // SECURITY FIX: Validate PTX before loading
         // This prevents injection attacks and ensures PTX compatibility
         validateAndLogPtx(ptx_code, name) catch |err| {
@@ -1431,8 +1436,9 @@ pub const CudaContext = struct {
         const minor = self.device_props.compute_capability_minor;
         std.log.info("CUDA: Device capability {d}.{d}", .{ major, minor });
 
-        // Compile with NVRTC (no specific architecture - uses default PTX)
-        const ptx = try self.compileKernel(source, name);
+        // Compile with NVRTC using compute_80 to generate PTX 8.0
+        // This ensures compatibility with driver 535+ (supports up to PTX 8.2)
+        const ptx = try self.compileKernel(source, name, @intCast(major), @intCast(minor));
         defer self.allocator.free(ptx);
 
         std.log.info("CUDA: Kernel '{s}' compiled successfully (PTX size: {} bytes)", .{ name, ptx.len });
@@ -1442,11 +1448,13 @@ pub const CudaContext = struct {
     }
 
     /// Internal helper to compile CUDA source to PTX using dynamic NVRTC
-    /// Uses default PTX generation for maximum compatibility
+    /// Uses compute_80 architecture to generate PTX 8.0 for driver 535+ compatibility
     fn compileKernel(
         self: *CudaContext,
         source: []const u8,
         name: []const u8,
+        major: u8,
+        minor: u8,
     ) ![]u8 {
         var program: *nvrtcProgram = undefined;
 
@@ -1469,28 +1477,43 @@ pub const CudaContext = struct {
         if (!create_result.isSuccess()) return error.NvrtcProgramCreationFailed;
         defer _ = self.driver.driver.nvrtcDestroyProgram.?(&program);
 
-        // Prepare compiler options
-        // Note: We skip architecture-specific flags to let NVRTC use default PTX
-        // which provides maximum compatibility across GPU generations
-        const max_options = 2;
+        // SECURITY FIX: Use stack buffers instead of heap allocations for compiler options
+        // This eliminates the Invalid free and allocation/free size mismatch errors
+        // The arch_flag format is "--gpu-architecture=compute_XX" (max ~32 chars)
+        const max_options = 3;
         var option_ptrs: [max_options][*c]const u8 = undefined;
         var option_count: usize = 0;
 
-        // Use default PTX generation (no --gpu-architecture flag)
-        // This produces PTX that the driver can JIT compile to any architecture
+        // Use virtual architecture compute_80 to generate PTX 8.0
+        // Virtual architectures (compute_XX) generate PTX, real architectures (sm_XX) generate CUBIN
+        // PTX provides JIT compilation compatibility across GPU generations
+        // Cap at compute_80 to ensure PTX 8.0 compatibility (driver 535+ supports up to PTX 8.2)
+        const compute_capability = major * 10 + minor;
+        const arch_value = if (compute_capability > 80) 80 else compute_capability;
 
-        // Standard options for performance
-        const fast_math = try self.allocator.dupeZ(u8, "--use_fast_math");
-        option_ptrs[option_count] = fast_math.ptr;
+        // SAFETY: Stack buffer with sufficient capacity for "--gpu-architecture=compute_XX"
+        var arch_flag_buf: [64]u8 = undefined;
+        const arch_flag = try std.fmt.bufPrintZ(&arch_flag_buf, "--gpu-architecture=compute_{d}", .{arch_value});
+        option_ptrs[option_count] = arch_flag.ptr;
         option_count += 1;
 
-        const std_cpp = try self.allocator.dupeZ(u8, "-std=c++11");
-        option_ptrs[option_count] = std_cpp.ptr;
+        // SAFETY: Static string literals have static lifetime, no allocation needed
+        const fast_math: [*c]const u8 = "--use_fast_math";
+        option_ptrs[option_count] = fast_math;
         option_count += 1;
 
-        defer {
-            self.allocator.free(fast_math);
-            self.allocator.free(std_cpp);
+        // SAFETY: Static string literals have static lifetime, no allocation needed
+        const std_cpp: [*c]const u8 = "-std=c++11";
+        option_ptrs[option_count] = std_cpp;
+        option_count += 1;
+
+        // SAFETY ASSERTION: Verify option count matches expected
+        std.debug.assert(option_count == max_options);
+
+        // DEBUG: Log the options being passed to NVRTC
+        std.log.debug("CUDA: NVRTC options for '{s}':", .{name});
+        for (0..option_count) |i| {
+            std.log.debug("  [{d}] {s}", .{i, std.mem.span(option_ptrs[i])});
         }
 
         // Compile the program

@@ -20,6 +20,36 @@ const metal = @import("metal.zig");
 const MAGIC = "ZNN\x00";
 const VERSION: u32 = 1;
 
+// =============================================================================
+// Security Helper Functions
+// =============================================================================
+
+/// Safely calculate buffer size with overflow checking
+/// Uses std.math.mul to detect overflow in multiplication chains
+fn calculateBufferSize(num_elements: usize, element_size: usize) !usize {
+    return std.math.mul(usize, num_elements, element_size);
+}
+
+/// Safely calculate buffer size for 2D arrays (rows * cols * element_size)
+/// Returns error.Overflow if multiplication would overflow
+fn calculateBufferSize2D(rows: usize, cols: usize, element_size: usize) !usize {
+    const num_elements = try std.math.mul(usize, rows, cols);
+    return std.math.mul(usize, num_elements, element_size);
+}
+
+/// Safely calculate buffer size for 3D arrays (d1 * d2 * d3 * element_size)
+/// Returns error.Overflow if multiplication would overflow
+fn calculateBufferSize3D(d1: usize, d2: usize, d3: usize, element_size: usize) !usize {
+    const d1_d2 = try std.math.mul(usize, d1, d2);
+    const num_elements = try std.math.mul(usize, d1_d2, d3);
+    return std.math.mul(usize, num_elements, element_size);
+}
+
+/// Safely multiply two usize values with overflow checking
+fn safeMul(a: usize, b: usize) !usize {
+    return std.math.mul(usize, a, b);
+}
+
 /// Layer type identifiers for serialization
 const LayerType = enum(u32) {
     dense = 1,
@@ -54,6 +84,10 @@ pub fn saveModel(layers: []const layer.Layer, path: []const u8) !usize {
     var bytes_written: usize = 0;
 
     // Write header
+    // SECURITY FIX: Validate layer count before @intCast
+    if (layers.len > std.math.maxInt(u32)) {
+        return error.LayerCountOverflow;
+    }
     const header = FileHeader{
         .magic = MAGIC.*,
         .version = VERSION,
@@ -64,7 +98,8 @@ pub fn saveModel(layers: []const layer.Layer, path: []const u8) !usize {
 
     // Write each layer
     for (layers) |l| {
-        bytes_written += try writeLayer(writer, l);
+        const layer_bytes = try writeLayer(writer, l);
+        bytes_written = try std.math.add(usize, bytes_written, layer_bytes);
     }
 
     return bytes_written;
@@ -131,95 +166,114 @@ fn writeLayer(writer: anytype, l: layer.Layer) !usize {
             bytes_written += 12;
 
             // Write weights
-            const weights_len = d.input_size * d.output_size;
+            // SECURITY FIX: Use overflow-checked size calculations
+            const weights_len = try safeMul(d.input_size, d.output_size);
+            const weights_bytes = try calculateBufferSize(weights_len, @sizeOf(f32));
             try writer.writeAll(std.mem.sliceAsBytes(d.weights.slice[0..weights_len]));
-            bytes_written += weights_len * @sizeOf(f32);
+            bytes_written = try std.math.add(usize, bytes_written, weights_bytes);
 
             // Write bias
+            const bias_bytes = try calculateBufferSize(d.output_size, @sizeOf(f32));
             try writer.writeAll(std.mem.sliceAsBytes(d.bias.slice[0..d.output_size]));
-            bytes_written += d.output_size * @sizeOf(f32);
+            bytes_written = try std.math.add(usize, bytes_written, bias_bytes);
         },
         .batch_norm => |bn| {
             // BatchNorm: size, eps, momentum, gamma, beta, running_mean, running_var
             try writer.writeInt(u32, @intCast(bn.size), .little);
             try writer.writeAll(std.mem.asBytes(&bn.eps));
             try writer.writeAll(std.mem.asBytes(&bn.momentum));
-            bytes_written += 4 + 8 + 8;
+            bytes_written = try std.math.add(usize, bytes_written, 4 + 8 + 8);
 
             // Write gamma, beta, running_mean, running_var
+            // SECURITY FIX: Use overflow-checked size calculations
             try writer.writeAll(std.mem.sliceAsBytes(bn.gamma.slice[0..bn.size]));
             try writer.writeAll(std.mem.sliceAsBytes(bn.beta.slice[0..bn.size]));
             try writer.writeAll(std.mem.sliceAsBytes(bn.running_mean.slice[0..bn.size]));
             try writer.writeAll(std.mem.sliceAsBytes(bn.running_var.slice[0..bn.size]));
-            bytes_written += bn.size * 4 * @sizeOf(f32);
+            const bn_param_bytes = try calculateBufferSize2D(bn.size, 4, @sizeOf(f32));
+            bytes_written = try std.math.add(usize, bytes_written, bn_param_bytes);
         },
         .layer_norm => |ln| {
             // LayerNorm: size, eps, gamma, beta
             try writer.writeInt(u32, @intCast(ln.size), .little);
             try writer.writeAll(std.mem.asBytes(&ln.eps));
-            bytes_written += 4 + 8;
+            bytes_written = try std.math.add(usize, bytes_written, 4 + 8);
 
             // Write gamma, beta
+            // SECURITY FIX: Use overflow-checked size calculations
             try writer.writeAll(std.mem.sliceAsBytes(ln.gamma.slice[0..ln.size]));
             try writer.writeAll(std.mem.sliceAsBytes(ln.beta.slice[0..ln.size]));
-            bytes_written += ln.size * 2 * @sizeOf(f32);
+            const ln_param_bytes = try calculateBufferSize2D(ln.size, 2, @sizeOf(f32));
+            bytes_written = try std.math.add(usize, bytes_written, ln_param_bytes);
         },
         .dropout => |dr| {
             // Dropout: size, rate
             try writer.writeInt(u32, @intCast(dr.size), .little);
             try writer.writeAll(std.mem.asBytes(&dr.rate));
-            bytes_written += 4 + 4;
+            bytes_written = try std.math.add(usize, bytes_written, 4 + 4);
         },
         .lstm => |lst| {
             // LSTM: input_size, hidden_size, max_seq_len, weights
             try writer.writeInt(u32, @intCast(lst.input_size), .little);
             try writer.writeInt(u32, @intCast(lst.hidden_size), .little);
             try writer.writeInt(u32, @intCast(lst.max_seq_len), .little);
-            bytes_written += 12;
+            bytes_written = try std.math.add(usize, bytes_written, 12);
 
             // Calculate total weights size: 4 gates * (input + hidden) * hidden
-            const weights_per_gate = (lst.input_size + lst.hidden_size) * lst.hidden_size;
-            const total_weights = 4 * weights_per_gate;
+            // SECURITY FIX: Use overflow-checked size calculations
+            const lstm_input_hidden = try std.math.add(usize, lst.input_size, lst.hidden_size);
+            const weights_per_gate = try safeMul(lstm_input_hidden, lst.hidden_size);
+            const total_weights = try safeMul(4, weights_per_gate);
             try writer.writeAll(std.mem.sliceAsBytes(lst.weights.slice[0..total_weights]));
-            bytes_written += total_weights * @sizeOf(f32);
+            const lstm_weights_bytes = try calculateBufferSize(total_weights, @sizeOf(f32));
+            bytes_written = try std.math.add(usize, bytes_written, lstm_weights_bytes);
 
             // Biases: 4 * hidden_size
-            const total_biases = 4 * lst.hidden_size;
+            const total_biases = try safeMul(4, lst.hidden_size);
             try writer.writeAll(std.mem.sliceAsBytes(lst.bias.slice[0..total_biases]));
-            bytes_written += total_biases * @sizeOf(f32);
+            const lstm_bias_bytes = try calculateBufferSize(total_biases, @sizeOf(f32));
+            bytes_written = try std.math.add(usize, bytes_written, lstm_bias_bytes);
         },
         .gru => |g| {
             // GRU: input_size, hidden_size, max_seq_len, weights
             try writer.writeInt(u32, @intCast(g.input_size), .little);
             try writer.writeInt(u32, @intCast(g.hidden_size), .little);
             try writer.writeInt(u32, @intCast(g.max_seq_len), .little);
-            bytes_written += 12;
+            bytes_written = try std.math.add(usize, bytes_written, 12);
 
             // Calculate total weights size: 3 gates * (input + hidden) * hidden
-            const weights_per_gate = (g.input_size + g.hidden_size) * g.hidden_size;
-            const total_weights = 3 * weights_per_gate;
+            // SECURITY FIX: Use overflow-checked size calculations
+            const gru_input_hidden = try std.math.add(usize, g.input_size, g.hidden_size);
+            const weights_per_gate = try safeMul(gru_input_hidden, g.hidden_size);
+            const total_weights = try safeMul(3, weights_per_gate);
             try writer.writeAll(std.mem.sliceAsBytes(g.weights.slice[0..total_weights]));
-            bytes_written += total_weights * @sizeOf(f32);
+            const gru_weights_bytes = try calculateBufferSize(total_weights, @sizeOf(f32));
+            bytes_written = try std.math.add(usize, bytes_written, gru_weights_bytes);
 
             // Biases: 3 * hidden_size
-            const total_biases = 3 * g.hidden_size;
+            const total_biases = try safeMul(3, g.hidden_size);
             try writer.writeAll(std.mem.sliceAsBytes(g.bias.slice[0..total_biases]));
-            bytes_written += total_biases * @sizeOf(f32);
+            const gru_bias_bytes = try calculateBufferSize(total_biases, @sizeOf(f32));
+            bytes_written = try std.math.add(usize, bytes_written, gru_bias_bytes);
         },
         .rnn => |r| {
             // RNN: input_size, hidden_size, activation, weights
             try writer.writeInt(u32, @intCast(r.input_size), .little);
             try writer.writeInt(u32, @intCast(r.hidden_size), .little);
             try writer.writeInt(u32, @intFromEnum(r.act), .little);
-            bytes_written += 12;
+            bytes_written = try std.math.add(usize, bytes_written, 12);
 
-            const weights_size = (r.input_size + r.hidden_size) * r.hidden_size;
+            // SECURITY FIX: Use overflow-checked size calculations
+            const rnn_input_hidden = try std.math.add(usize, r.input_size, r.hidden_size);
+            const weights_size = try safeMul(rnn_input_hidden, r.hidden_size);
             try writer.writeAll(std.mem.sliceAsBytes(r.weights.slice[0..weights_size]));
-            bytes_written += weights_size * @sizeOf(f32);
+            const rnn_weights_bytes = try calculateBufferSize(weights_size, @sizeOf(f32));
+            bytes_written = try std.math.add(usize, bytes_written, rnn_weights_bytes);
 
             // Bias
             try writer.writeAll(std.mem.sliceAsBytes(r.bias.slice[0..r.hidden_size]));
-            bytes_written += r.hidden_size * @sizeOf(f32);
+            const rnn_bias_bytes = try calculateBufferSize(r.hidden_size, @sizeOf(f32));
+            bytes_written = try std.math.add(usize, bytes_written, rnn_bias_bytes);
         },
         .conv1d => |c| {
             // Conv1D: input_channels, output_channels, kernel_size, stride, weights
@@ -227,30 +281,35 @@ fn writeLayer(writer: anytype, l: layer.Layer) !usize {
             try writer.writeInt(u32, @intCast(c.output_channels), .little);
             try writer.writeInt(u32, @intCast(c.kernel_size), .little);
             try writer.writeInt(u32, @intCast(c.stride), .little);
-            bytes_written += 16;
+            bytes_written = try std.math.add(usize, bytes_written, 16);
 
-            const weights_size = c.input_channels * c.output_channels * c.kernel_size;
+            // SECURITY FIX: Use overflow-checked size calculations
+            const weights_size = try calculateBufferSize3D(c.input_channels, c.output_channels, c.kernel_size, 1);
             try writer.writeAll(std.mem.sliceAsBytes(c.weights.slice[0..weights_size]));
-            bytes_written += weights_size * @sizeOf(f32);
+            const conv_weights_bytes = try calculateBufferSize(weights_size, @sizeOf(f32));
+            bytes_written = try std.math.add(usize, bytes_written, conv_weights_bytes);
 
             // Bias
             try writer.writeAll(std.mem.sliceAsBytes(c.bias.slice[0..c.output_channels]));
-            bytes_written += c.output_channels * @sizeOf(f32);
+            const conv_bias_bytes = try calculateBufferSize(c.output_channels, @sizeOf(f32));
+            bytes_written = try std.math.add(usize, bytes_written, conv_bias_bytes);
         },
         .attention => |a| {
             // Attention: d_model, num_heads, seq_len, weights
             try writer.writeInt(u32, @intCast(a.d_model), .little);
             try writer.writeInt(u32, @intCast(a.num_heads), .little);
             try writer.writeInt(u32, @intCast(a.seq_len), .little);
-            bytes_written += 12;
+            bytes_written = try std.math.add(usize, bytes_written, 12);
 
             // W_q, W_k, W_v, W_o: each d_model * d_model
-            const weights_size = a.d_model * a.d_model;
+            // SECURITY FIX: Use overflow-checked size calculations
+            const weights_size = try safeMul(a.d_model, a.d_model);
             try writer.writeAll(std.mem.sliceAsBytes(a.w_q.slice[0..weights_size]));
             try writer.writeAll(std.mem.sliceAsBytes(a.w_k.slice[0..weights_size]));
             try writer.writeAll(std.mem.sliceAsBytes(a.w_v.slice[0..weights_size]));
             try writer.writeAll(std.mem.sliceAsBytes(a.w_o.slice[0..weights_size]));
-            bytes_written += 4 * weights_size * @sizeOf(f32);
+            const attention_weights_bytes = try calculateBufferSize2D(4, weights_size, @sizeOf(f32));
+            bytes_written = try std.math.add(usize, bytes_written, attention_weights_bytes);
         },
         .sampling => |s| {
             // Sampling: vocab_size, d_model, max_len, temperature
@@ -258,19 +317,19 @@ fn writeLayer(writer: anytype, l: layer.Layer) !usize {
             try writer.writeInt(u32, @intCast(s.d_model), .little);
             try writer.writeInt(u32, @intCast(s.max_len), .little);
             try writer.writeAll(std.mem.asBytes(&s.temperature));
-            bytes_written += 12 + 4;
+            bytes_written = try std.math.add(usize, bytes_written, 12 + 4);
         },
         .bidirectional => |b| {
             // Bidirectional: save underlying layer type and both directions
             try writer.writeInt(u32, @intFromEnum(getLayerType(.{ .rnn = b.fw_layer })), .little);
-            bytes_written += 4;
+            bytes_written = try std.math.add(usize, bytes_written, 4);
             // Note: bidirectional wrapper doesn't store extra weights
             // The inner layers handle their own serialization
         },
         .twopath => |t| {
             // TwoPath: save both paths
             try writer.writeInt(u32, @intFromEnum(getLayerType(.{ .rnn = t.path1 })), .little);
-            bytes_written += 4;
+            bytes_written = try std.math.add(usize, bytes_written, 4);
         },
     }
 
@@ -297,12 +356,15 @@ fn readLayer(allocator: std.mem.Allocator, reader: anytype, backend_inst: backen
             const d = try layer.Dense.init(allocator, input_size, output_size, act, backend_inst);
 
             // Read weights
-            const weights_len = input_size * output_size;
-            const weights_bytes = try reader.readExact(std.mem.sliceAsBytes(d.weights.slice[0..weights_len]), weights_len * @sizeOf(f32));
+            // SECURITY FIX: Use overflow-checked size calculations
+            const weights_len = try safeMul(input_size, output_size);
+            const weights_bytes_count = try calculateBufferSize(weights_len, @sizeOf(f32));
+            const weights_bytes = try reader.readExact(std.mem.sliceAsBytes(d.weights.slice[0..weights_len]), weights_bytes_count);
             _ = weights_bytes;
 
             // Read bias
-            const bias_bytes = try reader.readExact(std.mem.sliceAsBytes(d.bias.slice[0..output_size]), output_size * @sizeOf(f32));
+            const bias_bytes_count = try calculateBufferSize(output_size, @sizeOf(f32));
+            const bias_bytes = try reader.readExact(std.mem.sliceAsBytes(d.bias.slice[0..output_size]), bias_bytes_count);
             _ = bias_bytes;
 
             return layer.Layer{ .dense = d };
@@ -319,10 +381,12 @@ fn readLayer(allocator: std.mem.Allocator, reader: anytype, backend_inst: backen
             bn.momentum = momentum;
 
             // Read gamma, beta, running_mean, running_var
-            _ = try reader.readExact(std.mem.sliceAsBytes(bn.gamma.slice[0..size]), size * @sizeOf(f32));
-            _ = try reader.readExact(std.mem.sliceAsBytes(bn.beta.slice[0..size]), size * @sizeOf(f32));
-            _ = try reader.readExact(std.mem.sliceAsBytes(bn.running_mean.slice[0..size]), size * @sizeOf(f32));
-            _ = try reader.readExact(std.mem.sliceAsBytes(bn.running_var.slice[0..size]), size * @sizeOf(f32));
+            // SECURITY FIX: Use overflow-checked size calculations
+            const bn_param_size = try calculateBufferSize(size, @sizeOf(f32));
+            _ = try reader.readExact(std.mem.sliceAsBytes(bn.gamma.slice[0..size]), bn_param_size);
+            _ = try reader.readExact(std.mem.sliceAsBytes(bn.beta.slice[0..size]), bn_param_size);
+            _ = try reader.readExact(std.mem.sliceAsBytes(bn.running_mean.slice[0..size]), bn_param_size);
+            _ = try reader.readExact(std.mem.sliceAsBytes(bn.running_var.slice[0..size]), bn_param_size);
 
             return layer.Layer{ .batch_norm = bn };
         },
@@ -335,8 +399,10 @@ fn readLayer(allocator: std.mem.Allocator, reader: anytype, backend_inst: backen
             ln.eps = eps;
 
             // Read gamma, beta
-            _ = try reader.readExact(std.mem.sliceAsBytes(ln.gamma.slice[0..size]), size * @sizeOf(f32));
-            _ = try reader.readExact(std.mem.sliceAsBytes(ln.beta.slice[0..size]), size * @sizeOf(f32));
+            // SECURITY FIX: Use overflow-checked size calculations
+            const ln_param_size = try calculateBufferSize(size, @sizeOf(f32));
+            _ = try reader.readExact(std.mem.sliceAsBytes(ln.gamma.slice[0..size]), ln_param_size);
+            _ = try reader.readExact(std.mem.sliceAsBytes(ln.beta.slice[0..size]), ln_param_size);
 
             return layer.Layer{ .layer_norm = ln };
         },
@@ -356,13 +422,17 @@ fn readLayer(allocator: std.mem.Allocator, reader: anytype, backend_inst: backen
             const l = try layer.LSTM.init(allocator, input_size, hidden_size, max_seq_len, backend_inst);
 
             // Read weights
-            const weights_per_gate = (input_size + hidden_size) * hidden_size;
-            const total_weights = 4 * weights_per_gate;
-            _ = try reader.readExact(std.mem.sliceAsBytes(l.weights.slice[0..total_weights]), total_weights * @sizeOf(f32));
+            // SECURITY FIX: Use overflow-checked size calculations
+            const lstm_input_hidden = try std.math.add(usize, input_size, hidden_size);
+            const weights_per_gate = try safeMul(lstm_input_hidden, hidden_size);
+            const total_weights = try safeMul(4, weights_per_gate);
+            const lstm_weights_bytes = try calculateBufferSize(total_weights, @sizeOf(f32));
+            _ = try reader.readExact(std.mem.sliceAsBytes(l.weights.slice[0..total_weights]), lstm_weights_bytes);
 
             // Read biases
-            const total_biases = 4 * hidden_size;
-            _ = try reader.readExact(std.mem.sliceAsBytes(l.bias.slice[0..total_biases]), total_biases * @sizeOf(f32));
+            const total_biases = try safeMul(4, hidden_size);
+            const lstm_bias_bytes = try calculateBufferSize(total_biases, @sizeOf(f32));
+            _ = try reader.readExact(std.mem.sliceAsBytes(l.bias.slice[0..total_biases]), lstm_bias_bytes);
 
             return layer.Layer{ .lstm = l };
         },
@@ -374,13 +444,17 @@ fn readLayer(allocator: std.mem.Allocator, reader: anytype, backend_inst: backen
             const g = try layer.GRU.init(allocator, input_size, hidden_size, max_seq_len, backend_inst);
 
             // Read weights
-            const weights_per_gate = (input_size + hidden_size) * hidden_size;
-            const total_weights = 3 * weights_per_gate;
-            _ = try reader.readExact(std.mem.sliceAsBytes(g.weights.slice[0..total_weights]), total_weights * @sizeOf(f32));
+            // SECURITY FIX: Use overflow-checked size calculations
+            const gru_input_hidden = try std.math.add(usize, input_size, hidden_size);
+            const weights_per_gate = try safeMul(gru_input_hidden, hidden_size);
+            const total_weights = try safeMul(3, weights_per_gate);
+            const gru_weights_bytes = try calculateBufferSize(total_weights, @sizeOf(f32));
+            _ = try reader.readExact(std.mem.sliceAsBytes(g.weights.slice[0..total_weights]), gru_weights_bytes);
 
             // Read biases
-            const total_biases = 3 * hidden_size;
-            _ = try reader.readExact(std.mem.sliceAsBytes(g.bias.slice[0..total_biases]), total_biases * @sizeOf(f32));
+            const total_biases = try safeMul(3, hidden_size);
+            const gru_bias_bytes = try calculateBufferSize(total_biases, @sizeOf(f32));
+            _ = try reader.readExact(std.mem.sliceAsBytes(g.bias.slice[0..total_biases]), gru_bias_bytes);
 
             return layer.Layer{ .gru = g };
         },
@@ -395,11 +469,15 @@ fn readLayer(allocator: std.mem.Allocator, reader: anytype, backend_inst: backen
             const r = try layer.VanillaRNN.init(allocator, input_size, hidden_size, act, backend_inst);
 
             // Read weights
-            const weights_size = (input_size + hidden_size) * hidden_size;
-            _ = try reader.readExact(std.mem.sliceAsBytes(r.weights.slice[0..weights_size]), weights_size * @sizeOf(f32));
+            // SECURITY FIX: Use overflow-checked size calculations
+            const rnn_input_hidden = try std.math.add(usize, input_size, hidden_size);
+            const weights_size = try safeMul(rnn_input_hidden, hidden_size);
+            const rnn_weights_bytes = try calculateBufferSize(weights_size, @sizeOf(f32));
+            _ = try reader.readExact(std.mem.sliceAsBytes(r.weights.slice[0..weights_size]), rnn_weights_bytes);
 
             // Read bias
-            _ = try reader.readExact(std.mem.sliceAsBytes(r.bias.slice[0..hidden_size]), hidden_size * @sizeOf(f32));
+            const rnn_bias_bytes = try calculateBufferSize(hidden_size, @sizeOf(f32));
+            _ = try reader.readExact(std.mem.sliceAsBytes(r.bias.slice[0..hidden_size]), rnn_bias_bytes);
 
             return layer.Layer{ .rnn = r };
         },
@@ -412,11 +490,14 @@ fn readLayer(allocator: std.mem.Allocator, reader: anytype, backend_inst: backen
             const c = try layer.Conv1D.init(allocator, input_channels, output_channels, kernel_size, stride, backend_inst);
 
             // Read weights
-            const weights_size = input_channels * output_channels * kernel_size;
-            _ = try reader.readExact(std.mem.sliceAsBytes(c.weights.slice[0..weights_size]), weights_size * @sizeOf(f32));
+            // SECURITY FIX: Use overflow-checked size calculations
+            const weights_size = try calculateBufferSize3D(input_channels, output_channels, kernel_size, 1);
+            const conv_weights_bytes = try calculateBufferSize(weights_size, @sizeOf(f32));
+            _ = try reader.readExact(std.mem.sliceAsBytes(c.weights.slice[0..weights_size]), conv_weights_bytes);
 
             // Read bias
-            _ = try reader.readExact(std.mem.sliceAsBytes(c.bias.slice[0..output_channels]), output_channels * @sizeOf(f32));
+            const conv_bias_bytes = try calculateBufferSize(output_channels, @sizeOf(f32));
+            _ = try reader.readExact(std.mem.sliceAsBytes(c.bias.slice[0..output_channels]), conv_bias_bytes);
 
             return layer.Layer{ .conv1d = c };
         },
@@ -428,11 +509,13 @@ fn readLayer(allocator: std.mem.Allocator, reader: anytype, backend_inst: backen
             const a = try layer.Attention.init(allocator, d_model, num_heads, seq_len, backend_inst);
 
             // Read weights
-            const weights_size = d_model * d_model;
-            _ = try reader.readExact(std.mem.sliceAsBytes(a.w_q.slice[0..weights_size]), weights_size * @sizeOf(f32));
-            _ = try reader.readExact(std.mem.sliceAsBytes(a.w_k.slice[0..weights_size]), weights_size * @sizeOf(f32));
-            _ = try reader.readExact(std.mem.sliceAsBytes(a.w_v.slice[0..weights_size]), weights_size * @sizeOf(f32));
-            _ = try reader.readExact(std.mem.sliceAsBytes(a.w_o.slice[0..weights_size]), weights_size * @sizeOf(f32));
+            // SECURITY FIX: Use overflow-checked size calculations
+            const weights_size = try safeMul(d_model, d_model);
+            const attention_weights_bytes = try calculateBufferSize(weights_size, @sizeOf(f32));
+            _ = try reader.readExact(std.mem.sliceAsBytes(a.w_q.slice[0..weights_size]), attention_weights_bytes);
+            _ = try reader.readExact(std.mem.sliceAsBytes(a.w_k.slice[0..weights_size]), attention_weights_bytes);
+            _ = try reader.readExact(std.mem.sliceAsBytes(a.w_v.slice[0..weights_size]), attention_weights_bytes);
+            _ = try reader.readExact(std.mem.sliceAsBytes(a.w_o.slice[0..weights_size]), attention_weights_bytes);
 
             return layer.Layer{ .attention = a };
         },
@@ -494,4 +577,5 @@ pub const SerializationError = error{
     UnsupportedLayer,
     ReadError,
     WriteError,
+    LayerCountOverflow,
 };
