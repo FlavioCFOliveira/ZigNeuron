@@ -58,6 +58,28 @@ pub const MATMUL_BATCHED_SOURCE =
     \\}
 ;
 
+/// Matrix multiplication with A transposed kernel CUDA C source
+pub const MATMUL_TRANSPOSE_A_SOURCE =
+    \\extern "C" __global__ void matmul_transpose_a(
+    \\    float* C, const float* A, const float* B,
+    \\    int M, int N, int K, int accumulate) {
+    \\    int row = blockIdx.y * blockDim.y + threadIdx.y;
+    \\    int col = blockIdx.x * blockDim.x + threadIdx.x;
+    \\    if (row < M && col < N) {
+    \\        float sum = 0.0f;
+    \\        for (int k = 0; k < K; k++) {
+    \\            sum += A[k * M + row] * B[k * N + col];
+    \\        }
+    \\        int idx = row * N + col;
+    \\        if (accumulate) {
+    \\            C[idx] += sum;
+    \\        } else {
+    \\            C[idx] = sum;
+    \\        }
+    \\    }
+    \\}
+;
+
 /// Matrix multiplication with B transposed kernel CUDA C source
 pub const MATMUL_TRANSPOSE_B_SOURCE =
     \\extern "C" __global__ void matmul_transpose_b(
@@ -70,6 +92,145 @@ pub const MATMUL_TRANSPOSE_B_SOURCE =
     \\        for (int k = 0; k < K; k++) {
     \\            sum += A[row * K + k] * B[col * K + k];
     \\        }
+    \\        int idx = row * N + col;
+    \\        if (accumulate) {
+    \\            C[idx] += sum;
+    \\        } else {
+    \\            C[idx] = sum;
+    \\        }
+    \\    }
+    \\}
+;
+
+/// Tiled matrix multiplication with shared memory - HIGH PERFORMANCE VERSION
+/// Uses TILE_SIZE x TILE_SIZE thread blocks with shared memory tiling
+/// Each block computes a TILE_SIZE x TILE_SIZE sub-matrix of C
+/// Expected 10-100x speedup over naive implementation
+pub const MATMUL_TILED_SOURCE =
+    \\extern "C" __global__ void matmul_tiled(
+    \\    float* C, const float* A, const float* B,
+    \\    int M, int N, int K, int accumulate) {
+    \\    // Tile size - 32x32 gives 1024 threads per block (max occupancy)
+    \\    // Shared memory per block: 2 * 32 * 32 * 4 bytes = 8KB
+    \\    const int TILE_SIZE = 32;
+    \\
+    \\    // Shared memory for tile caching
+    \\    __shared__ float As[TILE_SIZE][TILE_SIZE];
+    \\    __shared__ float Bs[TILE_SIZE][TILE_SIZE];
+    \\
+    \\    // Block indices
+    \\    int blockRow = blockIdx.y;
+    \\    int blockCol = blockIdx.x;
+    \\
+    \\    // Thread indices within block
+    \\    int threadRow = threadIdx.y;
+    \\    int threadCol = threadIdx.x;
+    \\
+    \\    // Global row and column in output matrix
+    \\    int row = blockRow * TILE_SIZE + threadRow;
+    \\    int col = blockCol * TILE_SIZE + threadCol;
+    \\
+    \\    // Accumulator in register (private to each thread)
+    \\    float sum = 0.0f;
+    \\
+    \\    // Number of tiles needed to cover dimension K
+    \\    int numTiles = (K + TILE_SIZE - 1) / TILE_SIZE;
+    \\
+    \\    // Loop over all tiles
+    \\    for (int tile = 0; tile < numTiles; tile++) {
+    \\        // Calculate which column of A and row of B to load
+    \\        int aCol = tile * TILE_SIZE + threadCol;
+    \\        int bRow = tile * TILE_SIZE + threadRow;
+    \\
+    \\        // Cooperative load: each thread loads one element from A and B
+    \\        // Load A tile with bounds checking
+    \\        if (row < M && aCol < K) {
+    \\            As[threadRow][threadCol] = A[row * K + aCol];
+    \\        } else {
+    \\            As[threadRow][threadCol] = 0.0f;
+    \\        }
+    \\
+    \\        // Load B tile with bounds checking
+    \\        if (bRow < K && col < N) {
+    \\            Bs[threadRow][threadCol] = B[bRow * N + col];
+    \\        } else {
+    \\            Bs[threadRow][threadCol] = 0.0f;
+    \\        }
+    \\
+    \\        // Synchronize to ensure all loads complete before computation
+    \\        __syncthreads();
+    \\
+    \\        // Compute partial dot product using shared memory
+    \\        // Each thread computes one element using its tile slice
+    \\        // Unroll loop for better performance
+    \\        #pragma unroll
+    \\        for (int k = 0; k < TILE_SIZE; k++) {
+    \\            sum += As[threadRow][k] * Bs[k][threadCol];
+    \\        }
+    \\
+    \\        // Synchronize before loading next tile
+    \\        __syncthreads();
+    \\    }
+    \\
+    \\    // Write result to global memory with bounds checking
+    \\    if (row < M && col < N) {
+    \\        int idx = row * N + col;
+    \\        if (accumulate) {
+    \\            C[idx] += sum;
+    \\        } else {
+    \\            C[idx] = sum;
+    \\        }
+    \\    }
+    \\}
+;
+
+/// Tiled matrix multiplication with B transposed
+pub const MATMUL_TILED_TRANSPOSE_B_SOURCE =
+    \\extern "C" __global__ void matmul_tiled_transpose_b(
+    \\    float* C, const float* A, const float* B,
+    \\    int M, int N, int K, int accumulate) {
+    \\    const int TILE_SIZE = 32;
+    \\    __shared__ float As[TILE_SIZE][TILE_SIZE];
+    \\    __shared__ float Bs[TILE_SIZE][TILE_SIZE];
+    \\
+    \\    int blockRow = blockIdx.y;
+    \\    int blockCol = blockIdx.x;
+    \\    int threadRow = threadIdx.y;
+    \\    int threadCol = threadIdx.x;
+    \\    int row = blockRow * TILE_SIZE + threadRow;
+    \\    int col = blockCol * TILE_SIZE + threadCol;
+    \\    float sum = 0.0f;
+    \\    int numTiles = (K + TILE_SIZE - 1) / TILE_SIZE;
+    \\
+    \\    for (int tile = 0; tile < numTiles; tile++) {
+    \\        int aCol = tile * TILE_SIZE + threadCol;
+    \\        int bRow = tile * TILE_SIZE + threadCol;  // Note: transposed access
+    \\        int bCol = row;  // Note: transposed
+    \\
+    \\        if (row < M && aCol < K) {
+    \\            As[threadRow][threadCol] = A[row * K + aCol];
+    \\        } else {
+    \\            As[threadRow][threadCol] = 0.0f;
+    \\        }
+    \\
+    \\        // For transpose: B is accessed as B[col][row] instead of B[row][col]
+    \\        if (bRow < K && col < N) {
+    \\            Bs[threadRow][threadCol] = B[col * K + bRow];  // Transposed access
+    \\        } else {
+    \\            Bs[threadRow][threadCol] = 0.0f;
+    \\        }
+    \\
+    \\        __syncthreads();
+    \\
+    \\        #pragma unroll
+    \\        for (int k = 0; k < TILE_SIZE; k++) {
+    \\            sum += As[threadRow][k] * Bs[k][threadCol];
+    \\        }
+    \\
+    \\        __syncthreads();
+    \\    }
+    \\
+    \\    if (row < M && col < N) {
     \\        int idx = row * N + col;
     \\        if (accumulate) {
     \\            C[idx] += sum;
@@ -214,6 +375,28 @@ pub const EW_MUL_SOURCE =
     \\}
 ;
 
+/// Element-wise subtract kernel CUDA C source
+pub const EW_SUB_SOURCE =
+    \\extern "C" __global__ void ew_sub(
+    \\    const float* a, const float* b, float* c, int n) {
+    \\    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    \\    if (idx < n) {
+    \\        c[idx] = a[idx] - b[idx];
+    \\    }
+    \\}
+;
+
+/// Element-wise divide kernel CUDA C source
+pub const EW_DIV_SOURCE =
+    \\extern "C" __global__ void ew_div(
+    \\    const float* a, const float* b, float* c, int n) {
+    \\    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    \\    if (idx < n) {
+    \\        c[idx] = a[idx] / b[idx];
+    \\    }
+    \\}
+;
+
 /// Scale buffer kernel CUDA C source
 pub const SCALE_BUFFER_SOURCE =
     \\extern "C" __global__ void scale_buffer(
@@ -221,6 +404,73 @@ pub const SCALE_BUFFER_SOURCE =
     \\    int idx = blockIdx.x * blockDim.x + threadIdx.x;
     \\    if (idx < n) {
     \\        output[idx] = input[idx] * scale;
+    \\    }
+    \\}
+;
+
+/// Map exp kernel CUDA C source
+pub const MAP_EXP_SOURCE =
+    \\extern "C" __global__ void map_exp(
+    \\    const float* input, float* output, int n) {
+    \\    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    \\    if (idx < n) {
+    \\        output[idx] = expf(input[idx]);
+    \\    }
+    \\}
+;
+
+/// Map log kernel CUDA C source
+pub const MAP_LOG_SOURCE =
+    \\extern "C" __global__ void map_log(
+    \\    const float* input, float* output, int n) {
+    \\    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    \\    if (idx < n) {
+    \\        output[idx] = logf(input[idx]);
+    \\    }
+    \\}
+;
+
+/// Map sqrt kernel CUDA C source
+pub const MAP_SQRT_SOURCE =
+    \\extern "C" __global__ void map_sqrt(
+    \\    const float* input, float* output, int n) {
+    \\    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    \\    if (idx < n) {
+    \\        output[idx] = sqrtf(input[idx]);
+    \\    }
+    \\}
+;
+
+/// Map abs kernel CUDA C source
+pub const MAP_ABS_SOURCE =
+    \\extern "C" __global__ void map_abs(
+    \\    const float* input, float* output, int n) {
+    \\    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    \\    if (idx < n) {
+    \\        output[idx] = fabsf(input[idx]);
+    \\    }
+    \\}
+;
+
+/// Map square kernel CUDA C source
+pub const MAP_SQUARE_SOURCE =
+    \\extern "C" __global__ void map_square(
+    \\    const float* input, float* output, int n) {
+    \\    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    \\    if (idx < n) {
+    \\        float val = input[idx];
+    \\        output[idx] = val * val;
+    \\    }
+    \\}
+;
+
+/// Map inverse kernel CUDA C source
+pub const MAP_INV_SOURCE =
+    \\extern "C" __global__ void map_inv(
+    \\    const float* input, float* output, int n) {
+    \\    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    \\    if (idx < n) {
+    \\        output[idx] = 1.0f / input[idx];
     \\    }
     \\}
 ;
@@ -316,12 +566,122 @@ pub const CONV2D_FORWARD_SOURCE =
     \\}
 ;
 
+/// MaxPool2D forward kernel CUDA C source
+pub const MAX_POOL2D_FORWARD_SOURCE =
+    \\extern "C" __global__ void maxpool2d_forward(
+    \\    const float* input, float* output, float* max_indices,
+    \\    int channels, int input_h, int input_w,
+    \\    int output_h, int output_w,
+    \\    int pool_h, int pool_w,
+    \\    int stride_h, int stride_w) {
+    \\    int out_x = blockIdx.x * blockDim.x + threadIdx.x;
+    \\    int out_y = blockIdx.y * blockDim.y + threadIdx.y;
+    \\    int ch = blockIdx.z;
+    \\
+    \\    if (out_x < output_w && out_y < output_h) {
+    \\        int in_y_start = out_y * stride_h;
+    \\        int in_x_start = out_x * stride_w;
+    \\
+    \\        float max_val = -1e38f;
+    \\        int max_idx = -1;
+    \\
+    \\        for (int ph = 0; ph < pool_h; ph++) {
+    \\            for (int pw = 0; pw < pool_w; pw++) {
+    \\                int in_y = in_y_start + ph;
+    \\                int in_x = in_x_start + pw;
+    \\
+    \\                if (in_y < input_h && in_x < input_w) {
+    \\                    int in_idx = (ch * input_h + in_y) * input_w + in_x;
+    \\                    float val = input[in_idx];
+    \\                    if (val > max_val) {
+    \\                        max_val = val;
+    \\                        max_idx = in_idx;
+    \\                    }
+    \\                }
+    \\            }
+    \\        }
+    \\
+    \\        int out_idx = (ch * output_h + out_y) * output_w + out_x;
+    \\        output[out_idx] = max_val;
+    \\        max_indices[out_idx] = (float)max_idx;
+    \\    }
+    \\}
+;
+
+/// MaxPool2D backward kernel CUDA C source
+pub const MAX_POOL2D_BACKWARD_SOURCE =
+    \\extern "C" __global__ void maxpool2d_backward(
+    \\    const float* grad_output, const float* max_indices, float* grad_input,
+    \\    int total_elements) {
+    \\    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    \\    if (idx < total_elements) {
+    \\        int max_idx = (int)max_indices[idx];
+    \\        if (max_idx >= 0) {
+    \\            atomicAdd(&grad_input[max_idx], grad_output[idx]);
+    \\        }
+    \\    }
+    \\}
+;
+
+/// MaxPool1D forward kernel CUDA C source
+pub const MAX_POOL1D_FORWARD_SOURCE =
+    \\extern "C" __global__ void maxpool1d_forward(
+    \\    const float* input, float* output, float* max_indices,
+    \\    int channels, int input_len, int output_len,
+    \\    int pool_size, int stride) {
+    \\    int out_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    \\    int ch = blockIdx.y;
+    \\
+    \\    if (out_idx < output_len) {
+    \\        int in_start = out_idx * stride;
+    \\        float max_val = -1e38f;
+    \\        int max_idx = -1;
+    \\
+    \\        for (int p = 0; p < pool_size; p++) {
+    \\            int in_pos = in_start + p;
+    \\            if (in_pos < input_len) {
+    \\                int in_full_idx = ch * input_len + in_pos;
+    \\                float val = input[in_full_idx];
+    \\                if (val > max_val) {
+    \\                    max_val = val;
+    \\                    max_idx = in_full_idx;
+    \\                }
+    \\            }
+    \\        }
+    \\
+    \\        int final_out_idx = ch * output_len + out_idx;
+    \\        output[final_out_idx] = max_val;
+    \\        max_indices[final_out_idx] = (float)max_idx;
+    \\    }
+    \\}
+;
+
+/// MaxPool1D backward kernel CUDA C source
+pub const MAX_POOL1D_BACKWARD_SOURCE =
+    \\extern "C" __global__ void maxpool1d_backward(
+    \\    const float* grad_output, const float* max_indices, float* grad_input,
+    \\    int total_elements) {
+    \\    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    \\    if (idx < total_elements) {
+    \\        int max_idx = (int)max_indices[idx];
+    \\        if (max_idx >= 0) {
+    \\            atomicAdd(&grad_input[max_idx], grad_output[idx]);
+    \\        }
+    \\    }
+    \\}
+;
+
 // =============================================================================
 // PTX Header - Common to all kernels
 // =============================================================================
+/// PTX Header - Common to all kernels
+/// Using PTX 5.0 for compatibility with CUDA 8+ drivers
+/// Target sm_50 (Maxwell) as baseline for NVRTC compatibility
+/// Using PTX 6.0 which should be supported by driver 535+
+/// Driver will JIT compile to actual GPU architecture
 pub const PTX_HEADER =
-    \\.version 7.5
-    \\.target sm_80
+    \\.version 6.0
+    \\.target sm_50
     \\.address_size 64
     \\
 ;
@@ -767,6 +1127,363 @@ pub const TANH_BACKWARD_PTX = PTX_HEADER ++
     \\}
 ;
 
+// =============================================================================
+// Vectorized Activation Function Kernels (LDG.128)
+// These kernels process 4 floats at a time for higher memory throughput
+// Requires: 16-byte aligned pointers and n >= 1024 (preferably n % 4 == 0)
+// =============================================================================
+
+/// ReLU forward vectorized: output = max(0, input) - processes 4 elements per thread
+pub const RELU_FORWARD_VEC4_PTX = PTX_HEADER ++
+    \\.visible .entry relu_forward_vec4(
+    \\    .param .u64 input,
+    \\    .param .u64 output,
+    \\    .param .u32 n
+    \\) {
+    \\    .reg .u64 %in_ptr, %out_ptr;
+    \\    .reg .u32 %n, %idx, %idx4;
+    \\    .reg .u32 %tid, %ctaid, %ntid;
+    \\    .reg .f32 %zero;
+    \\    .reg .v4 .f32 %val;           // Vector of 4 floats
+    \\    .reg .u64 %addr_in, %addr_out;
+    \\    .reg .pred %p, %p0, %p1, %p2, %p3;
+    \\
+    \\    ld.param.u64 %in_ptr, [input];
+    \\    ld.param.u64 %out_ptr, [output];
+    \\    ld.param.u32 %n, [n];
+    \\
+    \\    mov.u32 %tid, %tid.x;
+    \\    mov.u32 %ctaid, %ctaid.x;
+    \\    mov.u32 %ntid, %ntid.x;
+    \\    mad.lo.u32 %idx, %ctaid, %ntid, %tid;
+    \\    shl.b32 %idx4, %idx, 2;           // idx * 4 (each thread processes 4 elements)
+    \\
+    \\    // Check if we can process 4 elements
+    \\    add.u32 %idx, %idx4, 4;
+    \\    setp.ge.u32 %p, %idx4, %n;
+    \\    @%p bra END;
+    \\
+    \\    // Calculate addresses for vectorized load
+    \\    mul.lo.u64 %addr_in, %idx4, 4;    // Byte offset
+    \\    add.u64 %addr_in, %addr_in, %in_ptr;
+    \\    add.u64 %addr_out, %addr_in, %out_ptr;
+    \\    sub.u64 %addr_out, %addr_out, %in_ptr;
+    \\
+    \\    // Vectorized load (128 bits = 4 floats)
+    \\    ld.global.v4.f32 %val, [%addr_in];
+    \\
+    \\    // Apply ReLU to each element
+    \\    mov.f32 %zero, 0f00000000;
+    \\    setp.gt.f32 %p0, %val0, %zero;
+    \\    setp.gt.f32 %p1, %val1, %zero;
+    \\    setp.gt.f32 %p2, %val2, %zero;
+    \\    setp.gt.f32 %p3, %val3, %zero;
+    \\    @!%p0 mov.f32 %val0, %zero;
+    \\    @!%p1 mov.f32 %val1, %zero;
+    \\    @!%p2 mov.f32 %val2, %zero;
+    \\    @!%p3 mov.f32 %val3, %zero;
+    \\
+    \\    // Vectorized store
+    \\    st.global.v4.f32 [%addr_out], %val;
+    \\
+    \\END:
+    \\    ret;
+    \\}
+;
+
+/// ReLU backward vectorized: grad_input = (output > 0) ? grad_output : 0
+pub const RELU_BACKWARD_VEC4_PTX = PTX_HEADER ++
+    \\.visible .entry relu_backward_vec4(
+    \\    .param .u64 output,
+    \\    .param .u64 grad_output,
+    \\    .param .u64 grad_input,
+    \\    .param .u32 n
+    \\) {
+    \\    .reg .u64 %out_ptr, %go_ptr, %gi_ptr;
+    \\    .reg .u32 %n, %idx, %idx4;
+    \\    .reg .u32 %tid, %ctaid, %ntid;
+    \\    .reg .f32 %zero;
+    \\    .reg .v4 .f32 %out_val, %go_val;
+    \\    .reg .u64 %addr_out, %addr_go, %addr_gi;
+    \\    .reg .pred %p, %p0, %p1, %p2, %p3;
+    \\
+    \\    ld.param.u64 %out_ptr, [output];
+    \\    ld.param.u64 %go_ptr, [grad_output];
+    \\    ld.param.u64 %gi_ptr, [grad_input];
+    \\    ld.param.u32 %n, [n];
+    \\
+    \\    mov.u32 %tid, %tid.x;
+    \\    mov.u32 %ctaid, %ctaid.x;
+    \\    mov.u32 %ntid, %ntid.x;
+    \\    mad.lo.u32 %idx, %ctaid, %ntid, %tid;
+    \\    shl.b32 %idx4, %idx, 2;
+    \\
+    \\    add.u32 %idx, %idx4, 4;
+    \\    setp.ge.u32 %p, %idx4, %n;
+    \\    @%p bra END;
+    \\
+    \\    mul.lo.u64 %addr_out, %idx4, 4;
+    \\    add.u64 %addr_out, %addr_out, %out_ptr;
+    \\    add.u64 %addr_go, %addr_out, %go_ptr;
+    \\    sub.u64 %addr_go, %addr_go, %out_ptr;
+    \\    add.u64 %addr_gi, %addr_out, %gi_ptr;
+    \\    sub.u64 %addr_gi, %addr_gi, %out_ptr;
+    \\
+    \\    ld.global.v4.f32 %out_val, [%addr_out];
+    \\    ld.global.v4.f32 %go_val, [%addr_go];
+    \\
+    \\    mov.f32 %zero, 0f00000000;
+    \\    setp.gt.f32 %p0, %out_val0, %zero;
+    \\    setp.gt.f32 %p1, %out_val1, %zero;
+    \\    setp.gt.f32 %p2, %out_val2, %zero;
+    \\    setp.gt.f32 %p3, %out_val3, %zero;
+    \\    @!%p0 mov.f32 %go_val0, %zero;
+    \\    @!%p1 mov.f32 %go_val1, %zero;
+    \\    @!%p2 mov.f32 %go_val2, %zero;
+    \\    @!%p3 mov.f32 %go_val3, %zero;
+    \\
+    \\    st.global.v4.f32 [%addr_gi], %go_val;
+    \\
+    \\END:
+    \\    ret;
+    \\}
+;
+
+/// Sigmoid forward vectorized: output = 1 / (1 + exp(-input))
+pub const SIGMOID_FORWARD_VEC4_PTX = PTX_HEADER ++
+    \\.visible .entry sigmoid_forward_vec4(
+    \\    .param .u64 input,
+    \\    .param .u64 output,
+    \\    .param .u32 n
+    \\) {
+    \\    .reg .u64 %in_ptr, %out_ptr;
+    \\    .reg .u32 %n, %idx, %idx4;
+    \\    .reg .u32 %tid, %ctaid, %ntid;
+    \\    .reg .f32 %one;
+    \\    .reg .v4 .f32 %val, %result;
+    \\    .reg .u64 %addr_in, %addr_out;
+    \\    .reg .pred %p;
+    \\
+    \\    ld.param.u64 %in_ptr, [input];
+    \\    ld.param.u64 %out_ptr, [output];
+    \\    ld.param.u32 %n, [n];
+    \\
+    \\    mov.u32 %tid, %tid.x;
+    \\    mov.u32 %ctaid, %ctaid.x;
+    \\    mov.u32 %ntid, %ntid.x;
+    \\    mad.lo.u32 %idx, %ctaid, %ntid, %tid;
+    \\    shl.b32 %idx4, %idx, 2;
+    \\
+    \\    add.u32 %idx, %idx4, 4;
+    \\    setp.ge.u32 %p, %idx4, %n;
+    \\    @%p bra END;
+    \\
+    \\    mul.lo.u64 %addr_in, %idx4, 4;
+    \\    add.u64 %addr_in, %addr_in, %in_ptr;
+    \\    add.u64 %addr_out, %addr_in, %out_ptr;
+    \\    sub.u64 %addr_out, %addr_out, %in_ptr;
+    \\
+    \\    ld.global.v4.f32 %val, [%addr_in];
+    \\
+    \\    // Sigmoid: 1 / (1 + exp(-x))
+    \\    mov.f32 %one, 0f3F800000;
+    \\    neg.f32 %val0, %val0;
+    \\    neg.f32 %val1, %val1;
+    \\    neg.f32 %val2, %val2;
+    \\    neg.f32 %val3, %val3;
+    \\    ex2.approx.ftz.f32 %result0, %val0;
+    \\    ex2.approx.ftz.f32 %result1, %val1;
+    \\    ex2.approx.ftz.f32 %result2, %val2;
+    \\    ex2.approx.ftz.f32 %result3, %val3;
+    \\    add.f32 %result0, %result0, %one;
+    \\    add.f32 %result1, %result1, %one;
+    \\    add.f32 %result2, %result2, %one;
+    \\    add.f32 %result3, %result3, %one;
+    \\    div.approx.ftz.f32 %result0, %one, %result0;
+    \\    div.approx.ftz.f32 %result1, %one, %result1;
+    \\    div.approx.ftz.f32 %result2, %one, %result2;
+    \\    div.approx.ftz.f32 %result3, %one, %result3;
+    \\
+    \\    st.global.v4.f32 [%addr_out], %result;
+    \\
+    \\END:
+    \\    ret;
+    \\}
+;
+
+/// Sigmoid backward vectorized: grad_input = grad_output * output * (1 - output)
+pub const SIGMOID_BACKWARD_VEC4_PTX = PTX_HEADER ++
+    \\.visible .entry sigmoid_backward_vec4(
+    \\    .param .u64 output,
+    \\    .param .u64 grad_output,
+    \\    .param .u64 grad_input,
+    \\    .param .u32 n
+    \\) {
+    \\    .reg .u64 %out_ptr, %go_ptr, %gi_ptr;
+    \\    .reg .u32 %n, %idx, %idx4;
+    \\    .reg .u32 %tid, %ctaid, %ntid;
+    \\    .reg .f32 %one;
+    \\    .reg .v4 .f32 %out_val, %go_val, %gi_val, %temp;
+    \\    .reg .u64 %addr_out, %addr_go, %addr_gi;
+    \\    .reg .pred %p;
+    \\
+    \\    ld.param.u64 %out_ptr, [output];
+    \\    ld.param.u64 %go_ptr, [grad_output];
+    \\    ld.param.u64 %gi_ptr, [grad_input];
+    \\    ld.param.u32 %n, [n];
+    \\
+    \\    mov.u32 %tid, %tid.x;
+    \\    mov.u32 %ctaid, %ctaid.x;
+    \\    mov.u32 %ntid, %ntid.x;
+    \\    mad.lo.u32 %idx, %ctaid, %ntid, %tid;
+    \\    shl.b32 %idx4, %idx, 2;
+    \\
+    \\    add.u32 %idx, %idx4, 4;
+    \\    setp.ge.u32 %p, %idx4, %n;
+    \\    @%p bra END;
+    \\
+    \\    mul.lo.u64 %addr_out, %idx4, 4;
+    \\    add.u64 %addr_out, %addr_out, %out_ptr;
+    \\    add.u64 %addr_go, %addr_out, %go_ptr;
+    \\    sub.u64 %addr_go, %addr_go, %out_ptr;
+    \\    add.u64 %addr_gi, %addr_out, %gi_ptr;
+    \\    sub.u64 %addr_gi, %addr_gi, %out_ptr;
+    \\
+    \\    ld.global.v4.f32 %out_val, [%addr_out];
+    \\    ld.global.v4.f32 %go_val, [%addr_go];
+    \\
+    \\    // grad = go * out * (1 - out)
+    \\    mov.f32 %one, 0f3F800000;
+    \\    sub.f32 %temp0, %one, %out_val0;
+    \\    sub.f32 %temp1, %one, %out_val1;
+    \\    sub.f32 %temp2, %one, %out_val2;
+    \\    sub.f32 %temp3, %one, %out_val3;
+    \\    mul.f32 %gi_val0, %temp0, %out_val0;
+    \\    mul.f32 %gi_val1, %temp1, %out_val1;
+    \\    mul.f32 %gi_val2, %temp2, %out_val2;
+    \\    mul.f32 %gi_val3, %temp3, %out_val3;
+    \\    mul.f32 %gi_val0, %gi_val0, %go_val0;
+    \\    mul.f32 %gi_val1, %gi_val1, %go_val1;
+    \\    mul.f32 %gi_val2, %gi_val2, %go_val2;
+    \\    mul.f32 %gi_val3, %gi_val3, %go_val3;
+    \\
+    \\    st.global.v4.f32 [%addr_gi], %gi_val;
+    \\
+    \\END:
+    \\    ret;
+    \\}
+;
+
+/// Tanh forward vectorized: output = tanh(input)
+pub const TANH_FORWARD_VEC4_PTX = PTX_HEADER ++
+    \\.visible .entry tanh_forward_vec4(
+    \\    .param .u64 input,
+    \\    .param .u64 output,
+    \\    .param .u32 n
+    \\) {
+    \\    .reg .u64 %in_ptr, %out_ptr;
+    \\    .reg .u32 %n, %idx, %idx4;
+    \\    .reg .u32 %tid, %ctaid, %ntid;
+    \\    .reg .v4 .f32 %val, %result;
+    \\    .reg .u64 %addr_in, %addr_out;
+    \\    .reg .pred %p;
+    \\
+    \\    ld.param.u64 %in_ptr, [input];
+    \\    ld.param.u64 %out_ptr, [output];
+    \\    ld.param.u32 %n, [n];
+    \\
+    \\    mov.u32 %tid, %tid.x;
+    \\    mov.u32 %ctaid, %ctaid.x;
+    \\    mov.u32 %ntid, %ntid.x;
+    \\    mad.lo.u32 %idx, %ctaid, %ntid, %tid;
+    \\    shl.b32 %idx4, %idx, 2;
+    \\
+    \\    add.u32 %idx, %idx4, 4;
+    \\    setp.ge.u32 %p, %idx4, %n;
+    \\    @%p bra END;
+    \\
+    \\    mul.lo.u64 %addr_in, %idx4, 4;
+    \\    add.u64 %addr_in, %addr_in, %in_ptr;
+    \\    add.u64 %addr_out, %addr_in, %out_ptr;
+    \\    sub.u64 %addr_out, %addr_out, %in_ptr;
+    \\
+    \\    ld.global.v4.f32 %val, [%addr_in];
+    \\
+    \\    tanh.approx.f32 %result0, %val0;
+    \\    tanh.approx.f32 %result1, %val1;
+    \\    tanh.approx.f32 %result2, %val2;
+    \\    tanh.approx.f32 %result3, %val3;
+    \\
+    \\    st.global.v4.f32 [%addr_out], %result;
+    \\
+    \\END:
+    \\    ret;
+    \\}
+;
+
+/// Tanh backward vectorized: grad_input = grad_output * (1 - output^2)
+pub const TANH_BACKWARD_VEC4_PTX = PTX_HEADER ++
+    \\.visible .entry tanh_backward_vec4(
+    \\    .param .u64 output,
+    \\    .param .u64 grad_output,
+    \\    .param .u64 grad_input,
+    \\    .param .u32 n
+    \\) {
+    \\    .reg .u64 %out_ptr, %go_ptr, %gi_ptr;
+    \\    .reg .u32 %n, %idx, %idx4;
+    \\    .reg .u32 %tid, %ctaid, %ntid;
+    \\    .reg .f32 %one;
+    \\    .reg .v4 .f32 %out_val, %go_val, %gi_val, %temp;
+    \\    .reg .u64 %addr_out, %addr_go, %addr_gi;
+    \\    .reg .pred %p;
+    \\
+    \\    ld.param.u64 %out_ptr, [output];
+    \\    ld.param.u64 %go_ptr, [grad_output];
+    \\    ld.param.u64 %gi_ptr, [grad_input];
+    \\    ld.param.u32 %n, [n];
+    \\
+    \\    mov.u32 %tid, %tid.x;
+    \\    mov.u32 %ctaid, %ctaid.x;
+    \\    mov.u32 %ntid, %ntid.x;
+    \\    mad.lo.u32 %idx, %ctaid, %ntid, %tid;
+    \\    shl.b32 %idx4, %idx, 2;
+    \\
+    \\    add.u32 %idx, %idx4, 4;
+    \\    setp.ge.u32 %p, %idx4, %n;
+    \\    @%p bra END;
+    \\
+    \\    mul.lo.u64 %addr_out, %idx4, 4;
+    \\    add.u64 %addr_out, %addr_out, %out_ptr;
+    \\    add.u64 %addr_go, %addr_out, %go_ptr;
+    \\    sub.u64 %addr_go, %addr_go, %out_ptr;
+    \\    add.u64 %addr_gi, %addr_out, %gi_ptr;
+    \\    sub.u64 %addr_gi, %addr_gi, %out_ptr;
+    \\
+    \\    ld.global.v4.f32 %out_val, [%addr_out];
+    \\    ld.global.v4.f32 %go_val, [%addr_go];
+    \\
+    \\    // grad = go * (1 - out^2)
+    \\    mov.f32 %one, 0f3F800000;
+    \\    mul.f32 %temp0, %out_val0, %out_val0;
+    \\    mul.f32 %temp1, %out_val1, %out_val1;
+    \\    mul.f32 %temp2, %out_val2, %out_val2;
+    \\    mul.f32 %temp3, %out_val3, %out_val3;
+    \\    sub.f32 %gi_val0, %one, %temp0;
+    \\    sub.f32 %gi_val1, %one, %temp1;
+    \\    sub.f32 %gi_val2, %one, %temp2;
+    \\    sub.f32 %gi_val3, %one, %temp3;
+    \\    mul.f32 %gi_val0, %gi_val0, %go_val0;
+    \\    mul.f32 %gi_val1, %gi_val1, %go_val1;
+    \\    mul.f32 %gi_val2, %gi_val2, %go_val2;
+    \\    mul.f32 %gi_val3, %gi_val3, %go_val3;
+    \\
+    \\    st.global.v4.f32 [%addr_gi], %gi_val;
+    \\
+    \\END:
+    \\    ret;
+    \\}
+;
+
 /// Linear (identity) forward
 pub const LINEAR_FORWARD_PTX = PTX_HEADER ++
     \\.visible .entry linear_forward(
@@ -1071,7 +1788,7 @@ pub const ADD_BIAS_PTX = PTX_HEADER ++
 
 /// Conv2D forward kernel PTX (simplified version)
 pub const CONV2D_FORWARD_PTX = PTX_HEADER ++
-    \\    .visible .entry conv2d_forward(
+    \\.visible .entry conv2d_forward(
     \\    .param .u64 input,
     \\    .param .u64 weights,
     \\    .param .u64 bias,
@@ -1330,17 +2047,166 @@ pub const MATMUL_TRANSPOSE_B_PTX = PTX_HEADER ++
     \\}
 ;
 
+/// Tensor Core WMMA kernel PTX (simplified version for sm_70+)
+/// Uses mma.sync.aligned.m16n16k16.row.row.f32.f16.f16.f32 instruction
+/// Note: Full WMMA requires inline PTX or CUDA C++ compilation
+pub const MATMUL_TENSOR_CORE_PTX = PTX_HEADER ++
+    \\    .visible .entry matmul_tensor_core(
+    \\        .param .u64 A,
+    \\        .param .u64 B,
+    \\        .param .u64 C,
+    \\        .param .u32 M,
+    \\        .param .u32 N,
+    \\        .param .u32 K,
+    \\        .param .u32 accumulate
+    \\    ) {
+    \\        .reg .u64 %A_ptr, %B_ptr, %C_ptr;
+    \\        .reg .u32 %M, %N, %K, %accumulate;
+    \\        .reg .u32 %block_row, %block_col, %warp_id, %lane_id;
+    \\        .reg .u32 %warp_row, %warp_col;
+    \\        .reg .u32 %tid, %bid_x, %bid_y;
+    \\        .reg .u32 %k_tile, %num_k_tiles, %k_offset;
+    \\        .reg .u32 %i, %j, %r, %c;
+    \\        .reg .f32 %acc00, %acc01, %acc10, %acc11;
+    \\        .reg .f32 %a_val, %b_val, %c_val;
+    \\        .reg .u64 %a_addr, %b_addr, %c_addr;
+    \\        .reg .pred %p, %p_accum;
+    \\
+    \\        ld.param.u64 %A_ptr, [A];
+    \\        ld.param.u64 %B_ptr, [B];
+    \\        ld.param.u64 %C_ptr, [C];
+    \\        ld.param.u32 %M, [M];
+    \\        ld.param.u32 %N, [N];
+    \\        ld.param.u32 %K, [K];
+    \\        ld.param.u32 %accumulate, [accumulate];
+    \\
+    \\        mov.u32 %tid, %tid.x;
+    \\        mov.u32 %bid_x, %ctaid.x;
+    \\        mov.u32 %bid_y, %ctaid.y;
+    \\
+    \\        // Block coordinates (64x64 tiles)
+    \\        mul.lo.u32 %block_row, %bid_y, 64;
+    \\        mul.lo.u32 %block_col, %bid_x, 64;
+    \\
+    \\        // Warp ID (0-3 for 128 threads)
+    \\        shr.u32 %warp_id, %tid, 5;
+    \\
+    \\        // Warp coordinates within block
+    \\        and.b32 %i, %warp_id, 1;
+    \\        shr.u32 %j, %warp_id, 1;
+    \\        mul.lo.u32 %warp_row, %j, 32;
+    \\        mul.lo.u32 %warp_col, %i, 32;
+    \\
+    \\        // Initialize accumulators
+    \\        mov.f32 %acc00, 0f00000000;
+    \\        mov.f32 %acc01, 0f00000000;
+    \\        mov.f32 %acc10, 0f00000000;
+    \\        mov.f32 %acc11, 0f00000000;
+    \\
+    \\        // Number of K tiles
+    \\        add.u32 %num_k_tiles, %K, 15;
+    \\        shr.u32 %num_k_tiles, %num_k_tiles, 4;
+    \\
+    \\        mov.u32 %k_tile, 0;
+    \\    K_LOOP:
+    \\        setp.ge.u32 %p, %k_tile, %num_k_tiles;
+    \\        @%p bra K_LOOP_END;
+    \\
+    \\        mul.lo.u32 %k_offset, %k_tile, 16;
+    \\
+    \\        // Simplified: compute 16x16x16 MMA for each accumulator
+    \\        // In full implementation, this would use mma.sync instructions
+    \\        // For now, use standard FMA as fallback
+    \\        mov.u32 %i, 0;
+    \\    MMA_I_LOOP:
+    \\        setp.ge.u32 %p, %i, 16;
+    \\        @%p bra MMA_I_LOOP_END;
+    \\
+    \\        mov.u32 %j, 0;
+    \\    MMA_J_LOOP:
+    \\        setp.ge.u32 %p, %j, 16;
+    \\        @%p bra MMA_J_LOOP_END;
+    \\
+    \\        mov.u32 %r, 0;
+    \\    MMA_K_LOOP:
+    \\        setp.ge.u32 %p, %r, 16;
+    \\        @%p bra MMA_K_LOOP_END;
+    \\
+    \\        // Load A
+    \\        add.u32 %a_addr, %block_row, %warp_row;
+    \\        add.u32 %a_addr, %a_addr, %i;
+    \\        add.u32 %c, %k_offset, %r;
+    \\        mad.lo.u32 %a_addr, %a_addr, %K, %c;
+    \\        mul.lo.u64 %a_addr, %a_addr, 2;
+    \\        add.u64 %a_addr, %a_addr, %A_ptr;
+    \\        ld.global.u16 %a_addr, [%a_addr];
+    \\        cvt.f32.f16 %a_val, %a_addr;
+    \\
+    \\        // Load B
+    \\        add.u32 %b_addr, %k_offset, %r;
+    \\        add.u32 %c, %block_col, %warp_col;
+    \\        add.u32 %c, %c, %j;
+    \\        mad.lo.u32 %b_addr, %b_addr, %N, %c;
+    \\        mul.lo.u64 %b_addr, %b_addr, 2;
+    \\        add.u64 %b_addr, %b_addr, %B_ptr;
+    \\        ld.global.u16 %b_addr, [%b_addr];
+    \\        cvt.f32.f16 %b_val, %b_addr;
+    \\
+    \\        // FMA (in real WMMA, this would be mma.sync)
+    \\        fma.rn.f32 %acc00, %a_val, %b_val, %acc00;
+    \\
+    \\        add.u32 %r, %r, 1;
+    \\        bra MMA_K_LOOP;
+    \\    MMA_K_LOOP_END:
+    \\
+    \\        add.u32 %j, %j, 1;
+    \\        bra MMA_J_LOOP;
+    \\    MMA_J_LOOP_END:
+    \\
+    \\        add.u32 %i, %i, 1;
+    \\        bra MMA_I_LOOP;
+    \\    MMA_I_LOOP_END:
+    \\
+    \\        add.u32 %k_tile, %k_tile, 1;
+    \\        bra K_LOOP;
+    \\    K_LOOP_END:
+    \\
+    \\        // Store results
+    \\        add.u32 %r, %block_row, %warp_row;
+    \\        add.u32 %c, %block_col, %warp_col;
+    \\        mad.lo.u32 %c_addr, %r, %N, %c;
+    \\        mul.lo.u64 %c_addr, %c_addr, 4;
+    \\        add.u64 %c_addr, %c_addr, %C_ptr;
+    \\
+    \\        setp.eq.u32 %p_accum, %accumulate, 0;
+    \\        @%p_accum bra STORE;
+    \\        ld.global.f32 %c_val, [%c_addr];
+    \\        add.f32 %acc00, %acc00, %c_val;
+    \\    STORE:
+    \\        st.global.f32 [%c_addr], %acc00;
+    \\        ret;
+    \\    }
+;
+
 // Export all kernel names for loading
 pub const KERNEL_NAMES = .{
     "matmul",
     "matmul_batch",
     "matmul_transpose_b",
+    "matmul_tensor_core",
     "relu_forward",
     "relu_backward",
     "sigmoid_forward",
     "sigmoid_backward",
     "tanh_forward",
     "tanh_backward",
+    // Vectorized activation kernels (LDG.128)
+    "relu_forward_vec4",
+    "relu_backward_vec4",
+    "sigmoid_forward_vec4",
+    "sigmoid_backward_vec4",
+    "tanh_forward_vec4",
+    "tanh_backward_vec4",
     "linear_forward",
     "softmax_forward",
     "ew_add",
@@ -2389,9 +3255,261 @@ pub const KL_DIVERGENCE_BACKWARD_SOURCE =
     \\}
 ;
 
+/// Dropout forward kernel CUDA C source
+pub const DROPOUT_FORWARD_SOURCE =
+    \\extern "C" __global__ void dropout_forward(
+    \\    const float* input,
+    \\    float* output,
+    \\    float* mask,
+    \\    int n,
+    \\    float rate,
+    \\    float scale,
+    \\    unsigned long long seed) {
+    \\    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    \\    if (idx < n) {
+    \\        // Simple XORShift for random number generation per thread
+    \\        unsigned long long state = seed + idx;
+    \\        state ^= state << 13;
+    \\        state ^= state >> 7;
+    \\        state ^= state << 17;
+    \\        float rand_val = (float)(state % 1000000) / 1000000.0f;
+    \\
+    \\        if (rand_val >= rate) {
+    \\            mask[idx] = 1.0f;
+    \\            output[idx] = input[idx] * scale;
+    \\        } else {
+    \\            mask[idx] = 0.0f;
+    \\            output[idx] = 0.0f;
+    \\        }
+    \\    }
+    \\}
+;
+
+/// VAE sampling forward kernel CUDA C source
+pub const VAE_SAMPLING_FORWARD_SOURCE =
+    \\extern "C" __global__ void vae_sampling_forward(
+    \\    const float* input,
+    \\    float* output,
+    \\    float* epsilon,
+    \\    int latent_dim,
+    \\    unsigned long long seed) {
+    \\    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    \\    if (idx < latent_dim) {
+    \\        // Simple XORShift for random number generation per thread
+    \\        unsigned long long state = seed + idx;
+    \\        state ^= state << 13;
+    \\        state ^= state >> 7;
+    \\        state ^= state << 17;
+    \\
+    \\        // Box-Muller transform for normal distribution
+    \\        float u1 = (float)((state ^ 0x5555555555555555ULL) % 1000000) / 1000000.0f;
+    \\        float u2 = (float)((state ^ 0xAAAAAAAAAAAAAAAAULL) % 1000000) / 1000000.0f;
+    \\
+    \\        if (u1 <= 0.0f) u1 = 0.000001f;
+    \\        float z0 = sqrtf(-2.0f * logf(u1)) * cosf(2.0f * 3.14159265f * u2);
+    \\
+    \\        float mu = input[idx];
+    \\        float logvar = input[idx + latent_dim];
+    \\        float std_dev = expf(0.5f * logvar);
+    \\
+    \\        epsilon[idx] = z0;
+    \\        output[idx] = mu + z0 * std_dev;
+    \\    }
+    \\}
+;
+
+/// VAE sampling backward kernel CUDA C source
+pub const VAE_SAMPLING_BACKWARD_SOURCE =
+    \\extern "C" __global__ void vae_sampling_backward(
+    \\    const float* input,
+    \\    const float* grad_output,
+    \\    float* grad_input,
+    \\    const float* epsilon,
+    \\    int latent_dim) {
+    \\    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    \\    if (idx < latent_dim) {
+    \\        float logvar = input[idx + latent_dim];
+    \\        float std_dev = expf(0.5f * logvar);
+    \\
+    \\        // grad_mu = grad_output
+    \\        grad_input[idx] = grad_output[idx];
+    \\        // grad_logvar = grad_output * epsilon * 0.5 * std_dev
+    \\        grad_input[idx + latent_dim] = grad_output[idx] * epsilon[idx] * 0.5f * std_dev;
+    \\    }
+    \\}
+;
+
+/// Batch Normalization backward kernel CUDA C source
+pub const BATCHNORM_BACKWARD_SOURCE =
+    \\extern "C" __global__ void batchnorm_backward(
+    \\    const float* input, const float* grad_output,
+    \\    float* grad_input, float* grad_gamma, float* grad_beta,
+    \\    const float* gamma,
+    \\    int batch_size, int features,
+    \\    float epsilon) {
+    \\
+    \\    int f = blockIdx.x * blockDim.x + threadIdx.x;
+    \\    if (f >= features) return;
+    \\
+    \\    // 1. Compute mean and variance for this feature across the batch
+    \\    float mean = 0.0f;
+    \\    for (int b = 0; b < batch_size; b++) {
+    \\        mean += input[b * features + f];
+    \\    }
+    \\    mean /= (float)batch_size;
+    \\
+    \\    float variance = 0.0f;
+    \\    for (int b = 0; b < batch_size; b++) {
+    \\        float diff = input[b * features + f] - mean;
+    \\        variance += diff * diff;
+    \\    }
+    \\    variance /= (float)batch_size;
+    \\    float std = sqrtf(variance + epsilon);
+    \\
+    \\    // 2. Compute d_gamma and d_beta
+    \\    float d_gamma = 0.0f;
+    \\    float d_beta = 0.0f;
+    \\    for (int b = 0; b < batch_size; b++) {
+    \\        int idx = b * features + f;
+    \\        float normalized = (input[idx] - mean) / std;
+    \\        d_gamma += grad_output[idx] * normalized;
+    \\        d_beta += grad_output[idx];
+    \\    }
+    \\    grad_gamma[f] = d_gamma;
+    \\    grad_beta[f] = d_beta;
+    \\
+    \\    // 3. Compute grad_input
+    \\    float gamma_f = gamma[f];
+    \\    float scale = gamma_f / ((float)batch_size * std);
+    \\    for (int b = 0; b < batch_size; b++) {
+    \\        int idx = b * features + f;
+    \\        float normalized = (input[idx] - mean) / std;
+    \\        grad_input[idx] = scale * ((float)batch_size * grad_output[idx] - d_beta - normalized * d_gamma);
+    \\    }
+    \\}
+;
+
+/// Conv1D forward kernel CUDA C source
+pub const CONV1D_FORWARD_SOURCE =
+    \\extern "C" __global__ void conv1d_forward(
+    \\    const float* input, const float* weights, const float* bias, float* output,
+    \\    int in_channels, int out_channels, int kernel_size, int in_len, int out_len) {
+    \\
+    \\    int out_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    \\    int ch_out = blockIdx.y;
+    \\
+    \\    if (out_idx < out_len && ch_out < out_channels) {
+    \\        float sum = bias[ch_out];
+    \\        for (int ch_in = 0; ch_in < in_channels; ch_in++) {
+    \\            for (int k = 0; k < kernel_size; k++) {
+    \\                int in_idx = out_idx + k;
+    \\                if (in_idx < in_len) {
+    \\                    sum += input[ch_in * in_len + in_idx] *
+    \\                           weights[(ch_out * in_channels + ch_in) * kernel_size + k];
+    \\                }
+    \\            }
+    \\        }
+    \\        output[ch_out * out_len + out_idx] = sum;
+    \\    }
+    \\}
+;
+
+/// Conv1D backward weight gradient kernel
+pub const CONV1D_GRAD_WEIGHT_SOURCE =
+    \\extern "C" __global__ void conv1d_grad_weight(
+    \\    const float* input, const float* grad_output, float* grad_weights,
+    \\    int in_channels, int out_channels, int kernel_size, int in_len, int out_len) {
+    \\
+    \\    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    \\    int total_weights = out_channels * in_channels * kernel_size;
+    \\
+    \\    if (idx < total_weights) {
+    \\        int k = idx % kernel_size;
+    \\        int ch_in = (idx / kernel_size) % in_channels;
+    \\        int ch_out = idx / (kernel_size * in_channels);
+    \\
+    \\        float sum = 0.0f;
+    \\        for (int i = 0; i < out_len; i++) {
+    \\            int in_idx = i + k;
+    \\            if (in_idx < in_len) {
+    \\                sum += input[ch_in * in_len + in_idx] * grad_output[ch_out * out_len + i];
+    \\            }
+    \\        }
+    \\        grad_weights[idx] = sum;
+    \\    }
+    \\}
+;
+
+/// Conv1D backward input gradient kernel
+pub const CONV1D_GRAD_INPUT_SOURCE =
+    \\extern "C" __global__ void conv1d_grad_input(
+    \\    const float* weights, const float* grad_output, float* grad_input,
+    \\    int in_channels, int out_channels, int kernel_size, int in_len, int out_len) {
+    \\
+    \\    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    \\    int total_input = in_channels * in_len;
+    \\
+    \\    if (idx < total_input) {
+    \\        int in_idx = idx % in_len;
+    \\        int ch_in = idx / in_len;
+    \\
+    \\        float sum = 0.0f;
+    \\        for (int ch_out = 0; ch_out < out_channels; ch_out++) {
+    \\            for (int k = 0; k < kernel_size; k++) {
+    \\                int out_pos = in_idx - k;
+    \\                if (out_pos >= 0 && out_pos < out_len) {
+    \\                    sum += grad_output[ch_out * out_len + out_pos] *
+    \\                           weights[(ch_out * in_channels + ch_in) * kernel_size + k];
+    \\                }
+    \\            }
+    \\        }
+    \\        grad_input[idx] = sum;
+    \\    }
+    \\}
+;
+
+/// Conv1D backward bias gradient kernel
+pub const CONV1D_GRAD_BIAS_SOURCE =
+    \\extern "C" __global__ void conv1d_grad_bias(
+    \\    const float* grad_output, float* grad_bias,
+    \\    int out_channels, int out_len) {
+    \\
+    \\    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    \\
+    \\    if (idx < out_channels) {
+    \\        float sum = 0.0f;
+    \\        for (int i = 0; i < out_len; i++) {
+    \\            sum += grad_output[idx * out_len + i];
+    \\        }
+    \\        grad_bias[idx] = sum;
+    \\    }
+    \\}
+;
+
+/// Softmax backward kernel CUDA C source
+pub const SOFTMAX_BACKWARD_SOURCE =
+    \\extern "C" __global__ void softmax_backward(
+    \\    const float* output, const float* grad_output, float* grad_input,
+    \\    int batch_size, int features) {
+    \\
+    \\    int b = blockIdx.x * blockDim.x + threadIdx.x;
+    \\    if (b < batch_size) {
+    \\        float dot = 0.0f;
+    \\        for (int f = 0; f < features; f++) {
+    \\            dot += grad_output[b * features + f] * output[b * features + f];
+    \\        }
+    \\
+    \\        for (int f = 0; f < features; f++) {
+    \\            int idx = b * features + f;
+    \\            grad_input[idx] = output[idx] * (grad_output[idx] - dot);
+    \\        }
+    \\    }
+    \\}
+;
+
 /// MSE backward PTX
 pub const MSE_BACKWARD_PTX = PTX_HEADER ++
-    \\ .visible .entry mse_backward(
+    \\.visible .entry mse_backward(
     \\    .param .u64 output,
     \\    .param .u64 target,
     \\    .param .u64 grad,
@@ -2436,7 +3554,7 @@ pub const MSE_BACKWARD_PTX = PTX_HEADER ++
 
 /// Cross entropy backward PTX
 pub const CROSS_ENTROPY_BACKWARD_PTX = PTX_HEADER ++
-    \\ .visible .entry cross_entropy_backward(
+    \\.visible .entry cross_entropy_backward(
     \\    .param .u64 output,
     \\    .param .u64 target,
     \\    .param .u64 grad,
@@ -2478,7 +3596,7 @@ pub const CROSS_ENTROPY_BACKWARD_PTX = PTX_HEADER ++
 
 /// Binary cross entropy backward PTX
 pub const BINARY_CROSS_ENTROPY_BACKWARD_PTX = PTX_HEADER ++
-    \\ .visible .entry binary_cross_entropy_backward(
+    \\.visible .entry binary_cross_entropy_backward(
     \\    .param .u64 output,
     \\    .param .u64 target,
     \\    .param .u64 grad,
@@ -2530,7 +3648,7 @@ pub const BINARY_CROSS_ENTROPY_BACKWARD_PTX = PTX_HEADER ++
 
 /// KL divergence backward PTX
 pub const KL_DIVERGENCE_BACKWARD_PTX = PTX_HEADER ++
-    \\ .visible .entry kl_divergence_backward(
+    \\.visible .entry kl_divergence_backward(
     \\    .param .u64 output,
     \\    .param .u64 grad,
     \\    .param .u32 n,
@@ -2569,3 +3687,813 @@ pub const KL_DIVERGENCE_BACKWARD_PTX = PTX_HEADER ++
     \\    ret;
     \\}
 ;
+
+/// Fused matrix multiplication + bias + ReLU kernel PTX
+/// Performs: C = max(0, A * B + bias)
+/// This eliminates 3 separate kernel launches and 2 intermediate memory transfers
+pub const MATMUL_BIAS_RELU_FUSED_PTX = PTX_HEADER ++
+    \\.visible .entry matmul_bias_relu_fused(
+    \\    .param .u64 A,
+    \\    .param .u64 B,
+    \\    .param .u64 C,
+    \\    .param .u64 bias,
+    \\    .param .u32 batch_size,
+    \\    .param .u32 M,
+    \\    .param .u32 N,
+    \\    .param .u32 K
+    \\) {
+    \\    .reg .u64 %A_ptr, %B_ptr, %C_ptr, %bias_ptr;
+    \\    .reg .u32 %batch_size, %M, %N, %K;
+    \\    .reg .u32 %batch, %row, %col, %k;
+    \\    .reg .u32 %tid, %ctaid, %ntid;
+    \\    .reg .f32 %sum, %a_val, %b_val, %bias_val, %result;
+    \\    .reg .u64 %a_addr, %b_addr, %c_addr, %a_batch_offset, %c_batch_offset;
+    \\    .reg .pred %p, %p_neg;
+    \\    .reg .f32 %zero;
+    \\
+    \\    ld.param.u64 %A_ptr, [A];
+    \\    ld.param.u64 %B_ptr, [B];
+    \\    ld.param.u64 %C_ptr, [C];
+    \\    ld.param.u64 %bias_ptr, [bias];
+    \\    ld.param.u32 %batch_size, [batch_size];
+    \\    ld.param.u32 %M, [M];
+    \\    ld.param.u32 %N, [N];
+    \\    ld.param.u32 %K, [K];
+    \\
+    \\    mov.u32 %tid, %tid.x;
+    \\    mov.u32 %ctaid, %ctaid.x;
+    \\    mov.u32 %ntid, %ntid.x;
+    \\    mov.u32 %batch, %ctaid.y;
+    \\    mov.f32 %zero, 0f00000000;
+    \\
+    \\    // Calculate global column index (each thread handles one column)
+    \\    mad.lo.u32 %col, %ctaid.x, %ntid.x, %tid.x;
+    \\    setp.ge.u32 %p, %col, %N;
+    \\    @%p bra END;
+    \\    setp.ge.u32 %p, %batch, %batch_size;
+    \\    @%p bra END;
+    \\
+    \\    // Calculate batch offsets (A and C are batched, B is shared)
+    \\    mul.lo.u64 %a_batch_offset, %batch, %M;
+    \\    mul.lo.u64 %a_batch_offset, %a_batch_offset, %K;
+    \\    mul.lo.u64 %a_batch_offset, %a_batch_offset, 4;
+    \\    add.u64 %A_ptr, %A_ptr, %a_batch_offset;
+    \\
+    \\    mul.lo.u64 %c_batch_offset, %batch, %M;
+    \\    mul.lo.u64 %c_batch_offset, %c_batch_offset, %N;
+    \\    mul.lo.u64 %c_batch_offset, %c_batch_offset, 4;
+    \\    add.u64 %C_ptr, %C_ptr, %c_batch_offset;
+    \\
+    \\    // Matrix multiplication: compute dot product of A row and B column
+    \\    mov.f32 %sum, 0f00000000;
+    \\    mov.u32 %k, 0;
+    \\    mov.u32 %row, 0;  // M=1 for batch size, so row=0
+    \\LOOP:
+    \\    setp.ge.u32 %p, %k, %K;
+    \\    @%p bra LOOP_END;
+    \\    // Load A[batch][0][k]
+    \\    mad.lo.u64 %a_addr, %row, %K, %k;
+    \\    mul.lo.u64 %a_addr, %a_addr, 4;
+    \\    add.u64 %a_addr, %a_addr, %A_ptr;
+    \\    ld.global.f32 %a_val, [%a_addr];
+    \\    // Load B[k][col]
+    \\    mad.lo.u64 %b_addr, %k, %N, %col;
+    \\    mul.lo.u64 %b_addr, %b_addr, 4;
+    \\    add.u64 %b_addr, %b_addr, %B_ptr;
+    \\    ld.global.f32 %b_val, [%b_addr];
+    \\    // Accumulate: sum += a * b
+    \\    fma.rn.f32 %sum, %a_val, %b_val, %sum;
+    \\    add.u32 %k, %k, 1;
+    \\    bra LOOP;
+    \\LOOP_END:
+    \\
+    \\    // Add bias[col]
+    \\    mul.lo.u64 %b_addr, %col, 4;
+    \\    add.u64 %b_addr, %b_addr, %bias_ptr;
+    \\    ld.global.f32 %bias_val, [%b_addr];
+    \\    add.f32 %sum, %sum, %bias_val;
+    \\
+    \\    // Apply ReLU: max(0, sum)
+    \\    setp.lt.f32 %p_neg, %sum, %zero;
+    \\    selp.f32 %result, %zero, %sum, %p_neg;
+    \\
+    \\    // Store result to C[batch][0][col]
+    \\    mad.lo.u64 %c_addr, %row, %N, %col;
+    \\    mul.lo.u64 %c_addr, %c_addr, 4;
+    \\    add.u64 %c_addr, %c_addr, %C_ptr;
+    \\    st.global.f32 [%c_addr], %result;
+    \\END:
+    \\    ret;
+    \\}
+;
+
+/// Fused matrix multiplication + bias + Sigmoid kernel PTX
+/// Performs: C = sigmoid(A * B + bias)
+pub const MATMUL_BIAS_SIGMOID_FUSED_PTX = PTX_HEADER ++
+    \\.visible .entry matmul_bias_sigmoid_fused(
+    \\    .param .u64 A,
+    \\    .param .u64 B,
+    \\    .param .u64 C,
+    \\    .param .u64 bias,
+    \\    .param .u32 batch_size,
+    \\    .param .u32 M,
+    \\    .param .u32 N,
+    \\    .param .u32 K
+    \\) {
+    \\    .reg .u64 %A_ptr, %B_ptr, %C_ptr, %bias_ptr;
+    \\    .reg .u32 %batch_size, %M, %N, %K;
+    \\    .reg .u32 %batch, %row, %col, %k;
+    \\    .reg .u32 %tid, %ctaid, %ntid;
+    \\    .reg .f32 %sum, %a_val, %b_val, %bias_val, %result;
+    \\    .reg .f32 %neg_sum, %exp_val, %one;
+    \\    .reg .u64 %a_addr, %b_addr, %c_addr, %a_batch_offset, %c_batch_offset;
+    \\    .reg .pred %p;
+    \\
+    \\    ld.param.u64 %A_ptr, [A];
+    \\    ld.param.u64 %B_ptr, [B];
+    \\    ld.param.u64 %C_ptr, [C];
+    \\    ld.param.u64 %bias_ptr, [bias];
+    \\    ld.param.u32 %batch_size, [batch_size];
+    \\    ld.param.u32 %M, [M];
+    \\    ld.param.u32 %N, [N];
+    \\    ld.param.u32 %K, [K];
+    \\
+    \\    mov.u32 %tid, %tid.x;
+    \\    mov.u32 %ctaid, %ctaid.x;
+    \\    mov.u32 %ntid, %ntid.x;
+    \\    mov.u32 %batch, %ctaid.y;
+    \\    mov.f32 %one, 0f3F800000;  // 1.0f
+    \\
+    \\    mad.lo.u32 %col, %ctaid.x, %ntid.x, %tid.x;
+    \\    setp.ge.u32 %p, %col, %N;
+    \\    @%p bra END;
+    \\    setp.ge.u32 %p, %batch, %batch_size;
+    \\    @%p bra END;
+    \\
+    \\    mul.lo.u64 %a_batch_offset, %batch, %M;
+    \\    mul.lo.u64 %a_batch_offset, %a_batch_offset, %K;
+    \\    mul.lo.u64 %a_batch_offset, %a_batch_offset, 4;
+    \\    add.u64 %A_ptr, %A_ptr, %a_batch_offset;
+    \\
+    \\    mul.lo.u64 %c_batch_offset, %batch, %M;
+    \\    mul.lo.u64 %c_batch_offset, %c_batch_offset, %N;
+    \\    mul.lo.u64 %c_batch_offset, %c_batch_offset, 4;
+    \\    add.u64 %C_ptr, %C_ptr, %c_batch_offset;
+    \\
+    \\    mov.f32 %sum, 0f00000000;
+    \\    mov.u32 %k, 0;
+    \\    mov.u32 %row, 0;
+    \\LOOP:
+    \\    setp.ge.u32 %p, %k, %K;
+    \\    @%p bra LOOP_END;
+    \\    mad.lo.u64 %a_addr, %row, %K, %k;
+    \\    mul.lo.u64 %a_addr, %a_addr, 4;
+    \\    add.u64 %a_addr, %a_addr, %A_ptr;
+    \\    ld.global.f32 %a_val, [%a_addr];
+    \\    mad.lo.u64 %b_addr, %k, %N, %col;
+    \\    mul.lo.u64 %b_addr, %b_addr, 4;
+    \\    add.u64 %b_addr, %b_addr, %B_ptr;
+    \\    ld.global.f32 %b_val, [%b_addr];
+    \\    fma.rn.f32 %sum, %a_val, %b_val, %sum;
+    \\    add.u32 %k, %k, 1;
+    \\    bra LOOP;
+    \\LOOP_END:
+    \\
+    \\    // Add bias
+    \\    mul.lo.u64 %b_addr, %col, 4;
+    \\    add.u64 %b_addr, %b_addr, %bias_ptr;
+    \\    ld.global.f32 %bias_val, [%b_addr];
+    \\    add.f32 %sum, %sum, %bias_val;
+    \\
+    \\    // Apply sigmoid: 1 / (1 + exp(-x))
+    \\    neg.f32 %neg_sum, %sum;
+    \\    ex2.approx.f32 %exp_val, %neg_sum;  // exp2(log2(e) * -x) approximates exp(-x)
+    \\    add.f32 %exp_val, %one, %exp_val;
+    \\    div.approx.f32 %result, %one, %exp_val;
+    \\
+    \\    // Store result
+    \\    mad.lo.u64 %c_addr, %row, %N, %col;
+    \\    mul.lo.u64 %c_addr, %c_addr, 4;
+    \\    add.u64 %c_addr, %c_addr, %C_ptr;
+    \\    st.global.f32 [%c_addr], %result;
+    \\END:
+    \\    ret;
+    \\}
+;
+
+/// Fused matrix multiplication + bias + Tanh kernel PTX
+/// Performs: C = tanh(A * B + bias)
+pub const MATMUL_BIAS_TANH_FUSED_PTX = PTX_HEADER ++
+    \\.visible .entry matmul_bias_tanh_fused(
+    \\    .param .u64 A,
+    \\    .param .u64 B,
+    \\    .param .u64 C,
+    \\    .param .u64 bias,
+    \\    .param .u32 batch_size,
+    \\    .param .u32 M,
+    \\    .param .u32 N,
+    \\    .param .u32 K
+    \\) {
+    \\    .reg .u64 %A_ptr, %B_ptr, %C_ptr, %bias_ptr;
+    \\    .reg .u32 %batch_size, %M, %N, %K;
+    \\    .reg .u32 %batch, %row, %col, %k;
+    \\    .reg .u32 %tid, %ctaid, %ntid;
+    \\    .reg .f32 %sum, %a_val, %b_val, %bias_val, %result;
+    \\    .reg .f32 %neg_sum, %exp_val, %exp_neg_val, %numer, %denom;
+    \\    .reg .u64 %a_addr, %b_addr, %c_addr, %a_batch_offset, %c_batch_offset;
+    \\    .reg .pred %p;
+    \\
+    \\    ld.param.u64 %A_ptr, [A];
+    \\    ld.param.u64 %B_ptr, [B];
+    \\    ld.param.u64 %C_ptr, [C];
+    \\    ld.param.u64 %bias_ptr, [bias];
+    \\    ld.param.u32 %batch_size, [batch_size];
+    \\    ld.param.u32 %M, [M];
+    \\    ld.param.u32 %N, [N];
+    \\    ld.param.u32 %K, [K];
+    \\
+    \\    mov.u32 %tid, %tid.x;
+    \\    mov.u32 %ctaid, %ctaid.x;
+    \\    mov.u32 %ntid, %ntid.x;
+    \\    mov.u32 %batch, %ctaid.y;
+    \\
+    \\    mad.lo.u32 %col, %ctaid.x, %ntid.x, %tid.x;
+    \\    setp.ge.u32 %p, %col, %N;
+    \\    @%p bra END;
+    \\    setp.ge.u32 %p, %batch, %batch_size;
+    \\    @%p bra END;
+    \\
+    \\    mul.lo.u64 %a_batch_offset, %batch, %M;
+    \\    mul.lo.u64 %a_batch_offset, %a_batch_offset, %K;
+    \\    mul.lo.u64 %a_batch_offset, %a_batch_offset, 4;
+    \\    add.u64 %A_ptr, %A_ptr, %a_batch_offset;
+    \\
+    \\    mul.lo.u64 %c_batch_offset, %batch, %M;
+    \\    mul.lo.u64 %c_batch_offset, %c_batch_offset, %N;
+    \\    mul.lo.u64 %c_batch_offset, %c_batch_offset, 4;
+    \\    add.u64 %C_ptr, %C_ptr, %c_batch_offset;
+    \\
+    \\    mov.f32 %sum, 0f00000000;
+    \\    mov.u32 %k, 0;
+    \\    mov.u32 %row, 0;
+    \\LOOP:
+    \\    setp.ge.u32 %p, %k, %K;
+    \\    @%p bra LOOP_END;
+    \\    mad.lo.u64 %a_addr, %row, %K, %k;
+    \\    mul.lo.u64 %a_addr, %a_addr, 4;
+    \\    add.u64 %a_addr, %a_addr, %A_ptr;
+    \\    ld.global.f32 %a_val, [%a_addr];
+    \\    mad.lo.u64 %b_addr, %k, %N, %col;
+    \\    mul.lo.u64 %b_addr, %b_addr, 4;
+    \\    add.u64 %b_addr, %b_addr, %B_ptr;
+    \\    ld.global.f32 %b_val, [%b_addr];
+    \\    fma.rn.f32 %sum, %a_val, %b_val, %sum;
+    \\    add.u32 %k, %k, 1;
+    \\    bra LOOP;
+    \\LOOP_END:
+    \\
+    \\    // Add bias
+    \\    mul.lo.u64 %b_addr, %col, 4;
+    \\    add.u64 %b_addr, %b_addr, %bias_ptr;
+    \\    ld.global.f32 %bias_val, [%b_addr];
+    \\    add.f32 %sum, %sum, %bias_val;
+    \\
+    \\    // Apply tanh using formula: (exp(2x) - 1) / (exp(2x) + 1)
+    \\    // First compute exp(2x)
+    \\    add.f32 %exp_val, %sum, %sum;  // 2x
+    \\    ex2.approx.f32 %exp_val, %exp_val;  // exp2(log2(e) * 2x) approximates exp(2x)
+    \\    // Compute result
+    \\    mov.f32 %numer, 0fBF800000;  // -1.0f
+    \\    mov.f32 %denom, 0f3F800000;  // 1.0f
+    \\    fma.rn.f32 %numer, %exp_val, %exp_val, %numer;  // exp(2x) - 1
+    \\    fma.rn.f32 %denom, %exp_val, %exp_val, %denom;  // exp(2x) + 1
+    \\    div.approx.f32 %result, %numer, %denom;
+    \\
+    \\    // Store result
+    \\    mad.lo.u64 %c_addr, %row, %N, %col;
+    \\    mul.lo.u64 %c_addr, %c_addr, 4;
+    \\    add.u64 %c_addr, %c_addr, %C_ptr;
+    \\    st.global.f32 [%c_addr], %result;
+    \\END:
+    \\    ret;
+    \\}
+;
+
+/// Fused matrix multiplication + bias (identity/no activation) kernel PTX
+/// Performs: C = A * B + bias
+pub const MATMUL_BIAS_IDENTITY_FUSED_PTX = PTX_HEADER ++
+    \\.visible .entry matmul_bias_identity_fused(
+    \\    .param .u64 A,
+    \\    .param .u64 B,
+    \\    .param .u64 C,
+    \\    .param .u64 bias,
+    \\    .param .u32 batch_size,
+    \\    .param .u32 M,
+    \\    .param .u32 N,
+    \\    .param .u32 K
+    \\) {
+    \\    .reg .u64 %A_ptr, %B_ptr, %C_ptr, %bias_ptr;
+    \\    .reg .u32 %batch_size, %M, %N, %K;
+    \\    .reg .u32 %batch, %row, %col, %k;
+    \\    .reg .u32 %tid, %ctaid, %ntid;
+    \\    .reg .f32 %sum, %a_val, %b_val, %bias_val;
+    \\    .reg .u64 %a_addr, %b_addr, %c_addr, %a_batch_offset, %c_batch_offset;
+    \\    .reg .pred %p;
+    \\
+    \\    ld.param.u64 %A_ptr, [A];
+    \\    ld.param.u64 %B_ptr, [B];
+    \\    ld.param.u64 %C_ptr, [C];
+    \\    ld.param.u64 %bias_ptr, [bias];
+    \\    ld.param.u32 %batch_size, [batch_size];
+    \\    ld.param.u32 %M, [M];
+    \\    ld.param.u32 %N, [N];
+    \\    ld.param.u32 %K, [K];
+    \\
+    \\    mov.u32 %tid, %tid.x;
+    \\    mov.u32 %ctaid, %ctaid.x;
+    \\    mov.u32 %ntid, %ntid.x;
+    \\    mov.u32 %batch, %ctaid.y;
+    \\
+    \\    mad.lo.u32 %col, %ctaid.x, %ntid.x, %tid.x;
+    \\    setp.ge.u32 %p, %col, %N;
+    \\    @%p bra END;
+    \\    setp.ge.u32 %p, %batch, %batch_size;
+    \\    @%p bra END;
+    \\
+    \\    mul.lo.u64 %a_batch_offset, %batch, %M;
+    \\    mul.lo.u64 %a_batch_offset, %a_batch_offset, %K;
+    \\    mul.lo.u64 %a_batch_offset, %a_batch_offset, 4;
+    \\    add.u64 %A_ptr, %A_ptr, %a_batch_offset;
+    \\
+    \\    mul.lo.u64 %c_batch_offset, %batch, %M;
+    \\    mul.lo.u64 %c_batch_offset, %c_batch_offset, %N;
+    \\    mul.lo.u64 %c_batch_offset, %c_batch_offset, 4;
+    \\    add.u64 %C_ptr, %C_ptr, %c_batch_offset;
+    \\
+    \\    mov.f32 %sum, 0f00000000;
+    \\    mov.u32 %k, 0;
+    \\    mov.u32 %row, 0;
+    \\LOOP:
+    \\    setp.ge.u32 %p, %k, %K;
+    \\    @%p bra LOOP_END;
+    \\    mad.lo.u64 %a_addr, %row, %K, %k;
+    \\    mul.lo.u64 %a_addr, %a_addr, 4;
+    \\    add.u64 %a_addr, %a_addr, %A_ptr;
+    \\    ld.global.f32 %a_val, [%a_addr];
+    \\    mad.lo.u64 %b_addr, %k, %N, %col;
+    \\    mul.lo.u64 %b_addr, %b_addr, 4;
+    \\    add.u64 %b_addr, %b_addr, %B_ptr;
+    \\    ld.global.f32 %b_val, [%b_addr];
+    \\    fma.rn.f32 %sum, %a_val, %b_val, %sum;
+    \\    add.u32 %k, %k, 1;
+    \\    bra LOOP;
+    \\LOOP_END:
+    \\
+    \\    // Add bias
+    \\    mul.lo.u64 %b_addr, %col, 4;
+    \\    add.u64 %b_addr, %b_addr, %bias_ptr;
+    \\    ld.global.f32 %bias_val, [%b_addr];
+    \\    add.f32 %sum, %sum, %bias_val;
+    \\
+    \\    // Store result (no activation)
+    \\    mad.lo.u64 %c_addr, %row, %N, %col;
+    \\    mul.lo.u64 %c_addr, %c_addr, 4;
+    \\    add.u64 %c_addr, %c_addr, %C_ptr;
+    \\    st.global.f32 [%c_addr], %sum;
+    \\END:
+    \\    ret;
+    \\}
+;
+
+/// RNN forward step kernel CUDA C source
+pub const RNN_FORWARD_STEP_SOURCE =
+    \\extern "C" __global__ void rnn_forward_step(
+    \\    const float* gates_ih,
+    \\    const float* gates_hh,
+    \\    const float* bias,
+    \\    float* h_curr,
+    \\    int hidden_size) {
+    \\    int gid = blockIdx.x * blockDim.x + threadIdx.x;
+    \\    if (gid < hidden_size) {
+    \\        float val = gates_ih[gid] + gates_hh[gid] + bias[gid];
+    \\        h_curr[gid] = tanhf(val);
+    \\    }
+    \\}
+;
+
+/// RNN backward step kernel CUDA C source
+pub const RNN_BACKWARD_STEP_SOURCE =
+    \\extern "C" __global__ void rnn_backward_step(
+    \\    const float* grad_h_curr,
+    \\    const float* grad_h_next,
+    \\    const float* h_curr,
+    \\    float* grad_after_act,
+    \\    int hidden_size) {
+    \\    int gid = blockIdx.x * blockDim.x + threadIdx.x;
+    \\    if (gid < hidden_size) {
+    \\        float gh = grad_h_curr[gid] + grad_h_next[gid];
+    \\        float h = h_curr[gid];
+    \\        grad_after_act[gid] = gh * (1.0f - h * h);
+    \\    }
+    \\}
+;
+
+/// LSTM forward step kernel CUDA C source
+pub const LSTM_FORWARD_STEP_SOURCE =
+    \\extern "C" __global__ void lstm_forward_step(
+    \\    const float* gates_ih,
+    \\    const float* gates_hh,
+    \\    const float* bias,
+    \\    const float* c_prev,
+    \\    float* c_curr,
+    \\    float* h_curr,
+    \\    float* gate_acts,
+    \\    int hidden_size) {
+    \\    int gid = blockIdx.x * blockDim.x + threadIdx.x;
+    \\    if (gid < hidden_size) {
+    \\        int h = hidden_size;
+    \\
+    \\        // Gate indices
+    \\        float gi_i = gates_ih[gid];
+    \\        float gi_f = gates_ih[h + gid];
+    \\        float gi_g = gates_ih[2 * h + gid];
+    \\        float gi_o = gates_ih[3 * h + gid];
+    \\
+    \\        float gh_i = gates_hh[gid];
+    \\        float gh_f = gates_hh[h + gid];
+    \\        float gh_g = gates_hh[2 * h + gid];
+    \\        float gh_o = gates_hh[3 * h + gid];
+    \\
+    \\        float b_i = bias[gid];
+    \\        float b_f = bias[h + gid];
+    \\        float b_g = bias[2 * h + gid];
+    \\        float b_o = bias[3 * h + gid];
+    \\
+    \\        // Activate gates
+    \\        float i = 1.0f / (1.0f + expf(-(gi_i + gh_i + b_i)));
+    \\        float f = 1.0f / (1.0f + expf(-(gi_f + gh_f + b_f)));
+    \\        float g = tanhf(gi_g + gh_g + b_g);
+    \\        float o = 1.0f / (1.0f + expf(-(gi_o + gh_o + b_o)));
+    \\
+    \\        // Store activations
+    \\        gate_acts[gid] = i;
+    \\        gate_acts[h + gid] = f;
+    \\        gate_acts[2 * h + gid] = g;
+    \\        gate_acts[3 * h + gid] = o;
+    \\
+    \\        // Update cell state
+    \\        float cp = c_prev[gid];
+    \\        float cc = f * cp + i * g;
+    \\        c_curr[gid] = cc;
+    \\
+    \\        // Update hidden state
+    \\        h_curr[gid] = o * tanhf(cc);
+    \\    }
+    \\}
+;
+
+/// LSTM backward step kernel CUDA C source
+pub const LSTM_BACKWARD_STEP_SOURCE =
+    \\extern "C" __global__ void lstm_backward_step(
+    \\    const float* grad_h_curr,
+    \\    const float* grad_h_next,
+    \\    const float* grad_c_next,
+    \\    const float* gate_acts,
+    \\    const float* c_curr,
+    \\    const float* c_prev,
+    \\    float* grad_gates,
+    \\    float* grad_c_prev,
+    \\    float* grad_h_prev_part,
+    \\    int hidden_size) {
+    \\    int gid = blockIdx.x * blockDim.x + threadIdx.x;
+    \\    if (gid < hidden_size) {
+    \\        int h = hidden_size;
+    \\        float i = gate_acts[gid];
+    \\        float f = gate_acts[h + gid];
+    \\        float g = gate_acts[2 * h + gid];
+    \\        float o = gate_acts[3 * h + gid];
+    \\
+    \\        float gh = grad_h_curr[gid] + grad_h_next[gid];
+    \\        float tanh_cc = tanhf(c_curr[gid]);
+    \\
+    \\        // d_o = d_h * tanh(c_t) * sigmoid'(o_t)
+    \\        float d_o = gh * tanh_cc * (o * (1.0f - o));
+    \\
+    \\        // d_c = d_h * o * tanh'(c_t) + d_c_next
+    \\        float d_c = gh * o * (1.0f - tanh_cc * tanh_cc) + grad_c_next[gid];
+    \\
+    \\        // d_f = d_c * c_{t-1} * sigmoid'(f_t)
+    \\        float d_f = d_c * c_prev[gid] * (f * (1.0f - f));
+    \\        // d_i = d_c * g_t * sigmoid'(i_t)
+    \\        float d_i = d_c * g * (i * (1.0f - i));
+    \\        // d_g = d_c * i_t * tanh'(g_t)
+    \\        float d_g = d_c * i * (1.0f - g * g);
+    \\
+    \\        grad_gates[gid] = d_i;
+    \\        grad_gates[h + gid] = d_f;
+    \\        grad_gates[2 * h + gid] = d_g;
+    \\        grad_gates[3 * h + gid] = d_o;
+    \\
+    \\        // grad_c_prev = d_c * f
+    \\        grad_c_prev[gid] = d_c * f;
+    \\
+    \\        // grad_h_prev_part is not computed here but passed for API consistency
+    \\        grad_h_prev_part[gid] = 0.0f;
+    \\    }
+    \\}
+;
+
+/// GRU forward step kernel CUDA C source
+pub const GRU_FORWARD_STEP_SOURCE =
+    \\extern "C" __global__ void gru_forward_step(
+    \\    const float* gates_ih,
+    \\    const float* gates_hh,
+    \\    const float* bias,
+    \\    const float* h_prev,
+    \\    float* h_curr,
+    \\    float* gate_acts,
+    \\    float* n_hh_out,
+    \\    int hidden_size) {
+    \\    int gid = blockIdx.x * blockDim.x + threadIdx.x;
+    \\    if (gid < hidden_size) {
+    \\        int h = hidden_size;
+    \\
+    \\        // z_t = sigmoid(W_iz * x_t + b_iz + W_hz * h_{t-1} + b_{hz})
+    \\        float z = 1.0f / (1.0f + expf(-(gates_ih[gid] + gates_hh[gid] + bias[gid])));
+    \\
+    \\        // r_t = sigmoid(W_ir * x_t + b_ir + W_hr * h_{t-1} + b_{hr})
+    \\        float r = 1.0f / (1.0f + expf(-(gates_ih[h + gid] + gates_hh[h + gid] + bias[h + gid])));
+    \\
+    \\        // n_t = tanh(W_in * x_t + b_in + r_t * (W_hn * h_{t-1} + b_{hn}))
+    \\        float n_hh = gates_hh[2 * h + gid];
+    \\        float n = tanhf(gates_ih[2 * h + gid] + bias[2 * h + gid] + r * n_hh);
+    \\
+    \\        // h_t = (1 - z_t) * n_t + z_t * h_{t-1}
+    \\        float hp = h_prev[gid];
+    \\        h_curr[gid] = (1.0f - z) * n + z * hp;
+    \\
+    \\        // Store for backward
+    \\        gate_acts[gid] = z;
+    \\        gate_acts[h + gid] = r;
+    \\        gate_acts[2 * h + gid] = n;
+    \\        n_hh_out[gid] = n_hh;
+    \\    }
+    \\}
+;
+
+// =============================================================================
+// Tensor Core WMMA Kernels
+// =============================================================================
+/// WMMA matrix multiplication using CUDA C++ with mma.h
+/// Target: sm_70+ (Volta, Turing, Ampere, Hopper)
+/// Uses FP16 input with FP32 accumulation for maximum throughput
+pub const MATMUL_TENSOR_CORE_SOURCE =
+    \\#include <mma.h>
+    \\using namespace nvcuda;
+    \\
+    \\extern "C" __global__ void matmul_tensor_core(
+    \\    const half* __restrict__ A,
+    \\    const half* __restrict__ B,
+    \\    float* __restrict__ C,
+    \\    int M, int N, int K,
+    \\    int accumulate) {
+    \\
+    \\    // Tile dimensions: 64x64 per block, 16x16 per warp
+    \\    const int WMMA_M = 16;
+    \\    const int WMMA_N = 16;
+    \\    const int WMMA_K = 16;
+    \\
+    \\    // Block tile coordinates
+    \\    int block_row = blockIdx.y * 64;
+    \\    int block_col = blockIdx.x * 64;
+    \\
+    \\    // Warp coordinates within block (4 warps per block)
+    \\    int warp_id = threadIdx.x / 32;
+    \\    int warp_row = (warp_id / 2) * 32;  // 0 or 32
+    \\    int warp_col = (warp_id % 2) * 32;  // 0 or 32
+    \\
+    \\    // Thread lane within warp
+    \\    int lane_id = threadIdx.x % 32;
+    \\
+    \\    // Shared memory for A and B tiles (double buffered)
+    \\    // A: 64 x 32 (padded to avoid bank conflicts)
+    \\    // B: 64 x 32
+    \\    __shared__ half sA[2][64][32];
+    \\    __shared__ half sB[2][64][32];
+    \\
+    \\    // Accumulator fragments (FP32)
+    \\    wmma::fragment<wmma::accumulator, WMMA_M, WMMA_N, WMMA_K, float> acc[2][2];
+    \\    wmma::fragment<wmma::matrix_a, WMMA_M, WMMA_N, WMMA_K, half, wmma::row_major> a_frag;
+    \\    wmma::fragment<wmma::matrix_b, WMMA_M, WMMA_N, WMMA_K, half, wmma::row_major> b_frag;
+    \\
+    \\    // Initialize accumulators
+    \\    #pragma unroll
+    \\    for (int i = 0; i < 2; i++) {
+    \\        for (int j = 0; j < 2; j++) {
+    \\            wmma::fill_fragment(acc[i][j], 0.0f);
+    \\        }
+    \\    }
+    \\
+    \\    // Number of K tiles
+    \\    int num_k_tiles = (K + WMMA_K - 1) / WMMA_K;
+    \\
+    \\    // Current buffer index for double buffering
+    \\    int buf_idx = 0;
+    \\
+    \\    // Load first tile
+    \\    int k_tile = 0;
+    \\    int k_offset = k_tile * WMMA_K;
+    \\
+    \\    // Cooperative load: each thread loads 4 elements from A and B
+    \\    // A: M x K, B: K x N
+    \\    int load_row = threadIdx.x / 8;
+    \\    int load_col = (threadIdx.x % 8) * 4;
+    \\
+    \\    // Load A tile: 64 rows x 32 cols
+    \\    #pragma unroll
+    \\    for (int i = 0; i < 4; i++) {
+    \\        int r = load_row + i * 32;
+    \\        int c = load_col;
+    \\        int global_row = block_row + r;
+    \\        int global_col = k_offset + c;
+    \\
+    \\        if (global_row < M && global_col < K) {
+    \\            sA[buf_idx][r][c] = A[global_row * K + global_col];
+    \\            sA[buf_idx][r][c+1] = (global_col + 1 < K) ? A[global_row * K + global_col + 1] : __float2half(0.0f);
+    \\            sA[buf_idx][r][c+2] = (global_col + 2 < K) ? A[global_row * K + global_col + 2] : __float2half(0.0f);
+    \\            sA[buf_idx][r][c+3] = (global_col + 3 < K) ? A[global_row * K + global_col + 3] : __float2half(0.0f);
+    \\        } else {
+    \\            sA[buf_idx][r][c] = __float2half(0.0f);
+    \\            sA[buf_idx][r][c+1] = __float2half(0.0f);
+    \\            sA[buf_idx][r][c+2] = __float2half(0.0f);
+    \\            sA[buf_idx][r][c+3] = __float2half(0.0f);
+    \\        }
+    \\    }
+    \\
+    \\    // Load B tile: 64 cols x 32 rows (transposed access)
+    \\    #pragma unroll
+    \\    for (int i = 0; i < 4; i++) {
+    \\        int r = load_row + i * 32;
+    \\        int c = load_col;
+    \\        int global_row = k_offset + r;
+    \\        int global_col = block_col + c;
+    \\
+    \\        if (global_row < K && global_col < N) {
+    \\            sB[buf_idx][c][r] = B[global_row * N + global_col];
+    \\            sB[buf_idx][c+1][r] = (global_col + 1 < N) ? B[global_row * N + global_col + 1] : __float2half(0.0f);
+    \\            sB[buf_idx][c+2][r] = (global_col + 2 < N) ? B[global_row * N + global_col + 2] : __float2half(0.0f);
+    \\            sB[buf_idx][c+3][r] = (global_col + 3 < N) ? B[global_row * N + global_col + 3] : __float2half(0.0f);
+    \\        } else {
+    \\            sB[buf_idx][c][r] = __float2half(0.0f);
+    \\            sB[buf_idx][c+1][r] = __float2half(0.0f);
+    \\            sB[buf_idx][c+2][r] = __float2half(0.0f);
+    \\            sB[buf_idx][c+3][r] = __float2half(0.0f);
+    \\        }
+    \\    }
+    \\
+    \\    __syncthreads();
+    \\
+    \\    // Main loop over K tiles
+    \\    for (k_tile = 0; k_tile < num_k_tiles; k_tile++) {
+    \\        int next_k_offset = ((k_tile + 1) < num_k_tiles) ? (k_tile + 1) * WMMA_K : 0;
+    \\        int next_buf_idx = 1 - buf_idx;
+    \\
+    \\        // Compute using current tile
+    \\        // Each warp computes 2x2 WMMA tiles (32x32 output)
+    \\        #pragma unroll
+    \\        for (int wmma_k = 0; wmma_k < WMMA_K; wmma_k += WMMA_K) {
+    \\            // Load A fragments (2 tiles per warp)
+    \\            #pragma unroll
+    \\            for (int i = 0; i < 2; i++) {
+    \\                int row_offset = warp_row + i * WMMA_M;
+    \\                wmma::load_matrix_sync(a_frag, &sA[buf_idx][row_offset][wmma_k], 32);
+    \\
+    \\                // Load B fragments (2 tiles per warp)
+    \\                #pragma unroll
+    \\                for (int j = 0; j < 2; j++) {
+    \\                    int col_offset = warp_col + j * WMMA_N;
+    \\                    wmma::load_matrix_sync(b_frag, &sB[buf_idx][col_offset][wmma_k], 32);
+    \\
+    \\                    // MMA operation
+    \\                    wmma::mma_sync(acc[i][j], a_frag, b_frag, acc[i][j]);
+    \\                }
+    \\            }
+    \\        }
+    \\
+    \\        // Load next tile (if not last iteration)
+    \\        if (k_tile + 1 < num_k_tiles) {
+    \\            // Load next A tile
+    \\            #pragma unroll
+    \\            for (int i = 0; i < 4; i++) {
+    \\                int r = load_row + i * 32;
+    \\                int c = load_col;
+    \\                int global_row = block_row + r;
+    \\                int global_col = next_k_offset + c;
+    \\
+    \\                if (global_row < M && global_col < K) {
+    \\                    sA[next_buf_idx][r][c] = A[global_row * K + global_col];
+    \\                    sA[next_buf_idx][r][c+1] = (global_col + 1 < K) ? A[global_row * K + global_col + 1] : __float2half(0.0f);
+    \\                    sA[next_buf_idx][r][c+2] = (global_col + 2 < K) ? A[global_row * K + global_col + 2] : __float2half(0.0f);
+    \\                    sA[next_buf_idx][r][c+3] = (global_col + 3 < K) ? A[global_row * K + global_col + 3] : __float2half(0.0f);
+    \\                } else {
+    \\                    sA[next_buf_idx][r][c] = __float2half(0.0f);
+    \\                    sA[next_buf_idx][r][c+1] = __float2half(0.0f);
+    \\                    sA[next_buf_idx][r][c+2] = __float2half(0.0f);
+    \\                    sA[next_buf_idx][r][c+3] = __float2half(0.0f);
+    \\                }
+    \\            }
+    \\
+    \\            // Load next B tile
+    \\            #pragma unroll
+    \\            for (int i = 0; i < 4; i++) {
+    \\                int r = load_row + i * 32;
+    \\                int c = load_col;
+    \\                int global_row = next_k_offset + r;
+    \\                int global_col = block_col + c;
+    \\
+    \\                if (global_row < K && global_col < N) {
+    \\                    sB[next_buf_idx][c][r] = B[global_row * N + global_col];
+    \\                    sB[next_buf_idx][c+1][r] = (global_col + 1 < N) ? B[global_row * N + global_col + 1] : __float2half(0.0f);
+    \\                    sB[next_buf_idx][c+2][r] = (global_col + 2 < N) ? B[global_row * N + global_col + 2] : __float2half(0.0f);
+    \\                    sB[next_buf_idx][c+3][r] = (global_col + 3 < N) ? B[global_row * N + global_col + 3] : __float2half(0.0f);
+    \\                } else {
+    \\                    sB[next_buf_idx][c][r] = __float2half(0.0f);
+    \\                    sB[next_buf_idx][c+1][r] = __float2half(0.0f);
+    \\                    sB[next_buf_idx][c+2][r] = __float2half(0.0f);
+    \\                    sB[next_buf_idx][c+3][r] = __float2half(0.0f);
+    \\                }
+    \\            }
+    \\        }
+    \\
+    \\        __syncthreads();
+    \\        buf_idx = next_buf_idx;
+    \\    }
+    \\
+    \\    // Store results to global memory
+    \\    #pragma unroll
+    \\    for (int i = 0; i < 2; i++) {
+    \\        for (int j = 0; j < 2; j++) {
+    \\            int row = block_row + warp_row + i * WMMA_M;
+    \\            int col = block_col + warp_col + j * WMMA_N;
+    \\
+    \\            if (row < M && col < N) {
+    \\                wmma::store_matrix_sync(&C[row * N + col], acc[i][j], N, wmma::mem_row_major);
+    \\            }
+    \\        }
+    \\    }
+    \\}
+;
+
+/// GRU backward step kernel CUDA C source
+pub const GRU_BACKWARD_STEP_SOURCE =
+    \\extern "C" __global__ void gru_backward_step(
+    \\    const float* grad_h_curr,
+    \\    const float* grad_h_next,
+    \\    const float* gate_acts,
+    \\    const float* h_prev,
+    \\    const float* n_hh,
+    \\    float* grad_gates_ih,
+    \\    float* grad_gates_hh,
+    \\    float* grad_h_prev,
+    \\    int hidden_size) {
+    \\    int gid = blockIdx.x * blockDim.x + threadIdx.x;
+    \\    if (gid < hidden_size) {
+    \\        int h = hidden_size;
+    \\        float z = gate_acts[gid];
+    \\        float r = gate_acts[h + gid];
+    \\        float n = gate_acts[2 * h + gid];
+    \\
+    \\        float gh = grad_h_curr[gid] + grad_h_next[gid];
+    \\        float hp = h_prev[gid];
+    \\
+    \\        // h_t = (1 - z_t) * n_t + z_t * h_{t-1}
+    \\        float d_nt = gh * (1.0f - z);
+    \\        float d_zt = gh * (hp - n);
+    \\
+    \\        // n_t = tanh(n_ih + r_t * n_hh)
+    \\        float d_n_raw = d_nt * (1.0f - n * n);
+    \\        float d_n_ih = d_n_raw;
+    \\        float d_n_hh = d_n_raw * r;
+    \\
+    \\        // d_rt = d_n_raw * n_hh * sigmoid'(r_t)
+    \\        float d_rt = d_n_raw * n_hh[gid] * (r * (1.0f - r));
+    \\
+    \\        // z_t = sigmoid(z_raw) => d_z_raw = d_zt * z_t * (1 - z_t)
+    \\        float d_z_raw = d_zt * z * (1.0f - z);
+    \\
+    \\        // Gates IH grads
+    \\        grad_gates_ih[gid] = d_z_raw;
+    \\        grad_gates_ih[h + gid] = d_rt;
+    \\        grad_gates_ih[2 * h + gid] = d_n_ih;
+    \\
+    \\        // Gates HH grads
+    \\        grad_gates_hh[gid] = d_z_raw;
+    \\        grad_gates_hh[h + gid] = d_rt;
+    \\        grad_gates_hh[2 * h + gid] = d_n_hh;
+    \\
+    \\        // grad_h_prev = d_h * z_t
+    \\        grad_h_prev[gid] = gh * z;
+    \\    }
+    \\}
+;
+

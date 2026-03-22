@@ -3,9 +3,7 @@ const zn = @import("ZigNeuron");
 const common = @import("common.zig");
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocator = gpa.allocator();
-    defer _ = gpa.deinit();
+    const allocator = std.heap.smp_allocator;
 
     const window_size = 12;
     const target_size = 1;

@@ -162,9 +162,7 @@ fn shuffleDataset(_allocator: std.mem.Allocator, data: []const [4]f32, _labels: 
 }
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocator = gpa.allocator();
-    defer _ = gpa.deinit();
+    const allocator = std.heap.smp_allocator;
 
     std.debug.print("\n=== Iris Flower Classification ===\n", .{});
     std.debug.print("Dataset: 150 samples, 4 features, 3 classes\n", .{});

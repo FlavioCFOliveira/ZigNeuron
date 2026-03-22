@@ -10,6 +10,8 @@ const metal_context = @import("metal_context.zig");
 const optimization = @import("optimization.zig");
 const cuda_context = @import("cuda_context.zig");
 const cuda = @import("cuda.zig");
+const cuda_driver = @import("cuda_driver.zig");
+const cuda_multi_gpu = @import("cuda_multi_gpu.zig");
 pub const GpuBackend = enum {
     /// Apple Silicon - Metal compute shaders
     metal,
@@ -26,9 +28,11 @@ pub const Backend = struct {
     metal_ctx: ?*metal_context.MetalContext = null,
     cuda_ctx: ?*cuda_context.CudaContext = null,
     cuda_backend: ?*cuda.CudaBackend = null,
+    multi_gpu_ctx: ?*cuda_multi_gpu.MultiCudaContext = null,
 
     pub const BackendType = union(enum) {
         gpu: GpuBackend,
+        multi_gpu: []const i32, // Array of device indices for multi-GPU
         cpu,
     };
 
@@ -102,6 +106,7 @@ pub const Backend = struct {
         if (src.len != dst.len) return error.BufferTooSmall;
 
         switch (self.type) {
+            .multi_gpu => return error.NotImplemented,
             .gpu => try self.metalCopyData(src, src_buf, dst, dst_buf),
             .cpu => if (dst.ptr != src.ptr) @memcpy(dst, src),
         }
@@ -144,6 +149,7 @@ pub const Backend = struct {
             return;
         }
         switch (self.type) {
+            .multi_gpu => return error.NotImplemented,
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalMatMul(a, a_buf, b, b_buf, c, c_buf, m, n, k, false, accumulate),
                 else => return error.CudaNotYetImplemented,
@@ -156,6 +162,7 @@ pub const Backend = struct {
     /// GPU is PRIORITY - CPU only used if GPU unavailable
     pub fn matMulBatch(self: Backend, a: []const f32, a_buf: ?*const metal.MTLBuffer, b: []const f32, b_buf: ?*const metal.MTLBuffer, c: []f32, c_buf: ?*const metal.MTLBuffer, batch_size: usize, n: usize, k: usize, accumulate: bool) !void {
         switch (self.type) {
+            .multi_gpu => return error.NotImplemented,
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalMatMulBatchGPU(a, a_buf, b, b_buf, c, c_buf, batch_size, n, k, accumulate),
                 else => return error.CudaNotYetImplemented,
@@ -169,6 +176,7 @@ pub const Backend = struct {
     /// GPU is PRIORITY - CPU only used if GPU unavailable
     pub fn matMulBias(self: Backend, a: []const f32, a_buf: ?*const metal.MTLBuffer, b: []const f32, b_buf: ?*const metal.MTLBuffer, bias: []const f32, bias_buf: ?*const metal.MTLBuffer, c: []f32, c_buf: ?*const metal.MTLBuffer, batch_size: usize, n: usize, k: usize) !void {
         switch (self.type) {
+            .multi_gpu => return error.NotImplemented,
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalMatMulBias(a, a_buf, b, b_buf, bias, bias_buf, c, c_buf, batch_size, n, k),
                 else => return error.CudaNotYetImplemented,
@@ -193,6 +201,7 @@ pub const Backend = struct {
     /// GPU is PRIORITY - CPU only used if GPU unavailable
     pub fn matMulBiasRelu(self: Backend, a: []const f32, a_buf: ?*const metal.MTLBuffer, b: []const f32, b_buf: ?*const metal.MTLBuffer, bias: []const f32, bias_buf: ?*const metal.MTLBuffer, c: []f32, c_buf: ?*const metal.MTLBuffer, batch_size: usize, n: usize, k: usize) !void {
         switch (self.type) {
+            .multi_gpu => return error.NotImplemented,
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalMatMulBiasRelu(a, a_buf, b, b_buf, bias, bias_buf, c, c_buf, batch_size, n, k),
                 else => return error.CudaNotYetImplemented,
@@ -217,6 +226,7 @@ pub const Backend = struct {
     /// GPU is PRIORITY - CPU only used if GPU unavailable
     pub fn matMulBiasSigmoid(self: Backend, a: []const f32, a_buf: ?*const metal.MTLBuffer, b: []const f32, b_buf: ?*const metal.MTLBuffer, bias: []const f32, bias_buf: ?*const metal.MTLBuffer, c: []f32, c_buf: ?*const metal.MTLBuffer, batch_size: usize, n: usize, k: usize) !void {
         switch (self.type) {
+            .multi_gpu => return error.NotImplemented,
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalMatMulBiasSigmoid(a, a_buf, b, b_buf, bias, bias_buf, c, c_buf, batch_size, n, k),
                 else => return error.CudaNotYetImplemented,
@@ -241,6 +251,7 @@ pub const Backend = struct {
     /// GPU is PRIORITY - CPU only used if GPU unavailable
     pub fn matMulBiasTanh(self: Backend, a: []const f32, a_buf: ?*const metal.MTLBuffer, b: []const f32, b_buf: ?*const metal.MTLBuffer, bias: []const f32, bias_buf: ?*const metal.MTLBuffer, c: []f32, c_buf: ?*const metal.MTLBuffer, batch_size: usize, n: usize, k: usize) !void {
         switch (self.type) {
+            .multi_gpu => return error.NotImplemented,
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalMatMulBiasTanh(a, a_buf, b, b_buf, bias, bias_buf, c, c_buf, batch_size, n, k),
                 else => return error.CudaNotYetImplemented,
@@ -263,6 +274,7 @@ pub const Backend = struct {
     /// Execute matrix multiplication with transposed A: C = A^T * B
     pub fn matMulTransposeA(self: Backend, a: []const f32, a_buf: ?*const metal.MTLBuffer, b: []const f32, b_buf: ?*const metal.MTLBuffer, c: []f32, c_buf: ?*const metal.MTLBuffer, m: usize, n: usize, k: usize, accumulate: bool) !void {
         switch (self.type) {
+            .multi_gpu => return error.NotImplemented,
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalMatMulTransposeA(a, a_buf, b, b_buf, c, c_buf, m, n, k, accumulate),
                 else => return error.CudaNotYetImplemented,
@@ -274,6 +286,7 @@ pub const Backend = struct {
     /// Execute matrix multiplication with transposed B: C = A * B^T
     pub fn matMulTransposeB(self: Backend, a: []const f32, a_buf: ?*const metal.MTLBuffer, b: []const f32, b_buf: ?*const metal.MTLBuffer, c: []f32, c_buf: ?*const metal.MTLBuffer, m: usize, n: usize, k: usize, accumulate: bool) !void {
         switch (self.type) {
+            .multi_gpu => return error.NotImplemented,
             .gpu => |gpu| switch (gpu) {
                 .metal => {
                     if (m > 1) {
@@ -332,6 +345,7 @@ pub const Backend = struct {
         const batch_size = if (act == .softmax) 1 else input.len / 1; // Default to 1 for now or handle in caller
         _ = batch_size;
         switch (self.type) {
+            .multi_gpu => return error.NotImplemented,
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalActivationForward(act, input, input_buf, output, output_buf),
                 else => return error.CudaNotYetImplemented,
@@ -352,6 +366,7 @@ pub const Backend = struct {
     /// GPU is PRIORITY - CPU only used if GPU unavailable
     pub fn activationBackward(self: Backend, act: activation.Activation, input: []const f32, input_buf: ?*const metal.MTLBuffer, grad_output: []const f32, grad_output_buf: ?*const metal.MTLBuffer, grad_input: []f32, grad_input_buf: ?*const metal.MTLBuffer) !void {
         switch (self.type) {
+            .multi_gpu => return error.NotImplemented,
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalActivationBackward(act, input, input_buf, grad_output, grad_output_buf, grad_input, grad_input_buf),
                 else => return error.CudaNotYetImplemented,
@@ -364,6 +379,7 @@ pub const Backend = struct {
     /// GPU is PRIORITY - CPU only used if GPU unavailable
     pub fn lossBackward(self: Backend, loss_fn: loss.Loss, output: []const f32, output_buf: ?*const metal.MTLBuffer, target: []const f32, target_buf: ?*const metal.MTLBuffer, grad_output: []f32, grad_output_buf: ?*const metal.MTLBuffer) !void {
         switch (self.type) {
+            .multi_gpu => return error.NotImplemented,
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalLossBackward(loss_fn, output, output_buf, target, target_buf, grad_output, grad_output_buf),
                 else => return error.CudaNotYetImplemented,
@@ -380,6 +396,7 @@ pub const Backend = struct {
     /// Update weights using SGD
     pub fn sgdUpdate(self: Backend, weights: []f32, weights_buf: ?*const metal.MTLBuffer, gradients: []const f32, gradients_buf: ?*const metal.MTLBuffer, learning_rate: f32, weight_decay: f32) !void {
         switch (self.type) {
+            .multi_gpu => return error.NotImplemented,
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalSgdUpdate(weights, weights_buf, gradients, gradients_buf, learning_rate, weight_decay),
                 .cuda => try self.cudaSgdUpdate(weights, weights_buf, gradients, gradients_buf, learning_rate, weight_decay),
@@ -392,6 +409,7 @@ pub const Backend = struct {
     /// Update weights using Adam
     pub fn adamUpdate(self: Backend, weights: []f32, weights_buf: ?*const metal.MTLBuffer, gradients: []const f32, gradients_buf: ?*const metal.MTLBuffer, m: []f32, m_buf: ?*const metal.MTLBuffer, v: []f32, v_buf: ?*const metal.MTLBuffer, lr: f32, beta1: f32, beta2: f32, eps: f32, bias_corr1: f32, bias_corr2: f32) !void {
         switch (self.type) {
+            .multi_gpu => return error.NotImplemented,
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalAdamUpdate(weights, weights_buf, gradients, gradients_buf, m, m_buf, v, v_buf, lr, beta1, beta2, eps, bias_corr1, bias_corr2),
                 .cuda => try self.cudaAdamUpdate(weights, weights_buf, gradients, gradients_buf, m, m_buf, v, v_buf, lr, beta1, beta2, eps, bias_corr1, bias_corr2),
@@ -404,6 +422,7 @@ pub const Backend = struct {
     /// Update weights using RMSprop
     pub fn rmspropUpdate(self: Backend, weights: []f32, weights_buf: ?*const metal.MTLBuffer, gradients: []const f32, gradients_buf: ?*const metal.MTLBuffer, g_avg: []f32, g_avg_buf: ?*const metal.MTLBuffer, lr: f32, rho: f32, eps: f32) !void {
         switch (self.type) {
+            .multi_gpu => return error.NotImplemented,
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalRmspropUpdate(weights, weights_buf, gradients, gradients_buf, g_avg, g_avg_buf, lr, rho, eps),
                 .cuda => try self.cudaRmspropUpdate(weights, weights_buf, gradients, gradients_buf, g_avg, g_avg_buf, lr, rho, eps),
@@ -416,6 +435,7 @@ pub const Backend = struct {
     /// LayerNorm forward pass
     pub fn layerNormForward(self: Backend, input: []const f32, input_buf: ?*const metal.MTLBuffer, output: []f32, output_buf: ?*const metal.MTLBuffer, gamma: []const f32, gamma_buf: ?*const metal.MTLBuffer, beta: []const f32, beta_buf: ?*const metal.MTLBuffer, eps: f32) !void {
         switch (self.type) {
+            .multi_gpu => return error.NotImplemented,
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalLayerNormForward(input, input_buf, output, output_buf, gamma, gamma_buf, beta, beta_buf, eps),
                 else => return error.CudaNotYetImplemented,
@@ -427,6 +447,7 @@ pub const Backend = struct {
     /// LayerNorm backward pass
     pub fn layerNormBackward(self: Backend, input: []const f32, input_buf: ?*const metal.MTLBuffer, grad_output: []const f32, grad_output_buf: ?*const metal.MTLBuffer, grad_input: []f32, grad_input_buf: ?*const metal.MTLBuffer, gamma: []const f32, gamma_buf: ?*const metal.MTLBuffer, grad_gamma: []f32, grad_gamma_buf: ?*const metal.MTLBuffer, grad_beta: []f32, grad_beta_buf: ?*const metal.MTLBuffer, eps: f32) !void {
         switch (self.type) {
+            .multi_gpu => return error.NotImplemented,
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalLayerNormBackward(input, input_buf, grad_output, grad_output_buf, grad_input, grad_input_buf, gamma, gamma_buf, grad_gamma, grad_gamma_buf, grad_beta, grad_beta_buf, eps),
                 else => return error.CudaNotYetImplemented,
@@ -438,6 +459,7 @@ pub const Backend = struct {
     /// Conv1D forward pass
     pub fn conv1dForward(self: Backend, input: []const f32, input_buf: ?*const metal.MTLBuffer, weights: []const f32, weights_buf: ?*const metal.MTLBuffer, bias: []const f32, bias_buf: ?*const metal.MTLBuffer, output: []f32, output_buf: ?*const metal.MTLBuffer, in_channels: usize, out_channels: usize, kernel_size: usize, in_len: usize, out_len: usize) !void {
         switch (self.type) {
+            .multi_gpu => return error.NotImplemented,
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalConv1dForward(input, input_buf, weights, weights_buf, bias, bias_buf, output, output_buf, in_channels, out_channels, kernel_size, in_len, out_len),
                 else => return error.CudaNotYetImplemented,
@@ -449,6 +471,7 @@ pub const Backend = struct {
     /// Conv1D backward pass
     pub fn conv1dBackward(self: Backend, input: []const f32, input_buf: ?*const metal.MTLBuffer, weights: []const f32, weights_buf: ?*const metal.MTLBuffer, grad_after_act: []const f32, grad_after_act_buf: ?*const metal.MTLBuffer, grad_input: []f32, grad_input_buf: ?*const metal.MTLBuffer, grad_weights: []f32, grad_weights_buf: ?*const metal.MTLBuffer, grad_bias: []f32, grad_bias_buf: ?*const metal.MTLBuffer, in_channels: usize, out_channels: usize, kernel_size: usize, in_len: usize, out_len: usize) !void {
         switch (self.type) {
+            .multi_gpu => return error.NotImplemented,
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalConv1dBackward(input, input_buf, weights, weights_buf, grad_after_act, grad_after_act_buf, grad_input, grad_input_buf, grad_weights, grad_weights_buf, grad_bias, grad_bias_buf, in_channels, out_channels, kernel_size, in_len, out_len),
                 else => return error.CudaNotYetImplemented,
@@ -460,6 +483,7 @@ pub const Backend = struct {
     /// Conv2D forward pass
     pub fn conv2dForward(self: Backend, input: []const f32, input_buf: ?*const metal.MTLBuffer, weights: []const f32, weights_buf: ?*const metal.MTLBuffer, bias: []const f32, bias_buf: ?*const metal.MTLBuffer, output: []f32, output_buf: ?*const metal.MTLBuffer, in_channels: usize, out_channels: usize, kernel_h: usize, kernel_w: usize, input_h: usize, input_w: usize, output_h: usize, output_w: usize, stride_h: usize, stride_w: usize, padding_h: usize, padding_w: usize) !void {
         switch (self.type) {
+            .multi_gpu => return error.NotImplemented,
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalConv2dForward(input, input_buf, weights, weights_buf, bias, bias_buf, output, output_buf, in_channels, out_channels, kernel_h, kernel_w, input_h, input_w, output_h, output_w, stride_h, stride_w, padding_h, padding_w),
                 else => return error.CudaNotYetImplemented,
@@ -471,6 +495,7 @@ pub const Backend = struct {
     /// Conv2D backward pass
     pub fn conv2dBackward(self: Backend, input: []const f32, input_buf: ?*const metal.MTLBuffer, weights: []const f32, weights_buf: ?*const metal.MTLBuffer, grad_output: []const f32, grad_output_buf: ?*const metal.MTLBuffer, grad_input: []f32, grad_input_buf: ?*const metal.MTLBuffer, grad_weights: []f32, grad_weights_buf: ?*const metal.MTLBuffer, grad_bias: []f32, grad_bias_buf: ?*const metal.MTLBuffer, in_channels: usize, out_channels: usize, kernel_h: usize, kernel_w: usize, input_h: usize, input_w: usize, output_h: usize, output_w: usize, stride_h: usize, stride_w: usize, padding_h: usize, padding_w: usize) !void {
         switch (self.type) {
+            .multi_gpu => return error.NotImplemented,
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalConv2dBackward(input, input_buf, weights, weights_buf, grad_output, grad_output_buf, grad_input, grad_input_buf, grad_weights, grad_weights_buf, grad_bias, grad_bias_buf, in_channels, out_channels, kernel_h, kernel_w, input_h, input_w, output_h, output_w, stride_h, stride_w, padding_h, padding_w),
                 .cuda => try self.cudaConv2dBackward(input, input_buf, weights, weights_buf, grad_output, grad_output_buf, grad_input, grad_input_buf, grad_weights, grad_weights_buf, grad_bias, grad_bias_buf, in_channels, out_channels, kernel_h, kernel_w, input_h, input_w, output_h, output_w, stride_h, stride_w, padding_h, padding_w),
@@ -547,6 +572,7 @@ pub const Backend = struct {
     /// Dropout forward pass
     pub fn dropoutForward(self: Backend, input: []const f32, input_buf: ?*const metal.MTLBuffer, output: []f32, output_buf: ?*const metal.MTLBuffer, mask: []f32, mask_buf: ?*const metal.MTLBuffer, rate: f32, scaling_factor: f32, seed: u64) !void {
         switch (self.type) {
+            .multi_gpu => return error.NotImplemented,
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalDropoutForward(input, input_buf, output, output_buf, mask, mask_buf, rate, scaling_factor, seed),
                 else => return error.CudaNotYetImplemented,
@@ -558,6 +584,7 @@ pub const Backend = struct {
     /// VAE Sampling forward pass
     pub fn vaeSamplingForward(self: Backend, input: []const f32, input_buf: ?*const metal.MTLBuffer, output: []f32, output_buf: ?*const metal.MTLBuffer, epsilon: []f32, epsilon_buf: ?*const metal.MTLBuffer, seed: u64, latent_dim: usize) !void {
         switch (self.type) {
+            .multi_gpu => return error.NotImplemented,
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalVaeSamplingForward(input, input_buf, output, output_buf, epsilon, epsilon_buf, seed, latent_dim),
                 else => return error.CudaNotYetImplemented,
@@ -569,6 +596,7 @@ pub const Backend = struct {
     /// VAE Sampling backward pass
     pub fn vaeSamplingBackward(self: Backend, input: []const f32, input_buf: ?*const metal.MTLBuffer, grad_output: []const f32, grad_output_buf: ?*const metal.MTLBuffer, grad_input: []f32, grad_input_buf: ?*const metal.MTLBuffer, epsilon: []const f32, epsilon_buf: ?*const metal.MTLBuffer, latent_dim: usize) !void {
         switch (self.type) {
+            .multi_gpu => return error.NotImplemented,
             .gpu => try self.metalVaeSamplingBackward(input, input_buf, grad_output, grad_output_buf, grad_input, grad_input_buf, epsilon, epsilon_buf, latent_dim),
             .cpu => try self.cpuVaeSamplingBackward(input, grad_output, grad_input, epsilon, latent_dim),
         }
@@ -578,6 +606,7 @@ pub const Backend = struct {
     /// PERFORMANCE FIX: scores_buffer must be pre-allocated with size >= seq_len (F2.1)
     pub fn attentionForward(self: Backend, q: []const f32, q_buf: ?*const metal.MTLBuffer, k: []const f32, k_buf: ?*const metal.MTLBuffer, v: []const f32, v_buf: ?*const metal.MTLBuffer, output: []f32, output_buf: ?*const metal.MTLBuffer, scores_buffer: []f32, seq_len: usize, d_k: usize, scaling_factor: f32) !void {
         switch (self.type) {
+            .multi_gpu => return error.NotImplemented,
             .gpu => try self.metalAttentionForward(q, q_buf, k, k_buf, v, v_buf, output, output_buf, seq_len, d_k, scaling_factor),
             .cpu => try self.cpuAttentionForward(q, k, v, output, scores_buffer, seq_len, d_k, scaling_factor),
         }
@@ -586,6 +615,7 @@ pub const Backend = struct {
     /// Update bias using SGD
     pub fn sgdUpdateBias(self: Backend, bias: []f32, bias_buf: ?*const metal.MTLBuffer, gradients: []const f32, gradients_buf: ?*const metal.MTLBuffer, learning_rate: f32) !void {
         switch (self.type) {
+            .multi_gpu => return error.NotImplemented,
             .gpu => try self.metalSgdUpdateBias(bias, bias_buf, gradients, gradients_buf, learning_rate),
             .cpu => cpuSgdUpdateBias(bias, gradients, learning_rate),
         }
@@ -594,6 +624,7 @@ pub const Backend = struct {
     /// Accumulate bias gradients
     pub fn accumulateBias(self: Backend, grad_bias: []f32, grad_bias_buf: ?*const metal.MTLBuffer, grad_after_act: []const f32, grad_after_act_buf: ?*const metal.MTLBuffer) !void {
         switch (self.type) {
+            .multi_gpu => return error.NotImplemented,
             .gpu => try self.metalAccumulateBias(grad_bias, grad_bias_buf, grad_after_act, grad_after_act_buf),
             .cpu => cpuAccumulateBias(grad_bias, grad_after_act),
         }
@@ -602,6 +633,7 @@ pub const Backend = struct {
     /// Add bias to output (broadcasted over batch)
     pub fn addBias(self: Backend, output: []f32, output_buf: ?*const metal.MTLBuffer, bias: []const f32, bias_buf: ?*const metal.MTLBuffer) !void {
         switch (self.type) {
+            .multi_gpu => return error.NotImplemented,
             .gpu => try self.metalAddBias(output, output_buf, bias, bias_buf),
             .cpu => {
                 const batch_size = output.len / bias.len;
@@ -617,6 +649,7 @@ pub const Backend = struct {
     /// Map a function over a buffer (exp, log, etc)
     pub fn map(self: Backend, func: MapOp, input: []const f32, input_buf: ?*const metal.MTLBuffer, output: []f32, output_buf: ?*const metal.MTLBuffer) !void {
         switch (self.type) {
+            .multi_gpu => return error.NotImplemented,
             .gpu => try self.metalMap(func, input, input_buf, output, output_buf),
             .cpu => try self.cpuMap(func, input, output),
         }
@@ -723,6 +756,7 @@ pub const Backend = struct {
     /// Element-wise operations: C = op(A, B)
     pub fn elementWise(self: Backend, op: ElementWiseOp, a: []const f32, a_buf: ?*const metal.MTLBuffer, b: []const f32, b_buf: ?*const metal.MTLBuffer, c: []f32, c_buf: ?*const metal.MTLBuffer) !void {
         switch (self.type) {
+            .multi_gpu => return error.NotImplemented,
             .gpu => try self.metalElementWise(op, a, a_buf, b, b_buf, c, c_buf),
             .cpu => try self.cpuElementWise(op, a, b, c),
         }
@@ -810,6 +844,7 @@ pub const Backend = struct {
     /// Fill buffer with constant value
     pub fn fill(self: Backend, data: []f32, data_buf: ?*const metal.MTLBuffer, value: f32) !void {
         switch (self.type) {
+            .multi_gpu => return error.NotImplemented,
             .gpu => try self.metalFillConstant(data, data_buf, value),
             .cpu => @memset(data, value),
         }
@@ -818,6 +853,7 @@ pub const Backend = struct {
     /// Scale buffer by constant factor
     pub fn scale(self: Backend, data: []f32, data_buf: ?*const metal.MTLBuffer, factor: f32) !void {
         switch (self.type) {
+            .multi_gpu => return error.NotImplemented,
             .gpu => try self.metalScaleBuffer(data, data_buf, factor),
             .cpu => {
                 const Vec4 = @Vector(4, f32);
@@ -843,6 +879,7 @@ pub const Backend = struct {
     pub fn reverse(self: Backend, input: []const f32, input_buf: ?*const metal.MTLBuffer, output: []f32, output_buf: ?*const metal.MTLBuffer, seq_len: usize, element_size: usize) !void {
         if (input.len != seq_len * element_size or output.len != seq_len * element_size) return error.InvalidInputSize;
         switch (self.type) {
+            .multi_gpu => return error.NotImplemented,
             .gpu => try self.metalReverseSequence(input, input_buf, output, output_buf, seq_len, element_size),
             .cpu => {
                 for (0..seq_len) |t| {
@@ -857,6 +894,7 @@ pub const Backend = struct {
     pub fn concat(self: Backend, input1: []const f32, input1_buf: ?*const metal.MTLBuffer, input2: []const f32, input2_buf: ?*const metal.MTLBuffer, output: []f32, output_buf: ?*const metal.MTLBuffer, size1: usize, size2: usize, seq_len: usize) !void {
         if (output.len != seq_len * (size1 + size2)) return error.InvalidOutputSize;
         switch (self.type) {
+            .multi_gpu => return error.NotImplemented,
             .gpu => try self.metalConcatBuffers(input1, input1_buf, input2, input2_buf, output, output_buf, size1, size2, seq_len),
             .cpu => {
                 for (0..seq_len) |t| {
@@ -872,6 +910,7 @@ pub const Backend = struct {
     pub fn split(self: Backend, input: []const f32, input_buf: ?*const metal.MTLBuffer, output1: []f32, output1_buf: ?*const metal.MTLBuffer, output2: []f32, output2_buf: ?*const metal.MTLBuffer, size1: usize, size2: usize, seq_len: usize) !void {
         if (input.len != seq_len * (size1 + size2)) return error.InvalidInputSize;
         switch (self.type) {
+            .multi_gpu => return error.NotImplemented,
             .gpu => try self.metalSplitBuffer(input, input_buf, output1, output1_buf, output2, output2_buf, size1, size2, seq_len),
             .cpu => {
                 for (0..seq_len) |t| {
@@ -1034,6 +1073,7 @@ pub const Backend = struct {
     /// Fill buffer with random normal values
     pub fn fillRandomNormal(self: Backend, data: []f32, data_buf: ?*const metal.MTLBuffer, mean: f32, std_dev: f32, seed: u64) !void {
         switch (self.type) {
+            .multi_gpu => return error.NotImplemented,
             .gpu => try self.metalFillRandomNormal(data, data_buf, mean, std_dev, seed),
             .cpu => self.cpuFillRandomNormal(data, mean, std_dev, seed),
         }
@@ -3112,6 +3152,7 @@ pub const Backend = struct {
     /// GRU forward step
     pub fn gruForwardStep(self: Backend, gates_ih: []const f32, gates_ih_buf: ?*const metal.MTLBuffer, gates_hh: []const f32, gates_hh_buf: ?*const metal.MTLBuffer, bias: []const f32, bias_buf: ?*const metal.MTLBuffer, h_prev: []const f32, h_prev_buf: ?*const metal.MTLBuffer, h_curr: []f32, h_curr_buf: ?*const metal.MTLBuffer, gate_acts: []f32, gate_acts_buf: ?*const metal.MTLBuffer, n_hh_out: []f32, n_hh_out_buf: ?*const metal.MTLBuffer, hidden_size: usize) !void {
         switch (self.type) {
+            .multi_gpu => return error.NotImplemented,
             .gpu => try self.metalGruForwardStep(gates_ih, gates_ih_buf, gates_hh, gates_hh_buf, bias, bias_buf, h_prev, h_prev_buf, h_curr, h_curr_buf, gate_acts, gate_acts_buf, n_hh_out, n_hh_out_buf, hidden_size),
             .cpu => {
                 // CPU implementation
@@ -3136,6 +3177,7 @@ pub const Backend = struct {
     /// Vanilla RNN forward step
     pub fn rnnForwardStep(self: Backend, gates_ih: []const f32, gates_ih_buf: ?*const metal.MTLBuffer, gates_hh: []const f32, gates_hh_buf: ?*const metal.MTLBuffer, bias: []const f32, bias_buf: ?*const metal.MTLBuffer, h_curr: []f32, h_curr_buf: ?*const metal.MTLBuffer, hidden_size: usize) !void {
         switch (self.type) {
+            .multi_gpu => return error.NotImplemented,
             .gpu => try self.metalRnnForwardStep(gates_ih, gates_ih_buf, gates_hh, gates_hh_buf, bias, bias_buf, h_curr, h_curr_buf, hidden_size),
             .cpu => {
                 for (0..hidden_size) |j| {
@@ -3148,6 +3190,7 @@ pub const Backend = struct {
     /// Vanilla RNN backward step
     pub fn rnnBackwardStep(self: Backend, grad_h_curr: []const f32, grad_h_curr_buf: ?*const metal.MTLBuffer, grad_h_next: []const f32, grad_h_next_buf: ?*const metal.MTLBuffer, h_curr: []const f32, h_curr_buf: ?*const metal.MTLBuffer, grad_after_act: []f32, grad_after_act_buf: ?*const metal.MTLBuffer, hidden_size: usize) !void {
         switch (self.type) {
+            .multi_gpu => return error.NotImplemented,
             .gpu => try self.metalRnnBackwardStep(grad_h_curr, grad_h_curr_buf, grad_h_next, grad_h_next_buf, h_curr, h_curr_buf, grad_after_act, grad_after_act_buf, hidden_size),
             .cpu => {
                 for (0..hidden_size) |j| {
@@ -3162,6 +3205,7 @@ pub const Backend = struct {
     /// LSTM forward step
     pub fn lstmForwardStep(self: Backend, gates_ih: []const f32, gates_ih_buf: ?*const metal.MTLBuffer, gates_hh: []const f32, gates_hh_buf: ?*const metal.MTLBuffer, bias: []const f32, bias_buf: ?*const metal.MTLBuffer, c_prev: []const f32, c_prev_buf: ?*const metal.MTLBuffer, c_curr: []f32, c_curr_buf: ?*const metal.MTLBuffer, h_curr: []f32, h_curr_buf: ?*const metal.MTLBuffer, gate_acts: []f32, gate_acts_buf: ?*const metal.MTLBuffer, hidden_size: usize) !void {
         switch (self.type) {
+            .multi_gpu => return error.NotImplemented,
             .gpu => try self.metalLstmForwardStep(gates_ih, gates_ih_buf, gates_hh, gates_hh_buf, bias, bias_buf, c_prev, c_prev_buf, c_curr, c_curr_buf, h_curr, h_curr_buf, gate_acts, gate_acts_buf, hidden_size),
             .cpu => {
                 for (0..hidden_size) |j| {
@@ -3336,6 +3380,7 @@ pub const Backend = struct {
     /// LSTM backward step
     pub fn lstmBackwardStep(self: Backend, grad_h_curr: []const f32, grad_h_curr_buf: ?*const metal.MTLBuffer, grad_h_next: []const f32, grad_h_next_buf: ?*const metal.MTLBuffer, grad_c_next: []const f32, grad_c_next_buf: ?*const metal.MTLBuffer, gate_acts: []const f32, gate_acts_buf: ?*const metal.MTLBuffer, c_curr: []const f32, c_curr_buf: ?*const metal.MTLBuffer, c_prev: []const f32, c_prev_buf: ?*const metal.MTLBuffer, grad_gates: []f32, grad_gates_buf: ?*const metal.MTLBuffer, grad_c_prev: []f32, grad_c_prev_buf: ?*const metal.MTLBuffer, grad_h_prev_part: []f32, grad_h_prev_part_buf: ?*const metal.MTLBuffer, hidden_size: usize) !void {
         switch (self.type) {
+            .multi_gpu => return error.NotImplemented,
             .gpu => try self.metalLstmBackwardStep(grad_h_curr, grad_h_curr_buf, grad_h_next, grad_h_next_buf, grad_c_next, grad_c_next_buf, gate_acts, gate_acts_buf, c_curr, c_curr_buf, c_prev, c_prev_buf, grad_gates, grad_gates_buf, grad_c_prev, grad_c_prev_buf, grad_h_prev_part, grad_h_prev_part_buf, hidden_size),
             .cpu => {
                 for (0..hidden_size) |j| {
@@ -3365,6 +3410,7 @@ pub const Backend = struct {
     /// GRU backward step
     pub fn gruBackwardStep(self: Backend, grad_h_curr: []const f32, grad_h_curr_buf: ?*const metal.MTLBuffer, grad_h_next: []const f32, grad_h_next_buf: ?*const metal.MTLBuffer, gate_acts: []const f32, gate_acts_buf: ?*const metal.MTLBuffer, h_prev: []const f32, h_prev_buf: ?*const metal.MTLBuffer, n_hh: []const f32, n_hh_buf: ?*const metal.MTLBuffer, grad_gates_ih: []f32, grad_gates_ih_buf: ?*const metal.MTLBuffer, grad_gates_hh: []f32, grad_gates_hh_buf: ?*const metal.MTLBuffer, grad_h_prev: []f32, grad_h_prev_buf: ?*const metal.MTLBuffer, hidden_size: usize) !void {
         switch (self.type) {
+            .multi_gpu => return error.NotImplemented,
             .gpu => try self.metalGruBackwardStep(grad_h_curr, grad_h_curr_buf, grad_h_next, grad_h_next_buf, gate_acts, gate_acts_buf, h_prev, h_prev_buf, n_hh, n_hh_buf, grad_gates_ih, grad_gates_ih_buf, grad_gates_hh, grad_gates_hh_buf, grad_h_prev, grad_h_prev_buf, hidden_size),
             .cpu => {
                 for (0..hidden_size) |j| {
@@ -3511,6 +3557,7 @@ pub const Backend = struct {
         running_var_buf: ?*const metal.MTLBuffer,
     ) !void {
         switch (self.type) {
+            .multi_gpu => return error.NotImplemented,
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalBatchNormForwardTraining(
                     input,
@@ -3561,6 +3608,7 @@ pub const Backend = struct {
         running_var_buf: ?*const metal.MTLBuffer,
     ) !void {
         switch (self.type) {
+            .multi_gpu => return error.NotImplemented,
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalBatchNormForwardInference(
                     input,
@@ -3613,6 +3661,7 @@ pub const Backend = struct {
         running_var_buf: ?*const metal.MTLBuffer,
     ) !void {
         switch (self.type) {
+            .multi_gpu => return error.NotImplemented,
             .gpu => |gpu| switch (gpu) {
                 .metal => try self.metalBatchNormBackward(
                     input,

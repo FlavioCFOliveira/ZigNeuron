@@ -24,7 +24,7 @@ pub const MetalContext = struct {
         self.command_queue = try self.device.newCommandQueue();
         errdefer self.command_queue.release();
 
-        self.temp_resources = .{};
+        self.temp_resources = std.ArrayListUnmanaged(metal.MTLBuffer).empty;
         errdefer self.temp_resources.deinit(self.allocator);
 
         self.buffer_pool = std.AutoHashMap(usize, std.ArrayListUnmanaged(metal.MTLBuffer)).init(allocator);
@@ -236,7 +236,7 @@ pub const MetalContext = struct {
             return;
         };
         if (!res.found_existing) {
-            res.value_ptr.* = std.ArrayListUnmanaged(metal.MTLBuffer){};
+            res.value_ptr.* = .empty;
         }
         res.value_ptr.append(self.allocator, buffer) catch {
             buffer.release();

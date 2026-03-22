@@ -3,9 +3,7 @@ const zn = @import("ZigNeuron");
 const common = @import("common.zig");
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocator = gpa.allocator();
-    defer _ = gpa.deinit();
+    const allocator = std.heap.smp_allocator;
 
     const window_size = 10;
     const dataset = try common.loadStockData(allocator, "examples/comprehensive_suite/data/GOOG.csv", window_size, 1);

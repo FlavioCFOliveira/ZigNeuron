@@ -14,6 +14,9 @@ pub const metrics = @import("metrics.zig");
 pub const cuda = @import("cuda.zig");
 pub const cuda_driver = @import("cuda_driver.zig");
 pub const cuda_context = @import("cuda_context.zig");
+pub const cuda_kernels = @import("cuda_kernels.zig");
+pub const cuda_profiler = @import("cuda_profiler.zig");
+pub const cuda_multi_gpu = @import("cuda_multi_gpu.zig");
 
 pub const ZigNeuron = struct {};
 

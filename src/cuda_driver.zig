@@ -7,6 +7,29 @@ const std = @import("std");
 // CUDA Type Definitions
 // =============================================================================
 
+/// NVRTC result codes
+pub const nvrtcResult = enum(c_int) {
+    SUCCESS = 0,
+    ERROR_OUT_OF_MEMORY = 1,
+    ERROR_PROGRAM_CREATION_FAILURE = 2,
+    ERROR_INVALID_INPUT = 3,
+    ERROR_INVALID_PROGRAM = 4,
+    ERROR_INVALID_OPTION = 5,
+    ERROR_COMPILATION = 6,
+    ERROR_BUILTIN_OPERATION_FAILURE = 7,
+    ERROR_NO_NAME_EXPRESSIONS_AFTER_COMPILATION = 8,
+    ERROR_NO_LOWERED_NAMES_BEFORE_COMPILATION = 9,
+    ERROR_NAME_EXPRESSION_NOT_VALID = 10,
+    ERROR_INTERNAL_ERROR = 11,
+
+    pub fn isSuccess(self: nvrtcResult) bool {
+        return self == .SUCCESS;
+    }
+};
+
+/// NVRTC program handle
+pub const nvrtcProgram = opaque {};
+
 /// CUDA result codes
 pub const CUresult = enum(c_int) {
     SUCCESS = 0,
@@ -42,6 +65,9 @@ pub const CUresult = enum(c_int) {
     ERROR_INVALID_GRAPHICS_CONTEXT = 219,
     ERROR_NVLINK_UNCORRECTABLE = 220,
     ERROR_JIT_COMPILER_NOT_FOUND = 221,
+    ERROR_UNSUPPORTED_PTX_VERSION = 222,
+    ERROR_JIT_COMPILATION_DISABLED = 223,
+    ERROR_UNSUPPORTED_DEVSIDE_SYNC = 224,
     ERROR_INVALID_SOURCE = 300,
     ERROR_FILE_NOT_FOUND = 301,
     ERROR_SHARED_OBJECT_SYMBOL_NOT_FOUND = 302,
@@ -475,6 +501,44 @@ pub const CUmemLocationType = enum(c_int) {
     DEVICE = 1,
 };
 
+/// CUDA memory advice/hint types for unified memory
+pub const CUmem_advise = enum(c_int) {
+    /// Default behavior, no explicit hint
+    SET_READ_MOSTLY = 1,
+    /// Data will be read mostly, allow replication
+    UNSET_READ_MOSTLY = 2,
+    /// Set preferred location for data
+    SET_PREFERRED_LOCATION = 3,
+    /// Clear preferred location
+    UNSET_PREFERRED_LOCATION = 4,
+    /// Data accessed by device should be accessed last on device
+    SET_ACCESSED_BY = 5,
+    /// Clear accessed by
+    UNSET_ACCESSED_BY = 6,
+};
+
+/// CUDA memory range attributes
+pub const CUmem_range_attribute = enum(c_int) {
+    /// Whether the range is mapped to host address space
+    READ_MOSTLY = 1,
+    /// Preferred location for the range
+    PREFERRED_LOCATION = 2,
+    /// Device that last accessed the range
+    ACCESSED_BY = 3,
+    /// Last prefetch location
+    LAST_PREFETCH_LOCATION = 4,
+};
+
+/// Managed memory allocation flags
+pub const CUmemAttach_flags = enum(c_int) {
+    /// Memory can be accessed by all streams on any device
+    GLOBAL = 1,
+    /// Memory can only be accessed by the stream that allocated it
+    HOST = 2,
+    /// Memory can be accessed by any stream on the current device
+    SINGLE = 4,
+};
+
 // =============================================================================
 // CUDA Function Pointer Types
 // =============================================================================
@@ -528,8 +592,12 @@ const CUeventDestroy_fn = *const fn (hEvent: *CUevent) callconv(.c) CUresult;
 const CUeventRecord_fn = *const fn (hEvent: *CUevent, hStream: *CUstream) callconv(.c) CUresult;
 const CUeventSynchronize_fn = *const fn (hEvent: *CUevent) callconv(.c) CUresult;
 const CUeventElapsedTime_fn = *const fn (pMilliseconds: *f32, hStart: *CUevent, hEnd: *CUevent) callconv(.c) CUresult;
+const CUeventQuery_fn = *const fn (hEvent: *CUevent) callconv(.c) CUresult;
+const CUstreamQuery_fn = *const fn (hStream: *CUstream) callconv(.c) CUresult;
 const CUmemsetD32_fn = *const fn (dstDevice: CUdeviceptr, ui: c_uint, N: usize) callconv(.c) CUresult;
 const CUmemsetD32Async_fn = *const fn (dstDevice: CUdeviceptr, ui: c_uint, N: usize, hStream: ?*CUstream) callconv(.c) CUresult;
+const CUmemPrefetchAsync_fn = *const fn (devPtr: CUdeviceptr, count: usize, dstDevice: CUdevice, hStream: ?*CUstream) callconv(.c) CUresult;
+const CUmemAdvise_fn = *const fn (devPtr: CUdeviceptr, count: usize, advice: CUmem_advise, dstDevice: CUdevice) callconv(.c) CUresult;
 const CUmemHostRegister_fn = *const fn (p: ?*anyopaque, bytesize: usize, flags: c_uint) callconv(.c) CUresult;
 const CUmemHostUnregister_fn = *const fn (p: ?*anyopaque) callconv(.c) CUresult;
 const CUpointerGetAttribute_fn = *const fn (data: ?*anyopaque, attribute: CUpointer_attribute, ptr: CUdeviceptr) callconv(.c) CUresult;
@@ -545,6 +613,17 @@ const CUmemPoolDestroy_fn = *const fn (pool: *CUmemoryPool) callconv(.c) CUresul
 const CUmemAllocFromPoolAsync_fn = *const fn (dptr: *CUdeviceptr, bytesize: usize, pool: *CUmemoryPool, hStream: ?*CUstream) callconv(.c) CUresult;
 const CUmemPoolTrimTo_fn = *const fn (pool: *CUmemoryPool, minBytesToKeep: usize) callconv(.c) CUresult;
 
+// NVRTC functions
+const nvrtcVersion_fn = *const fn (major: *c_int, minor: *c_int) callconv(.c) nvrtcResult;
+const nvrtcGetErrorString_fn = *const fn (result: nvrtcResult) callconv(.c) [*c]const u8;
+const nvrtcCreateProgram_fn = *const fn (prog: **nvrtcProgram, src: [*c]const u8, name: [*c]const u8, numHeaders: c_int, headers: [*c]const [*c]const u8, includeNames: [*c]const [*c]const u8) callconv(.c) nvrtcResult;
+const nvrtcDestroyProgram_fn = *const fn (prog: **nvrtcProgram) callconv(.c) nvrtcResult;
+const nvrtcCompileProgram_fn = *const fn (prog: *nvrtcProgram, numOptions: c_int, options: [*c]const [*c]const u8) callconv(.c) nvrtcResult;
+const nvrtcGetPTXSize_fn = *const fn (prog: *nvrtcProgram, ptxSizeRet: *usize) callconv(.c) nvrtcResult;
+const nvrtcGetPTX_fn = *const fn (prog: *nvrtcProgram, ptx: [*c]u8) callconv(.c) nvrtcResult;
+const nvrtcGetProgramLogSize_fn = *const fn (prog: *nvrtcProgram, logSizeRet: *usize) callconv(.c) nvrtcResult;
+const nvrtcGetProgramLog_fn = *const fn (prog: *nvrtcProgram, log: [*c]u8) callconv(.c) nvrtcResult;
+
 // =============================================================================
 // CUDA Driver Structure
 // =============================================================================
@@ -552,8 +631,10 @@ const CUmemPoolTrimTo_fn = *const fn (pool: *CUmemoryPool, minBytesToKeep: usize
 /// CUDA driver handle for dynamic loading
 pub const CudaDriver = struct {
     handle: ?std.DynLib,
+    nvrtc_handle: ?std.DynLib,
     allocator: std.mem.Allocator,
     is_initialized: bool,
+    is_nvrtc_available: bool,
 
     // Core functions
     cuInit: ?CUinit_fn,
@@ -593,10 +674,14 @@ pub const CudaDriver = struct {
     eventRecord: ?CUeventRecord_fn,
     eventSynchronize: ?CUeventSynchronize_fn,
     eventElapsedTime: ?CUeventElapsedTime_fn,
+    eventQuery: ?CUeventQuery_fn,
+    streamQuery: ?CUstreamQuery_fn,
     memsetD32: ?CUmemsetD32_fn,
     memsetD32Async: ?CUmemsetD32Async_fn,
     memHostRegister: ?CUmemHostRegister_fn,
     memHostUnregister: ?CUmemHostUnregister_fn,
+    memPrefetchAsync: ?CUmemPrefetchAsync_fn,
+    memAdvise: ?CUmemAdvise_fn,
     pointerGetAttribute: ?CUpointerGetAttribute_fn,
     linkCreate: ?CUlinkCreate_fn,
     linkAddData: ?CUlinkAddData_fn,
@@ -610,12 +695,25 @@ pub const CudaDriver = struct {
     memAllocFromPoolAsync: ?CUmemAllocFromPoolAsync_fn,
     memPoolTrimTo: ?CUmemPoolTrimTo_fn,
 
+    // NVRTC functions
+    nvrtcVersion: ?nvrtcVersion_fn,
+    nvrtcGetErrorString: ?nvrtcGetErrorString_fn,
+    nvrtcCreateProgram: ?nvrtcCreateProgram_fn,
+    nvrtcDestroyProgram: ?nvrtcDestroyProgram_fn,
+    nvrtcCompileProgram: ?nvrtcCompileProgram_fn,
+    nvrtcGetPTXSize: ?nvrtcGetPTXSize_fn,
+    nvrtcGetPTX: ?nvrtcGetPTX_fn,
+    nvrtcGetProgramLogSize: ?nvrtcGetProgramLogSize_fn,
+    nvrtcGetProgramLog: ?nvrtcGetProgramLog_fn,
+
     /// Initialize the CUDA driver
     pub fn init(allocator: std.mem.Allocator) !CudaDriver {
         var driver = CudaDriver{
             .handle = null,
+            .nvrtc_handle = null,
             .allocator = allocator,
             .is_initialized = false,
+            .is_nvrtc_available = false,
             .cuInit = null,
             .deviceGetCount = null,
             .deviceGet = null,
@@ -653,10 +751,14 @@ pub const CudaDriver = struct {
             .eventRecord = null,
             .eventSynchronize = null,
             .eventElapsedTime = null,
+            .eventQuery = null,
+            .streamQuery = null,
             .memsetD32 = null,
             .memsetD32Async = null,
             .memHostRegister = null,
             .memHostUnregister = null,
+            .memPrefetchAsync = null,
+            .memAdvise = null,
             .pointerGetAttribute = null,
             .linkCreate = null,
             .linkAddData = null,
@@ -669,6 +771,15 @@ pub const CudaDriver = struct {
             .memPoolDestroy = null,
             .memAllocFromPoolAsync = null,
             .memPoolTrimTo = null,
+            .nvrtcVersion = null,
+            .nvrtcGetErrorString = null,
+            .nvrtcCreateProgram = null,
+            .nvrtcDestroyProgram = null,
+            .nvrtcCompileProgram = null,
+            .nvrtcGetPTXSize = null,
+            .nvrtcGetPTX = null,
+            .nvrtcGetProgramLogSize = null,
+            .nvrtcGetProgramLog = null,
         };
 
         // Platform-specific library loading
@@ -678,12 +789,45 @@ pub const CudaDriver = struct {
             else => return error.UnsupportedPlatform,
         };
 
+        const nvrtc_lib_name = switch (@import("builtin").os.tag) {
+            .linux => "libnvrtc.so",
+            .windows => "nvrtc.dll",
+            else => return error.UnsupportedPlatform,
+        };
+
         // Try to load the CUDA driver library
         const lib = std.DynLib.open(lib_name) catch |err| {
             std.log.debug("Failed to load CUDA driver library '{s}': {s}", .{ lib_name, @errorName(err) });
             return error.CudaDriverNotFound;
         };
         driver.handle = lib;
+
+        // Try to load the NVRTC library (optional, don't fail if not found)
+        const nvrtc_lib = std.DynLib.open(nvrtc_lib_name) catch blk: {
+            // Try common paths if not in standard search path
+            const extra_paths = [_][]const u8{
+                "/data/py/Sumarization/.venv/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib/libnvrtc.so.12",
+                "/usr/local/lib/ollama/mlx_cuda_v13/libnvrtc.so.13.0.88",
+                "/usr/local/lib/ollama/mlx_cuda_v13/libnvrtc.so.13",
+                "/usr/local/lib/ollama/mlx_cuda_v13/libnvrtc.so",
+                "/usr/local/cuda/lib64/libnvrtc.so",
+                "/usr/local/cuda/lib/libnvrtc.so",
+                "/usr/lib/x86_64-linux-gnu/libnvrtc.so",
+                "/usr/lib/x86_64-linux-gnu/libnvrtc.so.12",
+            };
+            for (extra_paths) |path| {
+                if (std.DynLib.open(path)) |lib_pkg| break :blk lib_pkg else |_| {}
+            }
+            break :blk error.NvrtcNotFound;
+        };
+
+        if (nvrtc_lib) |lib_pkg| {
+            driver.nvrtc_handle = lib_pkg;
+            driver.is_nvrtc_available = true;
+        } else |_| {
+            std.log.debug("NVRTC library not found. Falling back to pre-compiled PTX.", .{});
+            driver.is_nvrtc_available = false;
+        }
 
         // Load all function pointers
         try driver.loadFunction("cuInit", &driver.cuInit);
@@ -723,10 +867,15 @@ pub const CudaDriver = struct {
         try driver.loadFunction("cuEventRecord", &driver.eventRecord);
         try driver.loadFunction("cuEventSynchronize", &driver.eventSynchronize);
         try driver.loadFunction("cuEventElapsedTime", &driver.eventElapsedTime);
+        try driver.loadFunction("cuEventQuery", &driver.eventQuery);
+        try driver.loadFunction("cuStreamQuery", &driver.streamQuery);
         try driver.loadFunction("cuMemsetD32", &driver.memsetD32);
         try driver.loadFunction("cuMemsetD32Async", &driver.memsetD32Async);
         try driver.loadFunction("cuMemHostRegister", &driver.memHostRegister);
         try driver.loadFunction("cuMemHostUnregister", &driver.memHostUnregister);
+        // Unified memory functions (may be null on older GPUs)
+        driver.loadFunction("cuMemPrefetchAsync", &driver.memPrefetchAsync) catch { driver.memPrefetchAsync = null; };
+        driver.loadFunction("cuMemAdvise", &driver.memAdvise) catch { driver.memAdvise = null; };
         try driver.loadFunction("cuPointerGetAttribute", &driver.pointerGetAttribute);
         try driver.loadFunction("cuLinkCreate", &driver.linkCreate);
         try driver.loadFunction("cuLinkAddData", &driver.linkAddData);
@@ -739,6 +888,37 @@ pub const CudaDriver = struct {
         try driver.loadFunction("cuMemPoolDestroy", &driver.memPoolDestroy);
         try driver.loadFunction("cuMemAllocFromPoolAsync", &driver.memAllocFromPoolAsync);
         try driver.loadFunction("cuMemPoolTrimTo", &driver.memPoolTrimTo);
+
+        // Load NVRTC functions if available
+        if (driver.is_nvrtc_available) {
+            driver.loadNvrtcFunction("nvrtcVersion", &driver.nvrtcVersion) catch {
+                driver.is_nvrtc_available = false;
+            };
+            driver.loadNvrtcFunction("nvrtcGetErrorString", &driver.nvrtcGetErrorString) catch {
+                driver.is_nvrtc_available = false;
+            };
+            driver.loadNvrtcFunction("nvrtcCreateProgram", &driver.nvrtcCreateProgram) catch {
+                driver.is_nvrtc_available = false;
+            };
+            driver.loadNvrtcFunction("nvrtcDestroyProgram", &driver.nvrtcDestroyProgram) catch {
+                driver.is_nvrtc_available = false;
+            };
+            driver.loadNvrtcFunction("nvrtcCompileProgram", &driver.nvrtcCompileProgram) catch {
+                driver.is_nvrtc_available = false;
+            };
+            driver.loadNvrtcFunction("nvrtcGetPTXSize", &driver.nvrtcGetPTXSize) catch {
+                driver.is_nvrtc_available = false;
+            };
+            driver.loadNvrtcFunction("nvrtcGetPTX", &driver.nvrtcGetPTX) catch {
+                driver.is_nvrtc_available = false;
+            };
+            driver.loadNvrtcFunction("nvrtcGetProgramLogSize", &driver.nvrtcGetProgramLogSize) catch {
+                driver.is_nvrtc_available = false;
+            };
+            driver.loadNvrtcFunction("nvrtcGetProgramLog", &driver.nvrtcGetProgramLog) catch {
+                driver.is_nvrtc_available = false;
+            };
+        }
 
         // Initialize the CUDA driver
         const result = driver.cuInit.?(0);
@@ -759,14 +939,33 @@ pub const CudaDriver = struct {
         ptr.* = @ptrCast(func);
     }
 
-        /// Deinitialize the CUDA driver
+    fn loadNvrtcFunction(self: *CudaDriver, name: [:0]const u8, ptr: anytype) !void {
+        if (self.nvrtc_handle) |h| {
+            var h_mut = h;
+            const func = h_mut.lookup(*const anyopaque, @ptrCast(name)) orelse {
+                std.log.debug("Failed to find NVRTC function: {s}", .{name});
+                return error.CudaFunctionNotFound;
+            };
+            ptr.* = @ptrCast(func);
+        } else {
+            return error.CudaDriverNotFound;
+        }
+    }
+
+    /// Deinitialize the CUDA driver
     pub fn deinit(self: *CudaDriver) void {
         if (self.handle) |h| {
             var h_mut = h;
             h_mut.close();
             self.handle = null;
         }
+        if (self.nvrtc_handle) |h| {
+            var h_mut = h;
+            h_mut.close();
+            self.nvrtc_handle = null;
+        }
         self.is_initialized = false;
+        self.is_nvrtc_available = false;
     }
 
     /// Check if CUDA driver is available and initialized
@@ -800,37 +999,116 @@ pub const CudaDriver = struct {
 };
 
 // =============================================================================
-// Global CUDA Driver Instance (optional singleton pattern)
+// Global CUDA Driver Instance (Thread-Safe Reference Counted Singleton)
+// SECURITY FIX: CRIT-002 - Use-after-free in global driver access
 // =============================================================================
 
 var global_driver: ?CudaDriver = null;
-var driver_mutex = std.Thread.Mutex{};
+var driver_mutex: std.atomic.Mutex = .unlocked;
+var driver_ref_count: std.atomic.Value(usize) = std.atomic.Value(usize).init(0);
+var is_driver_initialized: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 
-/// Initialize the global CUDA driver
-pub fn initGlobalDriver(allocator: std.mem.Allocator) !void {
-    driver_mutex.lock();
-    defer driver_mutex.unlock();
+/// Thread-safe reference to the global CUDA driver
+/// Automatically manages reference counting to prevent use-after-free
+pub const CudaDriverRef = struct {
+    driver: *CudaDriver,
 
-    if (global_driver == null) {
-        global_driver = try CudaDriver.init(allocator);
+    /// Acquire a reference to the global CUDA driver
+    /// Thread-safe and ensures the driver stays alive until release() is called
+    pub fn acquire(allocator: std.mem.Allocator) !CudaDriverRef {
+        // First, try to increment ref count - if driver is already initialized
+        // this is the fast path (lock-free)
+        if (is_driver_initialized.load(.acquire)) {
+            const prev_count = driver_ref_count.fetchAdd(1, .acquire);
+            if (prev_count > 0) {
+                // Driver is initialized and we have a reference
+                return CudaDriverRef{ .driver = &global_driver.? };
+            }
+            // Ref count was 0, driver might be shutting down, decrement and take slow path
+            _ = driver_ref_count.fetchSub(1, .release);
+        }
+
+        // Slow path: need to initialize or wait for initialization
+        while (!driver_mutex.tryLock()) {
+            std.atomic.spinLoopHint();
+        }
+        defer driver_mutex.unlock();
+
+        // Double-check after acquiring lock
+        if (!is_driver_initialized.load(.acquire)) {
+            // Initialize the driver
+            global_driver = try CudaDriver.init(allocator);
+            is_driver_initialized.store(true, .release);
+        }
+
+        // Increment ref count under mutex
+        _ = driver_ref_count.fetchAdd(1, .release);
+
+        return CudaDriverRef{ .driver = &global_driver.? };
     }
+
+    /// Release this reference to the CUDA driver
+    /// When the last reference is released, the driver is deinitialized
+    pub fn release(self: CudaDriverRef) void {
+        const prev_count = driver_ref_count.fetchSub(1, .acq_rel);
+
+        if (prev_count == 1) {
+            // We were the last reference, deinitialize the driver
+            while (!driver_mutex.tryLock()) {
+                std.atomic.spinLoopHint();
+            }
+            defer driver_mutex.unlock();
+
+            // Double-check under mutex - another thread might have acquired
+            if (driver_ref_count.load(.acquire) == 0 and is_driver_initialized.load(.acquire)) {
+                self.driver.deinit();
+                global_driver = null;
+                is_driver_initialized.store(false, .release);
+            }
+        }
+    }
+
+    /// Check if the driver reference is still valid
+    pub fn isValid(self: CudaDriverRef) bool {
+        _ = self; // Parameter required for API consistency
+        return is_driver_initialized.load(.acquire) and driver_ref_count.load(.acquire) > 0;
+    }
+};
+
+/// Initialize the global CUDA driver (legacy API - use CudaDriverRef.acquire instead)
+/// SECURITY: This is kept for backward compatibility but is inherently unsafe
+/// because it doesn't provide lifetime management
+pub fn initGlobalDriver(allocator: std.mem.Allocator) !void {
+    _ = try CudaDriverRef.acquire(allocator);
 }
 
-/// Get the global CUDA driver instance
+/// Get the global CUDA driver instance (legacy API - unsafe)
+/// SECURITY WARNING: Returns a raw pointer with no lifetime guarantees.
+/// Use CudaDriverRef.acquire() instead for safe access.
 pub fn getGlobalDriver() ?*CudaDriver {
-    driver_mutex.lock();
+    // Spin until we acquire the lock
+    while (!driver_mutex.tryLock()) {
+        std.atomic.spinLoopHint();
+    }
     defer driver_mutex.unlock();
     return if (global_driver) |*d| d else null;
 }
 
-/// Deinitialize the global CUDA driver
+/// Deinitialize the global CUDA driver (legacy API)
+/// SECURITY WARNING: This can cause use-after-free if other code still holds
+/// references to the driver. Use CudaDriverRef.release() instead.
 pub fn deinitGlobalDriver() void {
-    driver_mutex.lock();
+    // Spin until we acquire the lock
+    while (!driver_mutex.tryLock()) {
+        std.atomic.spinLoopHint();
+    }
     defer driver_mutex.unlock();
 
     if (global_driver) |*d| {
         d.deinit();
         global_driver = null;
+        is_driver_initialized.store(false, .release);
+        driver_ref_count.store(0, .release);
     }
 }
 
@@ -853,6 +1131,14 @@ pub const CudaError = error{
     CudaDeviceUnavailable,
     CudaUnknownError,
     UnsupportedPlatform,
+    NvrtcNotAvailable,
+    NvrtcProgramCreationFailed,
+    NvrtcCompilationFailed,
+    InvalidPtx,
+    UnsupportedPtxVersion,
+    NoBinaryForGpu,
+    ContextNotInitialized,
+    StreamNotInitialized,
 };
 
 /// Convert CUDA result to Zig error
@@ -870,6 +1156,254 @@ pub fn checkCuda(result: CUresult) CudaError!void {
         .ERROR_DEVICE_UNAVAILABLE => return error.CudaDeviceUnavailable,
         else => return error.CudaUnknownError,
     }
+}
+
+// =============================================================================
+// Multi-GPU Device Enumeration
+// =============================================================================
+
+/// Device information structure for multi-GPU support
+pub const CudaDeviceInfo = struct {
+    device_id: c_int,
+    name: [256]u8,
+    compute_capability_major: i32,
+    compute_capability_minor: i32,
+    total_memory: usize,
+    multiprocessor_count: i32,
+    max_threads_per_block: i32,
+    warp_size: i32,
+    memory_clock_rate: i32,
+    global_memory_bus_width: i32,
+    l2_cache_size: i32,
+    max_threads_per_multiprocessor: i32,
+    unified_addressing: i32,
+    managed_memory: i32,
+    concurrent_managed_access: i32,
+    pci_bus_id: i32,
+    pci_device_id: i32,
+
+    /// Get compute capability as single number (e.g., 70 for 7.0)
+    pub fn computeCapability(self: CudaDeviceInfo) i32 {
+        return self.compute_capability_major * 10 + self.compute_capability_minor;
+    }
+
+    /// Check if device has Tensor Cores
+    pub fn hasTensorCores(self: CudaDeviceInfo) bool {
+        return self.compute_capability_major >= 7;
+    }
+
+    /// Check if device supports unified memory
+    pub fn hasUnifiedMemory(self: CudaDeviceInfo) bool {
+        return self.unified_addressing != 0 and self.managed_memory != 0;
+    }
+
+    /// Get device name as a slice
+    pub fn getName(self: CudaDeviceInfo) []const u8 {
+        return std.mem.sliceTo(&self.name, 0);
+    }
+};
+
+/// Get the number of available CUDA devices
+/// Returns 0 if CUDA is not available or no devices found
+pub fn getDeviceCount() c_int {
+    if (@import("builtin").os.tag == .macos) {
+        return 0;
+    }
+
+    // Try to acquire driver reference temporarily
+    var driver = CudaDriver.init(std.heap.page_allocator) catch {
+        return 0;
+    };
+    defer driver.deinit();
+
+    var count: c_int = 0;
+    if (driver.deviceGetCount) |get_count| {
+        const result = get_count(&count);
+        if (result.isSuccess()) {
+            return count;
+        }
+    }
+    return 0;
+}
+
+/// Query device information for a specific device
+/// device_id: Device index (0 to device_count - 1)
+/// Returns error if device_id is invalid or CUDA is not available
+pub fn queryDeviceInfo(device_id: c_int) !CudaDeviceInfo {
+    if (@import("builtin").os.tag == .macos) {
+        return error.CudaNotAvailable;
+    }
+
+    // Initialize driver temporarily
+    var driver = CudaDriver.init(std.heap.page_allocator) catch |err| {
+        return if (err == error.CudaDriverNotFound) error.CudaNotAvailable else err;
+    };
+    defer driver.deinit();
+
+    // Get device count to validate device_id
+    var device_count: c_int = 0;
+    if (driver.deviceGetCount) |get_count| {
+        const result = get_count(&device_count);
+        if (!result.isSuccess() or device_id < 0 or device_id >= device_count) {
+            return error.InvalidDevice;
+        }
+    } else {
+        return error.CudaFunctionNotFound;
+    }
+
+    // Get device handle
+    var device: CUdevice = 0;
+    if (driver.deviceGet) |device_get| {
+        try checkCuda(device_get(&device, device_id));
+    } else {
+        return error.CudaFunctionNotFound;
+    }
+
+    // Query device properties
+    var info: CudaDeviceInfo = undefined;
+    info.device_id = device_id;
+
+    // Get device name
+    if (driver.deviceGetName) |get_name| {
+        var name_buf: [256]u8 = undefined;
+        try checkCuda(get_name(&name_buf, name_buf.len, device));
+        info.name = name_buf;
+    } else {
+        info.name = std.mem.zeroes([256]u8);
+    }
+
+    // Get compute capability
+    if (driver.deviceGetAttribute) |get_attr| {
+        try checkCuda(get_attr(&info.compute_capability_major, .COMPUTE_CAPABILITY_MAJOR, device));
+        try checkCuda(get_attr(&info.compute_capability_minor, .COMPUTE_CAPABILITY_MINOR, device));
+        try checkCuda(get_attr(&info.multiprocessor_count, .MULTIPROCESSOR_COUNT, device));
+        try checkCuda(get_attr(&info.max_threads_per_block, .MAX_THREADS_PER_BLOCK, device));
+        try checkCuda(get_attr(&info.warp_size, .WARP_SIZE, device));
+        try checkCuda(get_attr(&info.memory_clock_rate, .MEMORY_CLOCK_RATE, device));
+        try checkCuda(get_attr(&info.global_memory_bus_width, .GLOBAL_MEMORY_BUS_WIDTH, device));
+        try checkCuda(get_attr(&info.l2_cache_size, .L2_CACHE_SIZE, device));
+        try checkCuda(get_attr(&info.max_threads_per_multiprocessor, .MAX_THREADS_PER_MULTIPROCESSOR, device));
+        try checkCuda(get_attr(&info.unified_addressing, .UNIFIED_ADDRESSING, device));
+        try checkCuda(get_attr(&info.managed_memory, .MANAGED_MEMORY, device));
+        try checkCuda(get_attr(&info.concurrent_managed_access, .CONCURRENT_MANAGED_ACCESS, device));
+        try checkCuda(get_attr(&info.pci_bus_id, .PCI_BUS_ID, device));
+        try checkCuda(get_attr(&info.pci_device_id, .PCI_DEVICE_ID, device));
+    } else {
+        return error.CudaFunctionNotFound;
+    }
+
+    // Get total memory
+    if (driver.deviceTotalMem) |get_mem| {
+        try checkCuda(get_mem(&info.total_memory, device));
+    } else {
+        info.total_memory = 0;
+    }
+
+    return info;
+}
+
+/// Enumerate all available CUDA devices
+/// Returns an array of CudaDeviceInfo (caller must free with allocator)
+pub fn enumerateDevices(allocator: std.mem.Allocator) ![]CudaDeviceInfo {
+    const count = getDeviceCount();
+    if (count == 0) {
+        return allocator.alloc(CudaDeviceInfo, 0);
+    }
+
+    var devices = try allocator.alloc(CudaDeviceInfo, @intCast(count));
+    errdefer allocator.free(devices);
+
+    var i: c_int = 0;
+    while (i < count) : (i += 1) {
+        devices[@intCast(i)] = try queryDeviceInfo(i);
+    }
+
+    return devices;
+}
+
+/// Score a device for workload assignment
+/// Higher score = better for computation
+/// Considers: compute capability, memory size, multiprocessor count
+pub fn scoreDeviceForWorkload(info: CudaDeviceInfo) i32 {
+    var score: i32 = 0;
+
+    // Compute capability is most important (features and performance)
+    score += info.computeCapability() * 100;
+
+    // Multiprocessor count indicates raw compute power
+    score += info.multiprocessor_count * 10;
+
+    // Memory size matters for large workloads (in GB)
+    const memory_gb: i32 = @intCast(info.total_memory / (1024 * 1024 * 1024));
+    score += memory_gb;
+
+    return score;
+}
+
+/// Select the best device for general purpose computation
+/// Returns the device index with the highest score
+pub fn selectBestDeviceIndex() c_int {
+    const count = getDeviceCount();
+    if (count == 0) return -1;
+    if (count == 1) return 0;
+
+    var best_device: c_int = 0;
+    var best_score: i32 = -1;
+
+    var i: c_int = 0;
+    while (i < count) : (i += 1) {
+        const info = queryDeviceInfo(i) catch continue;
+        const score = scoreDeviceForWorkload(info);
+        if (score > best_score) {
+            best_score = score;
+            best_device = i;
+        }
+    }
+
+    return best_device;
+}
+
+/// Get a list of devices sorted by suitability for workload
+/// Most suitable devices come first
+/// Returns indices of devices (caller must free result with allocator)
+pub fn getDevicesBySuitability(allocator: std.mem.Allocator) ![]c_int {
+    const count = getDeviceCount();
+    if (count == 0) {
+        return allocator.alloc(c_int, 0);
+    }
+
+    // Create array of (device_id, score) pairs
+    const DeviceScore = struct {
+        device_id: c_int,
+        score: i32,
+    };
+
+    var scores = try allocator.alloc(DeviceScore, @intCast(count));
+    defer allocator.free(scores);
+
+    var i: c_int = 0;
+    while (i < count) : (i += 1) {
+        const info = queryDeviceInfo(i) catch continue;
+        scores[@intCast(i)] = .{
+            .device_id = i,
+            .score = scoreDeviceForWorkload(info),
+        };
+    }
+
+    // Sort by score (descending)
+    std.mem.sort(DeviceScore, scores, {}, struct {
+        fn lessThan(_: void, a: DeviceScore, b: DeviceScore) bool {
+            return a.score > b.score; // Descending order
+        }
+    }.lessThan);
+
+    // Extract device indices
+    var result = try allocator.alloc(c_int, @intCast(count));
+    for (scores, 0..) |s, idx| {
+        result[idx] = s.device_id;
+    }
+
+    return result;
 }
 
 // =============================================================================

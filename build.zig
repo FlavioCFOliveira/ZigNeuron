@@ -31,6 +31,16 @@ pub fn build(b: *std.Build) void {
         });
         cuda_context_module.addImport("cuda_driver", cuda_module);
         lib_module.addImport("cuda_context", cuda_context_module);
+
+        const cuda_multi_gpu_module = b.addModule("cuda_multi_gpu", .{
+            .root_source_file = b.path("src/cuda_multi_gpu.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        });
+        cuda_multi_gpu_module.addImport("cuda_driver", cuda_module);
+        cuda_multi_gpu_module.addImport("cuda_context", cuda_context_module);
+        lib_module.addImport("cuda_multi_gpu", cuda_multi_gpu_module);
     }
 
     const lib = b.addLibrary(.{
@@ -132,7 +142,10 @@ pub fn build(b: *std.Build) void {
             "shaders/metal/auxiliary.metal",
         };
 
-        var air_files: std.ArrayListUnmanaged([]const u8) = .{};
+        var air_files: std.ArrayListUnmanaged([]const u8) = .{
+            .items = &[_][]const u8{},
+            .capacity = 0,
+        };
         defer air_files.deinit(b.allocator);
 
         for (metal_shaders) |shader| {
@@ -193,6 +206,31 @@ pub fn build(b: *std.Build) void {
         const run_benchmarks = b.addRunArtifact(benchmark_exe);
         const benchmark_step = b.step("benchmarks", "Run benchmarks");
         benchmark_step.dependOn(&run_benchmarks.step);
+    }
+
+    // =============================================================================
+    // CUDA Benchmarks
+    // =============================================================================
+
+    if (enable_cuda and target.result.os.tag != .macos) {
+        const cuda_benchmark_module = std.Build.Module.create(b, .{
+            .root_source_file = b.path("src/cuda_benchmark_runner.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        });
+        cuda_benchmark_module.addImport("ZigNeuron", lib_module);
+
+        const cuda_benchmark_exe = b.addExecutable(.{
+            .name = "cuda_benchmarks",
+            .root_module = cuda_benchmark_module,
+        });
+
+        b.installArtifact(cuda_benchmark_exe);
+
+        const run_cuda_benchmarks = b.addRunArtifact(cuda_benchmark_exe);
+        const cuda_benchmark_step = b.step("cuda-benchmarks", "Run CUDA benchmarks");
+        cuda_benchmark_step.dependOn(&run_cuda_benchmarks.step);
     }
 
     // =============================================================================

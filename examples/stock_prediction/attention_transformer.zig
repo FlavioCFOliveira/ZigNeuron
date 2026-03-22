@@ -3,9 +3,7 @@ const zn = @import("ZigNeuron");
 const utils = @import("utils.zig");
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocator = gpa.allocator();
-    defer _ = gpa.deinit();
+    const allocator = std.heap.smp_allocator;
 
     // 1. Generate synthetic stock data
     const data_len = 200;

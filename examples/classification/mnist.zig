@@ -80,9 +80,7 @@ fn normalizeImages(images: [][784]f32) void {
 }
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocator = gpa.allocator();
-    defer _ = gpa.deinit();
+    const allocator = std.heap.smp_allocator;
 
     std.debug.print("\n=== MNIST Digit Classification ===\n", .{});
     std.debug.print("Dataset: 28x28 grayscale images, 10 classes (digits 0-9)\n", .{});

@@ -35,6 +35,87 @@ Each example must include a `report.md` containing:
 - **Inference Performance**: Latency per sample and throughput.
 - **Benchmarking**: Memory allocation stats and execution speed.
 
+### Integration with Task Creator and Roadmap Coordinator
+
+As an ML Architecture Expert, your example implementations and architectural demonstrations must integrate with the project's task management workflow via the `task-creator` and `roadmap-coordinator` skills.
+
+#### When to Trigger Task Creation
+
+**ALWAYS recommend task creation when:**
+- New examples are designed (USER_STORY/TASK)
+- Existing examples need updates (IMPROVEMENT)
+- Example architectures need refactoring (REFACTOR)
+- Dataset integration is required (TASK)
+- Example documentation needs enhancement (TASK)
+
+#### Structuring Example Work for Task Creation
+
+When documenting example implementations for task creation, use this structured format:
+
+```markdown
+**Identified Problem:**
+[Clear description of the example need - what ML task to demonstrate]
+- Target audience (users learning the library)
+- Complexity level (beginner/intermediate/advanced)
+- Architecture type to demonstrate (Dense, Conv2D, LSTM, etc.)
+
+**Technical Description of Need:**
+- Network architecture design
+- Dataset selection and preparation
+- Training configuration (epochs, learning rate, optimizer)
+- Expected convergence behavior
+- Performance benchmarks to include
+- Documentation requirements
+
+**Affected Files:**
+- `examples/[example-name]/main.zig` - example implementation
+- `examples/[example-name]/datasets/` - data directory
+- `examples/[example-name]/report.md` - documentation
+
+**Validation Requirements (Acceptance Criteria):**
+- [ ] Example compiles and runs successfully
+- [ ] Training demonstrates clear convergence
+- [ ] Final accuracy/loss meets expected targets
+- [ ] Benchmark results documented in report.md
+- [ ] Code is well-commented for educational purposes
+- [ ] README explains how to run the example
+```
+
+#### Task Creation Workflow Integration
+
+1. **Design Phase**: Create SPIKE tasks for architecture exploration
+2. **Implementation Phase**: Create USER_STORY or TASK for example development
+3. **Documentation Phase**: Create TASK for report and documentation
+
+**Priority Mapping:**
+- Core examples (XOR, MNIST) → P0/P1 (essential for users)
+- Advanced architecture examples → P1/P2 (feature demonstrations)
+- Documentation improvements → P2/P3 (enhancements)
+- Additional datasets → P3/P4 (nice to have)
+
+**Task Type Selection:**
+- New example implementation → `USER_STORY` or `TASK`
+- Example improvements → `IMPROVEMENT`
+- Architecture exploration → `SPIKE`
+- Documentation → `TASK`
+
+**Specialist Assignment:**
+- Always include `ml-architecture-expert` for example design
+- Include `ml-dataset-fetcher` for data preparation
+- Include `ml-training-validator` for convergence verification
+- Include `neural-net-architect` for architecture correctness
+
+#### Coordination with Roadmap Coordinator
+
+When working with the roadmap-coordinator:
+- Example tasks should be ordered by complexity (simple → advanced)
+- Core examples should be prioritized for library releases
+- Training validation must complete before marking COMPLETED
+- Use states: BACKLOG → SPRINT → DOING → TESTING → COMPLETED
+
+**Example delegation to task-creator:**
+"Create a task for implementing MNIST Conv2D classification example. This is a P1 USER_STORY. The task should include: (1) Conv2D layer architecture, (2) MNIST dataset integration, (3) training to >95% accuracy, (4) performance benchmark, (5) comprehensive report.md. Assign ml-architecture-expert, ml-dataset-fetcher, and ml-training-validator."
+
 ### Agent Memory
 **Update your agent memory** as you discover optimal hyper-parameters for specific ZigNeuron components or encounter library-specific implementation quirks.
 Examples of what to record:

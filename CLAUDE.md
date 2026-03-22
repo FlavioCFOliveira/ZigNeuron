@@ -22,17 +22,71 @@ The library is organized into logical components:
 - **Activations** - ReLU, sigmoid, tanh activation functions with derivatives
 - **Loss Functions** - MSE (implemented), cross-entropy, binary cross-entropy (TODO)
 - **Network** - High-level network composition with backpropagation training
-- **Backend** - GPU/CPU execution layer with automatic device detection (Metal > CPU)
+- **Backend** - GPU/CPU execution layer with automatic device detection (Metal > CUDA > CPU)
+
+## CUDA Backend Documentation
+
+Comprehensive CUDA backend documentation is available in `docs/cuda/`:
+
+| Document | Purpose |
+|----------|---------|
+| `docs/cuda/README.md` | Documentation index and quick start |
+| `docs/cuda/api.md` | Complete API reference for all CUDA functions |
+| `docs/cuda/user-guide.md` | Tutorials and usage examples |
+| `docs/cuda/developer-guide.md` | Internal implementation details |
+| `docs/cuda/best-practices.md` | Performance optimization recommendations |
+| `docs/cuda/troubleshooting.md` | Common issues and solutions |
+
+### CUDA Quick Example
+
+```zig
+const std = @import("std");
+const cuda = @import("ZigNeuron").cuda;
+
+pub fn main() !void {
+    // Check if CUDA is available
+    if (!cuda.CudaBackend.isAvailable()) {
+        std.log.info("CUDA not available, using CPU fallback");
+        return;
+    }
+
+    // Initialize CUDA backend
+    var backend = try cuda.CudaBackend.init(std.heap.page_allocator);
+    defer backend.deinit();
+
+    // Allocate and upload data
+    var input: [100]f32 = undefined;
+    var output: [100]f32 = undefined;
+
+    var d_buffer = try backend.allocBuffer(100 * @sizeOf(f32));
+    defer backend.freeBuffer(d_buffer);
+
+    try backend.upload(d_buffer.ptr, &input);
+    try backend.reluForward(&input, &output);
+}
+```
 
 ## Project Structure
 
 - `src/` - Source files
   - `main.zig` - Library root with exports for all modules
-  - `backend.zig` - GPU/CPU execution backend with automatic device detection
+  - `backend.zig` - GPU/CPU execution backend with automatic device detection (Metal/CUDA/CPU)
   - `layer.zig` - Dense layer with weights, bias, and activation
   - `activation.zig` - Activation functions (ReLU, Sigmoid, Tanh)
-  - `loss.zig` - Loss functions (MSE implemented, cross-entropy planned)
+  - `loss.zig` - Loss functions (MSE, Cross-Entropy, KL-Divergence)
   - `network.zig` - Network composition with backpropagation training
+  - `cuda.zig` - CUDA backend implementation
+  - `cuda_context.zig` - CUDA context and resource management
+  - `cuda_driver.zig` - CUDA Driver API bindings
+  - `cuda_kernels.zig` - CUDA kernel PTX and source code
+  - `metal_context.zig` - Metal backend implementation
+- `docs/cuda/` - CUDA backend documentation
+  - `README.md` - Documentation index
+  - `api.md` - API reference
+  - `user-guide.md` - User guide
+  - `developer-guide.md` - Developer guide
+  - `best-practices.md` - Best practices
+  - `troubleshooting.md` - Troubleshooting guide
 - `build.zig` - Build definition
 - `zig-out/` - Build output directory (created on build)
 
@@ -55,12 +109,13 @@ These files document actual test results, including timestamps, environment info
 | Dense Layer | Done | Forward and backward pass implemented |
 | Activations | Done | ReLU, Sigmoid, Tanh with correct derivatives |
 | Loss Functions | Done | MSE, Cross-Entropy, KL-Divergence |
-| Backpropagation | Done | Training works on CPU and Metal |
-| GPU Backend | Done | Metal implemented and synchronized |
+| Backpropagation | Done | Training works on CPU, Metal, and CUDA |
+| Metal Backend | Done | Metal compute shaders on Apple Silicon |
+| CUDA Backend | Done | CUDA kernels for Linux/Windows NVIDIA GPUs |
 | Optimizers | Partial | SGD, Adam, RMSprop basic structs |
 | Unit Tests | Done | Coverage for FNN, RNN, VAE, CNN |
 | Performance Benchmarks | Done | Benchmark suite available |
-| Security Audit | In Progress | Phase 1 corrections being applied |
+| Security Audit | In Progress | Phase 1-2 corrections being applied |
 
 ## Security Fixes Applied
 
@@ -72,6 +127,13 @@ These files document actual test results, including timestamps, environment info
 | VULN-002: Integer Overflow | `src/tensor.zig:14-21` | ✅ Fixed | Tensor dimension validation |
 | VULN-003: Race Condition | `src/backend.zig` | ⚠️ Documented | Thread-safety limitation documented |
 | VULN-004: Double-Free | `src/cuda_context.zig` | ✅ Fixed | Buffer lifecycle validation |
+
+### Phase 2 - CUDA Backend Security Fixes (2026-03-20)
+
+| Vulnerability | File | Status | Description |
+|--------------|------|--------|-------------|
+| CRIT-003: Stream Race Condition | `src/cuda_context.zig` | ✅ Fixed | Thread-safe `ThreadSafeStream` wrapper with mutex protection |
+| CRIT-002: Use-After-Free | `src/cuda_driver.zig:820-824` | ✅ Fixed | Reference-counted `CudaDriverRef` for safe driver access |
 
 ## Performance Fixes Applied
 
@@ -163,6 +225,8 @@ To ensure high-quality implementations and architectural integrity, the followin
 | **Technical Researcher** | Mathematical derivations, GPU API documentation (Metal/CUDA), and state-of-the-art research. | Provides foundations for *Neural Net Architect* and *ML Architecture Expert*. |
 | **ML Architecture Expert** | Designing reference examples, benchmarking scenarios, and validating library usability. | Uses *ML Dataset Fetcher* for data; validates *Neural Net Architect* outputs. |
 | **ML Dataset Fetcher** | Identifying, sourcing, and organizing datasets for training and validation examples. | Supports *ML Architecture Expert* with data pipelines. |
+| **Roadmap Coordinator** | **EXCLUSIVE** coordination of roadmap, sprints and tasks via Groadmap CLI (`rmp` commands). | Coordinates task workflows; delegates implementation to other specialists. |
+| **Task Creator** | Creates structured tasks and sprints for the roadmap; delegates persistence to Roadmap Coordinator. | Prepares task data; delegates to Roadmap Coordinator for CLI execution. |
 
 ### Interaction Workflow
 
@@ -175,7 +239,46 @@ To ensure high-quality implementations and architectural integrity, the followin
 
 No significant change to core logic or backend should be merged without the explicit consensus of the *Neural Net Architect*, *Zig Performance Architect*, and relevant *GPU Expert*.
 
-## Performance Requirements
+## Roadmap, Sprint and Task Management
+
+All project planning, task coordination, and sprint management **MUST** be done exclusively through the **roadmap-coordinator** and **task-creator** skills using the Groadmap CLI (`rmp`).
+
+### Task Creation Workflow
+
+1. **Task Creator Skill** (`task-creator`): Use when creating new tasks or sprints
+   - Collects all required data (title, type, priority, description, technical requirements, acceptance criteria)
+   - Presents structured task for user confirmation
+   - Delegates persistence to roadmap-coordinator
+
+2. **Roadmap Coordinator Skill** (`roadmap-coordinator`): Use for all task coordination
+   - Retrieves tasks via CLI (`rmp task next`)
+   - Manages state transitions (`rmp task stat`)
+   - Delegates implementation to appropriate specialists
+   - Generates execution reports
+
+### CLI Commands Reference
+
+```bash
+# Task management
+rmp task next [N]              # Get next tasks
+rmp task get -r <roadmap> <id> # Get task details
+rmp task stat -r <roadmap> <id> <BACKLOG|SPRINT|DOING|TESTING|COMPLETED>
+
+# Sprint management
+rmp sprint list -r <roadmap>
+rmp sprint start|close|reopen -r <roadmap> <id>
+```
+
+### State Machine
+
+Tasks follow this workflow: `BACKLOG → SPRINT → DOING → TESTING → COMPLETED`
+
+### Important Rules
+
+- **ALWAYS** use `roadmap-coordinator` for task/sprint coordination
+- **NEVER** create tasks manually outside the CLI workflow
+- **MANDATORY** state transitions via `rmp task stat`
+- Task ordering commands (`reorder`, `move-to`, `swap`) affect position only, not status
 
 ZigNeuron has two non-negotiable requirements:
 
@@ -193,24 +296,37 @@ These requirements often conflict. Prioritize performance, but always consider r
 The library automatically detects available hardware and selects the best execution backend:
 
 1. **Metal (Apple Silicon)** - Uses Metal compute shaders on M-series chips (M1, M2, M3, etc.)
-2. **CPU** - Falls back to CPU computation if no GPU available
+2. **CUDA (NVIDIA)** - Uses CUDA kernels on NVIDIA GPUs
+3. **CPU** - Falls back to CPU computation if no GPU available
 
 ### Execution Priority Rules
 
-1. **Training** - Must use GPU (Metal) first. CPU fallback only if no GPU available.
-2. **Inference** - Must use GPU (Metal) first. CPU fallback only if no GPU available.
-3. **Gradient computation** - Must use GPU (Metal) first.
-4. **Forward pass** - Must use GPU (Metal) first.
+1. **Training** - Must use GPU first (Metal/CUDA). CPU fallback only if no GPU available.
+2. **Inference** - Must use GPU first (Metal/CUDA). CPU fallback only if no GPU available.
+3. **Gradient computation** - Must use GPU first.
+4. **Forward pass** - Must use GPU first.
 
 ### Implementation Requirements
 
 - GPU implementations should be prioritized for:
-  - Matrix multiplication (matmul)
-  - Activation functions (ReLU, Sigmoid, Tanh)
-  - Loss functions
-  - Gradient computation
+  - Matrix multiplication (matmul) - Use Metal Performance Shaders or CUDA
+  - Activation functions (ReLU, Sigmoid, Tanh) - Custom compute kernels
+  - Loss functions - Custom compute kernels
+  - Gradient computation - GPU-accelerated backward passes
 - CPU implementations should be marked with `// TODO: GPU implementation` comments
 - Fallback CPU implementations must maintain numerical accuracy
+
+### CUDA-Specific Requirements
+
+When implementing CUDA operations:
+- Use dynamic driver loading (no static CUDA dependencies)
+- Implement overflow protection for size calculations (`std.math.mul`)
+- Validate PTX before loading (security requirement)
+- Use memory pooling for buffer reuse
+- Support both PTX loading and NVRTC runtime compilation
+- Add kernel launch parameter validation
+- Document compute capability requirements
+- Add CUDA-specific error handling
 
 ### Platform Support
 
@@ -219,8 +335,9 @@ The library supports multiple platforms:
 | Platform | GPU Backend | CPU Fallback |
 |----------|-------------|--------------|
 | macOS (Apple Silicon) | Metal | Yes |
-| Linux | CPU | Yes |
-| Windows | CPU | Yes |
+| Linux (NVIDIA) | CUDA | Yes |
+| Windows (NVIDIA) | CUDA | Yes |
+| Linux/Windows (no GPU) | CPU | Yes |
 | Other | CPU | Yes |
 
 ### Apple Silicon Optimization
@@ -231,20 +348,34 @@ The library should leverage Apple Silicon capabilities:
 - Use M-series GPU compute capabilities (SIMD, parallel execution)
 - Optimize for memory bandwidth between CPU and GPU shared memory
 
+### NVIDIA CUDA Optimization
+
+The CUDA backend leverages NVIDIA GPU capabilities:
+- Dynamic driver loading (libcuda.so / nvcuda.dll)
+- Memory pooling for efficient buffer reuse
+- Tensor Cores for FP16 acceleration (sm_70+)
+- Shared memory tiling for matrix operations
+- Async execution with CUDA streams
+- NVRTC runtime compilation for kernel flexibility
+
 ### Cross-Platform GPU Support
 
-For non-Apple platforms (Linux, Windows), CUDA backend is planned for future implementation.
-Currently, CPU fallback is used on these platforms.
+The library automatically detects available hardware and selects the optimal backend:
+
+1. **macOS (Apple Silicon)** → Metal
+2. **Linux/Windows (NVIDIA)** → CUDA
+3. **All platforms** → CPU (fallback)
 
 When adding new features, prioritize:
-1. **GPU/Metal implementation first** - Always implement on GPU first
-2. **CPU fallback** - Implement CPU fallback only after GPU is working
+1. **GPU implementation first** - Metal for macOS, CUDA for Linux/Windows
+2. **CPU fallback** - Implement after GPU version is working
 3. **Performance** - GPU implementation must be faster than CPU
-4. **Apple Silicon** - Optimize for M-series chips (M1, M2, M3, etc.)
+4. **Platform optimization** - Metal for M-series, CUDA for NVIDIA
 
-The library should degrade gracefully:
-- If Metal device unavailable → use CPU
+The library degrades gracefully:
+- If Metal/CUDA unavailable → use CPU
 - If specific kernel unavailable → use fallback CPU implementation
+- If out of memory → return error for caller to handle
 
 ## Documentation Language Policy
 
